@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { GearCard, useGearFilter } from './gear.jsx';
 import { Icon, Modal } from './ui.jsx';
 import { EDITING_APPS } from '../data/software.js';
+import { DEFAULT_RATING_KEYS, RESERVED_KEYS, assignKey, keyLabel, normKey, ratingKeys } from '../cull/keys.js';
 
 export function MyGearView({ store, onOpenGear, onBrowse, onCustom }) {
   const { gear, state } = store;
@@ -93,6 +94,77 @@ function UpdatesCard() {
   );
 }
 
+const fmtBytes = (b) => (b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`);
+
+// Rating shortcuts, auto-advance and the thumbnail cache for the Culling tab.
+function CullingCard({ store }) {
+  const { state, actions } = store;
+  const bridge = window.gearcheck?.cull;
+  const keys = ratingKeys(state.settings);
+  const [listening, setListening] = useState(null); // rating waiting for a key press
+  const [note, setNote] = useState('');
+  const [cache, setCache] = useState(null);
+
+  useEffect(() => { bridge?.cacheSize().then(setCache); }, [bridge]);
+
+  useEffect(() => {
+    if (listening === null) return;
+    const onKey = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === 'Escape') { setListening(null); return; }
+      if (['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'NumLock'].includes(e.key)) return;
+      if (RESERVED_KEYS.includes(normKey(e.key)) || RESERVED_KEYS.includes(e.key)) {
+        setNote(`${keyLabel(e.key)} is used for moving around or zooming. Pick another key.`);
+        return;
+      }
+      actions.setCullSettings({ cullKeys: assignKey(keys, listening, e.key) });
+      setNote('');
+      setListening(null);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [listening, keys]);
+
+  const rows = [1, 2, 3, 4, 5, 0];
+  const isDefault = rows.every((r) => keys[r] === DEFAULT_RATING_KEYS[r]);
+  return (
+    <section className="card">
+      <h3 className="section-title">Culling</h3>
+      <p className="muted">Keys that set star ratings. Click a key, then press the one you want. The number row and the number pad both work for the default keys.</p>
+      <div className="key-grid">
+        {rows.map((r) => (
+          <div key={r} className="key-row">
+            <span className="key-name">{r ? <span className="key-stars">{'★'.repeat(r)}<span className="dim">{'★'.repeat(5 - r)}</span></span> : 'Clear rating'}</span>
+            <button className={`keycap${listening === r ? ' listening' : ''}`} onClick={() => { setListening(listening === r ? null : r); setNote(''); }}>
+              {listening === r ? 'Press a key…' : keyLabel(keys[r])}
+            </button>
+          </div>
+        ))}
+      </div>
+      {note && <p className="small warn-text">{note}</p>}
+      <div className="row cull-settings-row">
+        <button className="btn btn-sm" disabled={isDefault} onClick={() => actions.setCullSettings({ cullKeys: { ...DEFAULT_RATING_KEYS } })}>Reset to 1–5</button>
+      </div>
+      <label className="toggle-row big">
+        <input type="checkbox" checked={!!state.settings.cullAdvance} onChange={() => actions.setCullSettings({ cullAdvance: !state.settings.cullAdvance })} />
+        <span>Go to the next photo after rating</span>
+      </label>
+      <p className="muted small">Other keys: ← → move between photos, Home / End jump to the first or last, Z or a click zooms to 100%, Esc zooms back out.</p>
+      <p className="muted small">Stars are written to an .xmp file next to each RAW photo (for example JWL_5769.xmp), the standard Lightroom, Bridge and Capture One read. The RAW file itself is never changed. JPEGs without a RAW keep their stars inside the file.</p>
+      {bridge && (
+        <div className="update-row cull-cache">
+          <div className="grow">
+            <div>Thumbnail cache</div>
+            <div className="muted small">{cache ? `${cache.files} thumbnails · ${fmtBytes(cache.bytes || 0)}` : '…'}</div>
+          </div>
+          <button className="btn btn-sm" disabled={!cache?.files} onClick={async () => { await bridge.clearCache(); setCache(await bridge.cacheSize()); }}>Clear</button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function SettingsView({ store }) {
   const { state, actions } = store;
   const fileRef = useRef();
@@ -126,6 +198,7 @@ export function SettingsView({ store }) {
     <div className="view narrow">
       <header className="view-head"><div className="grow"><div className="eyebrow">App</div><h1>Settings</h1></div></header>
       <UpdatesCard />
+      <CullingCard store={store} />
       <section className="card">
         <h3 className="section-title">Editing apps you use</h3>
         <p className="muted">Presets check whether these apps can open each camera's photos and video.</p>

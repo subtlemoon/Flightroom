@@ -22,6 +22,9 @@ camera's files.
 - `src/engine/compat.js` compatibility rules
 - `src/components/` UI
 - `electron/main.cjs` desktop window
+- `electron/photos.cjs`, `electron/photo-lib.cjs` culling: folder listing, embedded
+  JPEG previews (served as `gcimg://`), thumbnail cache, XMP star ratings
+- `src/components/cull.jsx`, `src/cull/` culling view, preview decoding and prefetch
 
 ## Updates
 
@@ -44,3 +47,12 @@ A test fails if `catalog.json` is out of date.
 announced items linked to catalog ids). The app's News tab loads it live from
 GitHub like the catalog; the bundled copy is the offline fallback. A monthly
 routine adds the previous month's entry and new catalog items.
+
+## Culling
+
+The Culling tab opens a folder of NEF/RAW/JPEG files. It never decodes RAW data:
+it reads the JPEG previews the camera embedded (a 640 px one for thumbnails and a
+full-size one for viewing), decodes them off the UI thread at screen size, and
+decodes the neighbouring photos ahead of time. Thumbnails are cached in the app
+data folder. Star ratings are written as `xmp:Rating` to a `.xmp` sidecar next to
+each RAW file (Lightroom/Bridge/Capture One convention), or inside standalone JPEGs.

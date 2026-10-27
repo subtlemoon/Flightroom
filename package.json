@@ -34,6 +34,7 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "!electron/**/*.test.js",
       "build/icon.png",
       "package.json"
     ],
