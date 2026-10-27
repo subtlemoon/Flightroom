@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Icon } from './ui.jsx';
-import { drawPhoto, geometry, imgUrl, loadFit, loadFull, loadThumb, prune, ROTATION, thumbFallbackUrl } from '../cull/previews.js';
+import { Icon, Modal } from './ui.jsx';
+import { decodeThumb, drawPhoto, geometry, imgUrl, loadFit, loadFull, loadThumb, prune, ROTATION, thumbFallbackUrl } from '../cull/previews.js';
+import { loadAnalysis, measure, saveAnalysis, suggest } from '../cull/analyze.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zoomLevel } from '../cull/keys.js';
 
 // A photo in the culling view, as listed by the desktop side:
@@ -29,16 +30,32 @@ export function CullView({ store }) {
   const [meta, setMeta] = useState({});
   const [zoom, setZoom] = useState(null); // null | { cx, cy }
   const [toast, setToast] = useState('');
+  // Auto-rating: saved measurements and which stars it wrote, the run in progress,
+  // and whether its panel is open.
+  const [auto, setAuto] = useState({ measured: {}, applied: {} });
+  const [autoRun, setAutoRun] = useState(null); // { kind: 'analyze' | 'apply', done, total }
+  const [autoOpen, setAutoOpen] = useState(false);
+  const autoCancel = useRef(false);
   const pendingMeta = useRef(new Set());
   const positions = useRef();
   positions.current = state.cull?.positions || {};
 
   const allPhotos = list?.photos || [];
   const isRated = (p) => photoRating(p, meta[p.id]) > 0;
-  const photos = useMemo(
-    () => (filter === 'all' ? allPhotos : allPhotos.filter((p) => isRated(p) === (filter === 'rated'))),
-    [allPhotos, meta, filter],
+  const suggestions = useMemo(
+    () => suggest(allPhotos.map((p) => ({ id: p.id, name: p.name, m: auto.measured[p.id], takenAt: auto.measured[p.id]?.takenAt }))),
+    [allPhotos.length, list?.folder, auto.measured],
   );
+  // Stars you gave yourself are never changed by auto-rating; stars it wrote can be.
+  const autoMayRate = (p) => {
+    const r = photoRating(p, meta[p.id]);
+    return r <= 0 || auto.applied[p.id] === r;
+  };
+  const photos = useMemo(() => {
+    if (filter === 'all') return allPhotos;
+    if (filter === 'rejects') return allPhotos.filter((p) => suggestions[p.id]?.stars === 1);
+    return allPhotos.filter((p) => isRated(p) === (filter === 'rated'));
+  }, [allPhotos, meta, filter, suggestions]);
   // The current photo is tracked by id so it stays put when the filter changes.
   // If it drops out of the filter (say, rated while showing Unrated), the photo
   // that slid into its place becomes current.
@@ -60,6 +77,7 @@ export function CullView({ store }) {
     lastIndex.current = pos;
     setCurrentId(res.photos[pos]?.id ?? null);
     setFilter('all');
+    setAuto(loadAnalysis(res.folder));
     setList(res);
   }, [bridge]);
 
@@ -110,8 +128,17 @@ export function CullView({ store }) {
     setCurrentId(photos[n].id);
   }, [photos]);
 
-  const rate = useCallback(async (p, rating) => {
+  const rememberApplied = (id, stars) => setAuto((a) => {
+    const applied = { ...a.applied };
+    if (stars == null) delete applied[id]; else applied[id] = stars;
+    const next = { ...a, applied };
+    saveAnalysis(list?.folder, next);
+    return next;
+  });
+
+  const rate = useCallback(async (p, rating, { byAuto = false } = {}) => {
     if (!p) return;
+    rememberApplied(p.id, byAuto ? rating : null);
     const before = p.rating;
     const set = (r) => setList((l) => ({ ...l, photos: l.photos.map((x) => (x.id === p.id ? { ...x, rating: r } : x)) }));
     set(rating);
@@ -122,7 +149,54 @@ export function CullView({ store }) {
     } else {
       setToast(rating ? `${'★'.repeat(rating)} saved to ${p.ratingIn === 'file' ? p.name : p.sidecar.split(/[\\/]/).pop()}` : `Rating cleared on ${p.name}`);
     }
-  }, [bridge]);
+  }, [bridge, list?.folder]);
+
+  // Measures every photo not measured yet. Reads only the small embedded preview.
+  const analyze = async () => {
+    const dir = list.folder;
+    const todo = allPhotos.filter((p) => !auto.measured[p.id]);
+    const measured = { ...auto.measured };
+    autoCancel.current = false;
+    setAutoRun({ kind: 'analyze', done: 0, total: todo.length });
+    const started = performance.now();
+    for (let i = 0; i < todo.length && !autoCancel.current; i += 12) {
+      const batch = todo.slice(i, i + 12);
+      const m = await bridge.meta(batch.map((p) => p.id));
+      if (!m.error) setMeta((old) => ({ ...old, ...m }));
+      await Promise.all(batch.map(async (p) => {
+        try {
+          const bmp = await decodeThumb(p);
+          measured[p.id] = { ...measure(bmp), takenAt: m[p.id]?.takenAt };
+          bmp.close();
+        } catch {}
+      }));
+      setAutoRun((r) => r && { ...r, done: Math.min(todo.length, i + batch.length) });
+    }
+    console.log(`[auto-rate] measured ${todo.length} photos in ${Math.round(performance.now() - started)} ms`);
+    setAuto((a) => { const next = { ...a, measured }; saveAnalysis(dir, next); return next; });
+    setAutoRun(null);
+  };
+
+  // Writes every suggestion to photos you haven't rated yourself.
+  const applyAll = async () => {
+    const targets = allPhotos.filter((p) => suggestions[p.id] && autoMayRate(p) && photoRating(p, meta[p.id]) !== suggestions[p.id].stars);
+    autoCancel.current = false;
+    setAutoRun({ kind: 'apply', done: 0, total: targets.length });
+    const written = {};
+    let failed = 0;
+    for (let i = 0; i < targets.length && !autoCancel.current; i += 8) {
+      await Promise.all(targets.slice(i, i + 8).map(async (p) => {
+        const stars = suggestions[p.id].stars;
+        const res = await bridge.rate(p, stars);
+        if (res?.error) failed++; else written[p.id] = stars;
+      }));
+      setAutoRun((r) => r && { ...r, done: Math.min(targets.length, i + 8) });
+    }
+    setList((l) => ({ ...l, photos: l.photos.map((x) => (x.id in written ? { ...x, rating: written[x.id] } : x)) }));
+    setAuto((a) => { const next = { ...a, applied: { ...a.applied, ...written } }; saveAnalysis(list.folder, next); return next; });
+    setAutoRun(null);
+    setToast(`Rated ${Object.keys(written).length} photos${failed ? `, ${failed} could not be saved` : ''}`);
+  };
 
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(''), 2200); return () => clearTimeout(t); }, [toast]);
 
@@ -130,7 +204,18 @@ export function CullView({ store }) {
   useEffect(() => {
     const onKey = (e) => {
       if (e.target.closest?.('input, textarea, select, [contenteditable]') || e.ctrlKey || e.altKey || e.metaKey) return;
-      if (!photos.length) return;
+      if (!photos.length || autoOpen) return;
+      if (e.key === 'Enter') {
+        // Accept the auto-rating suggestion for this photo.
+        const sug = photo && suggestions[photo.id];
+        if (sug && autoMayRate(photo) && !e.repeat) {
+          e.preventDefault();
+          rate(photo, sug.stars, { byAuto: true });
+          const stays = filter === 'all' || filter === 'rejects' || (sug.stars > 0) === (filter === 'rated');
+          if (advance && stays) go(index + 1);
+        }
+        return;
+      }
       if (normKey(e.key) === zKey) {
         e.preventDefault(); // also stops Space from pressing a focused button
         if (!e.repeat) setZoom((z) => (z ? null : { center: true }));
@@ -155,7 +240,7 @@ export function CullView({ store }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [photos, photo, index, keys, zKey, advance, filter, go, rate]);
+  }, [photos, photo, index, keys, zKey, advance, filter, go, rate, autoOpen, suggestions, auto]);
 
   if (!bridge) {
     return <div className="view"><div className="hero-empty"><div className="hero-icon"><Icon name="photo" size={40} /></div><h2>Culling runs in the desktop app</h2><p className="muted">Open GearCheck on your PC to link a photo folder.</p></div></div>;
@@ -167,6 +252,11 @@ export function CullView({ store }) {
 
   const curMeta = photo && meta[photo.id];
   const curRating = photo ? photoRating(photo, curMeta) : 0;
+  const curSug = photo && suggestions[photo.id];
+  const measuredCount = allPhotos.filter((p) => auto.measured[p.id]).length;
+  const rejectCount = allPhotos.filter((p) => suggestions[p.id]?.stars === 1).length;
+  const filters = [['all', 'All', allPhotos.length], ['rated', '★ Rated', ratedCount], ['unrated', 'Unrated', allPhotos.length - ratedCount]];
+  if (measuredCount) filters.push(['rejects', 'Likely rejects', rejectCount]);
 
   return (
     <div className="cull">
@@ -177,7 +267,7 @@ export function CullView({ store }) {
         </div>
         <button className="btn btn-sm btn-ghost" onClick={() => actions.setCullFolder(null)} title="Back to your folders"><Icon name="back" size={14} />Folders</button>
         <div className="seg small cull-filter">
-          {[['all', 'All', allPhotos.length], ['rated', '★ Rated', ratedCount], ['unrated', 'Unrated', allPhotos.length - ratedCount]].map(([k, label, n]) => (
+          {filters.map(([k, label, n]) => (
             <button key={k} className={filter === k ? 'on' : ''} onClick={() => setFilter(k)} onMouseDown={(e) => e.preventDefault()}>
               {label} <span className="seg-count">{n}</span>
             </button>
@@ -190,6 +280,10 @@ export function CullView({ store }) {
           <input type="checkbox" checked={advance} onChange={() => actions.setCullSettings({ cullAdvance: !advance })} />Auto-advance
         </label>
         <button className="btn btn-sm" onClick={() => open(folder)} title="Look for new files"><Icon name="refresh" size={14} />Reload</button>
+        <button className={`btn btn-sm${measuredCount ? '' : ' btn-primary'}`} onClick={() => setAutoOpen(true)} disabled={!allPhotos.length}>
+          <Icon name="spark" size={14} />
+          {autoRun ? `${autoRun.kind === 'apply' ? 'Rating' : 'Analyzing'} ${autoRun.done}/${autoRun.total}` : 'Auto-rate'}
+        </button>
       </header>
 
       {photo ? (
@@ -201,10 +295,11 @@ export function CullView({ store }) {
               {zoom && <span className="pill-mini zoom">{zoomPct}%</span>}
             </div>
             <div className="stage-bottom">
+              {curSug && <Suggestion sug={curSug} rating={curRating} applied={auto.applied[photo.id]} mayRate={autoMayRate(photo)} onAccept={() => rate(photo, curSug.stars, { byAuto: true })} />}
               <Stars value={curRating} onRate={(r) => rate(photo, r)} keys={keys} />
             </div>
           </Stage>
-          <Filmstrip photos={photos} index={index} meta={meta} onSelect={go} requestMeta={requestMeta} />
+          <Filmstrip photos={photos} index={index} meta={meta} suggestions={suggestions} onSelect={go} requestMeta={requestMeta} />
         </>
       ) : (
         <div className="hero-empty">
@@ -215,6 +310,15 @@ export function CullView({ store }) {
         </div>
       )}
       {toast && <div className="cull-toast">{toast}</div>}
+      {autoOpen && (
+        <AutoRatePanel photos={allPhotos} measuredCount={measuredCount} suggestions={suggestions} run={autoRun}
+          applicable={allPhotos.filter((p) => suggestions[p.id] && autoMayRate(p) && photoRating(p, meta[p.id]) !== suggestions[p.id].stars).length}
+          handRated={allPhotos.filter((p) => !autoMayRate(p)).length}
+          onAnalyze={analyze} onApply={applyAll} onCancel={() => { autoCancel.current = true; }}
+          onReview={() => { setFilter('rejects'); setAutoOpen(false); }}
+          onReset={() => { const next = { measured: {}, applied: auto.applied }; setAuto(next); saveAnalysis(list.folder, next); }}
+          onClose={() => setAutoOpen(false)} />
+      )}
     </div>
   );
 }
@@ -308,6 +412,78 @@ function FolderTree({ parent, opened, stats, bridge, onOpen, onForget }) {
         {!siblings && <div className="tree-item other"><span className="tree-sub">Loading…</span></div>}
       </div>
     </section>
+  );
+}
+
+// The auto-rate suggestion for the photo on screen, above the stars.
+function Suggestion({ sug, rating, applied, mayRate, onAccept }) {
+  const stars = '★'.repeat(sug.stars);
+  const reason = sug.reasons[0];
+  let label, action = null;
+  if (applied != null && applied === rating) label = <>Auto-rated <b>{stars}</b></>;
+  else if (rating === sug.stars) label = <>Matches the suggestion <b>{stars}</b></>;
+  else if (!mayRate) label = <>Suggested <b>{stars}</b> · you rated it yourself</>;
+  else {
+    label = <>Suggested <b>{stars}</b>{sug.stars === 1 ? ' · likely reject' : ''}</>;
+    action = <button className="btn btn-sm" onClick={onAccept} onMouseDown={(e) => e.preventDefault()}>Accept <kbd>Enter</kbd></button>;
+  }
+  return (
+    <div className={`suggestion${sug.stars === 1 ? ' reject' : ''}`}>
+      <span className="suggestion-text"><span>{label}</span><span className="suggestion-why">{reason}{sug.reasons.length > 1 ? ` · ${sug.reasons.slice(1).join(' · ')}` : ''}</span></span>
+      {action}
+    </div>
+  );
+}
+
+function AutoRatePanel({ photos, measuredCount, suggestions, run, applicable, handRated, onAnalyze, onApply, onCancel, onReview, onReset, onClose }) {
+  const total = photos.length;
+  const left = total - measuredCount;
+  const counts = [4, 3, 2, 1].map((n) => [n, Object.values(suggestions).filter((s) => s.stars === n).length]);
+  const soft = Object.values(suggestions).filter((s) => s.soft).length;
+  const dups = Object.values(suggestions).filter((s) => s.duplicate).length;
+  const bursts = new Set(Object.values(suggestions).filter((s) => s.groupSize > 1).map((s) => s.group)).size;
+  const max = Math.max(1, ...counts.map(([, c]) => c));
+  return (
+    <Modal title="Auto-rate" onClose={onClose} footer={run
+      ? <button className="btn" onClick={onCancel}>Stop</button>
+      : <>
+          {measuredCount > 0 && <button className="btn btn-ghost" onClick={onReset}>Start over</button>}
+          {left > 0 && <button className={`btn${measuredCount ? '' : ' btn-primary'}`} onClick={onAnalyze}>Analyze {left === total ? `${total} photos` : `${left} new photos`}</button>}
+          {measuredCount > 0 && <button className="btn" onClick={onReview}>Review likely rejects</button>}
+          {measuredCount > 0 && <button className="btn btn-primary" disabled={!applicable} onClick={onApply}>Rate {applicable} photos</button>}
+        </>}>
+      {run ? (
+        <div className="auto-progress">
+          <div className="small">{run.kind === 'apply' ? 'Saving ratings' : 'Looking at photos'}… {run.done} of {run.total}</div>
+          <div className="tree-progress wide"><span style={{ width: `${(run.done / Math.max(1, run.total)) * 100}%` }} /></div>
+          <p className="muted small">You can close this window; it keeps going.</p>
+        </div>
+      ) : measuredCount === 0 ? (
+        <>
+          <p>GearCheck looks at each photo's built-in preview and suggests stars:</p>
+          <ul className="auto-list">
+            <li><b>Sharpness:</b> soft focus and motion blur, judged on the sharpest part of the frame, so a blurred background is fine.</li>
+            <li><b>Exposure:</b> blown highlights, crushed shadows, very dark or bright frames.</li>
+            <li><b>Bursts:</b> similar shots taken seconds apart. The best one keeps its stars, and the rest are marked as likely rejects.</li>
+          </ul>
+          <p className="muted small">Nothing is changed until you accept. Photos you've rated yourself are never changed. Everything runs on this PC. In a OneDrive folder, photos stored only online download as they're analyzed.</p>
+        </>
+      ) : (
+        <>
+          <p className="small">{measuredCount} of {total} photos analyzed{left ? ` (${left} not yet)` : ''}. Found {soft} soft or blurry and {dups} extra shots in {bursts} bursts.</p>
+          <div className="auto-bars">
+            {counts.map(([n, c]) => (
+              <div key={n} className="auto-bar-row">
+                <span className={`auto-bar-label${n === 1 ? ' reject' : ''}`}>{'★'.repeat(n)}{n === 1 ? ' reject?' : ''}</span>
+                <span className="auto-bar"><span style={{ width: `${(c / max) * 100}%` }} className={n === 1 ? 'reject' : ''} /></span>
+                <span className="auto-bar-count">{c}</span>
+              </div>
+            ))}
+          </div>
+          <p className="muted small">★★★★ goes to the best 20% of keepers, ★★★ to the next 40% and ★★ to the rest. Five stars are left for you to give. {handRated ? `${handRated} photos you rated yourself won't be touched.` : ''} Press Enter on a photo to accept just that suggestion.</p>
+        </>
+      )}
+    </Modal>
   );
 }
 
@@ -453,7 +629,7 @@ function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, scale, chi
 // folder of thousands of photos scrolls as smoothly as a folder of ten.
 const CELL = 96;
 
-function Filmstrip({ photos, index, meta, onSelect, requestMeta }) {
+function Filmstrip({ photos, index, meta, suggestions, onSelect, requestMeta }) {
   const ref = useRef();
   const [scroll, setScroll] = useState({ left: 0, width: 0 });
 
@@ -486,14 +662,14 @@ function Filmstrip({ photos, index, meta, onSelect, requestMeta }) {
     <div className="filmstrip" ref={ref} onScroll={(e) => setScroll({ left: e.currentTarget.scrollLeft, width: e.currentTarget.clientWidth })} onWheel={onWheel}>
       <div className="filmstrip-track" style={{ width: photos.length * CELL }}>
         {visible.map((p, i) => (
-          <Thumb key={p.id} photo={p} meta={meta[p.id]} active={first + i === index} left={(first + i) * CELL} onClick={() => onSelect(first + i)} />
+          <Thumb key={p.id} photo={p} meta={meta[p.id]} suggested={suggestions[p.id]?.stars} active={first + i === index} left={(first + i) * CELL} onClick={() => onSelect(first + i)} />
         ))}
       </div>
     </div>
   );
 }
 
-function Thumb({ photo, meta, active, left, onClick }) {
+function Thumb({ photo, meta, suggested, active, left, onClick }) {
   const [src, setSrc] = useState(() => imgUrl('thumb', photo.id));
   const rating = photoRating(photo, meta);
   const rot = ROTATION[meta?.orientation] || 0;
@@ -501,7 +677,8 @@ function Thumb({ photo, meta, active, left, onClick }) {
   return (
     <button className={`thumb${active ? ' active' : ''}`} style={{ left }} onClick={onClick} onMouseDown={(e) => e.preventDefault()} title={photo.name}>
       <img src={src} alt="" decoding="async" draggable={false} onError={onError} style={rot ? { transform: `rotate(${rot}deg)` } : undefined} />
-      {rating > 0 && <span className="thumb-stars">{'★'.repeat(rating)}</span>}
+      {rating > 0 ? <span className="thumb-stars">{'★'.repeat(rating)}</span>
+        : suggested > 0 && <span className="thumb-stars ghost" title="Suggested by auto-rate">{'☆'.repeat(suggested)}</span>}
     </button>
   );
 }
