@@ -51,12 +51,13 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "OWNER",
-      "repo": "REPO",
+      "owner": "subtlemoon",
+      "repo": "gearcheck",
       "releaseType": "release"
     }
   },
   "dependencies": {
     "electron-updater": "^6.8.11"
-  }
+  },
+  "repository": "https://github.com/subtlemoon/gearcheck"
 }
