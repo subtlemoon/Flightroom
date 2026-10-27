@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react';
 import { Counts, Icon, Modal, Status, LEVEL_META } from './ui.jsx';
 import { GearCard, GearPicker } from './gear.jsx';
-import { checkPreset, LEVELS } from '../engine/compat.js';
+import { applyResolved, checkKey, checkPreset, LEVELS } from '../engine/compat.js';
 import { listKey } from '../store.js';
 
 export function usePresetResult(preset, gearById, settings, gear) {
-  return useMemo(() => checkPreset(preset, gearById, settings, gear), [preset, gearById, settings, gear]);
+  return useMemo(() => applyResolved(checkPreset(preset, gearById, settings, gear), preset.resolved), [preset, gearById, settings, gear]);
 }
 
 function PresetCard({ preset, gearById, settings, gear, onOpen }) {
@@ -107,7 +107,13 @@ export function PresetView({ group, preset, store, onBack, onOpenGear }) {
   };
   const remove = (item) => { const k = listKey(item); upd({ [k]: preset[k].filter((x) => x !== item.id) }); };
 
-  const shown = r.checks.filter((c) => (filter === 'all' ? true : LEVELS[c.level] >= LEVELS.warn));
+  const isIssue = (c) => LEVELS[c.level] >= LEVELS.warn;
+  const shown = r.checks.filter((c) => (filter === 'all' ? true : filter === 'resolved' ? c.resolved : isIssue(c) && !c.resolved));
+  const resolved = preset.resolved || [];
+  const toggleResolved = (c) => {
+    const k = checkKey(c);
+    upd({ resolved: resolved.includes(k) ? resolved.filter((x) => x !== k) : [...resolved, k] });
+  };
   const byCategory = CATEGORY_ORDER.map((cat) => [cat, shown.filter((c) => c.category === cat).sort((a, b) => LEVELS[b.level] - LEVELS[a.level])]).filter(([, l]) => l.length);
   const bodies = preset.bodyIds.map((id) => gearById[id]).filter(Boolean);
   const lenses = preset.lensIds.map((id) => gearById[id]).filter(Boolean);
@@ -182,19 +188,28 @@ export function PresetView({ group, preset, store, onBack, onOpenGear }) {
               <h3 className="section-title">Compatibility report</h3>
               <div className="seg small">
                 <button className={filter === 'problems' ? 'on' : ''} onClick={() => setFilter('problems')}>Issues ({r.counts.warn + r.counts.bad})</button>
+                {r.resolvedCount > 0 && <button className={filter === 'resolved' ? 'on' : ''} onClick={() => setFilter('resolved')}>Resolved ({r.resolvedCount})</button>}
                 <button className={filter === 'all' ? 'on' : ''} onClick={() => setFilter('all')}>All checks ({r.checks.length})</button>
               </div>
             </div>
             {byCategory.length === 0 && (
-              <p className="empty">{r.checks.length ? 'No issues. Everything in this kit works together.' : 'Add a camera body to start checking compatibility.'}</p>
+              <p className="empty">{!r.checks.length ? 'Add a camera body to start checking compatibility.'
+                : filter === 'resolved' ? 'Nothing marked as resolved.'
+                : r.resolvedCount ? `No open issues. ${r.resolvedCount} marked as resolved.` : 'No issues. Everything in this kit works together.'}</p>
             )}
             {byCategory.map(([cat, list]) => (
               <div key={cat} className="check-group">
                 <div className="check-cat">{cat}</div>
                 {list.map((c, i) => (
-                  <div key={i} className={`check lvl-${c.level}`}>
-                    <span className="status-dot">{LEVEL_META[c.level].sym}</span>
-                    <div><div className="check-title">{c.title}</div>{c.detail && <div className="check-detail">{c.detail}</div>}</div>
+                  <div key={i} className={`check lvl-${c.resolved ? 'ok' : c.level}${c.resolved ? ' resolved' : ''}`}>
+                    <span className="status-dot">{c.resolved ? '✓' : LEVEL_META[c.level].sym}</span>
+                    <div className="grow"><div className="check-title">{c.title}</div>{c.detail && <div className="check-detail">{c.detail}</div>}</div>
+                    {isIssue(c) && (
+                      <button className={`btn btn-sm resolve-btn${c.resolved ? ' btn-ghost' : ''}`} onClick={() => toggleResolved(c)}
+                        title={c.resolved ? 'Show this as an issue again' : 'Hide this issue, e.g. you already have the adapter'}>
+                        {c.resolved ? 'Undo' : <><Icon name="check" size={14} />Resolved</>}
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -219,7 +234,8 @@ export function PresetView({ group, preset, store, onBack, onOpenGear }) {
 
 function verdictText(r) {
   if (!r.checks.length) return 'Empty kit';
-  if (r.overall === 'bad') return `${r.counts.bad} compatibility problem${r.counts.bad === 1 ? '' : 's'} found`;
-  if (r.overall === 'warn') return `Works, with ${r.counts.warn} thing${r.counts.warn === 1 ? '' : 's'} to watch`;
-  return 'Everything works together';
+  const note = r.resolvedCount ? ` (${r.resolvedCount} resolved)` : '';
+  if (r.overall === 'bad') return `${r.counts.bad} compatibility problem${r.counts.bad === 1 ? '' : 's'} found${note}`;
+  if (r.overall === 'warn') return `Works, with ${r.counts.warn} thing${r.counts.warn === 1 ? '' : 's'} to watch${note}`;
+  return `Everything works together${note}`;
 }

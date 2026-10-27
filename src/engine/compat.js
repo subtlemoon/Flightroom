@@ -46,6 +46,7 @@ function coverageCheck(body, lens) {
 
 // How one lens works on one body, given the adapters in the kit and in the catalog.
 export function lensOnBody(body, lens, kitAdapters, catalogAdapters = []) {
+  if (body.fixedLens) return { level: 'bad', label: 'Built-in lens', notes: [`${body.model} has a built-in lens and can't take interchangeable lenses.`] };
   const cov = coverageCheck(body, lens);
   if (lens.mount === body.mount) {
     return { level: cov.level, label: cov.level === 'ok' ? 'Native fit' : 'Crop mode', notes: ['Same mount.', cov.note].filter(Boolean) };
@@ -248,4 +249,21 @@ function countLevels(checks) {
   const c = { ok: 0, info: 0, warn: 0, bad: 0 };
   for (const x of checks) c[x.level]++;
   return c;
+}
+
+export const checkKey = (c) => `${c.category}|${c.title}`;
+
+// Marks checks the user resolved by hand (e.g. "I have a microSD adapter"). Resolved
+// checks no longer count as issues or affect the overall verdict.
+export function applyResolved(result, resolvedKeys = []) {
+  if (!resolvedKeys.length) return { ...result, resolvedCount: 0 };
+  const checks = result.checks.map((c) => (LEVELS[c.level] >= LEVELS.warn && resolvedKeys.includes(checkKey(c)) ? { ...c, resolved: true } : c));
+  const active = checks.filter((c) => !c.resolved);
+  return {
+    ...result,
+    checks,
+    overall: active.length ? worst(active.map((c) => c.level)) : 'ok',
+    counts: countLevels(active),
+    resolvedCount: checks.length - active.length,
+  };
 }

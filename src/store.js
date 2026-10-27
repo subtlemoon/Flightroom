@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { CATALOG } from './data/gear.js';
 import { SEED_GROUPS } from './data/presets.js';
 import { MY_GEAR, MY_GROUPS } from './data/mygear.js';
-import { cachedCatalog, watchCatalog } from './remote.js';
+import { cachedCatalog, fetchCatalog, watchCatalog } from './remote.js';
 
 const KEY = 'gearcheck-v1';
 
@@ -57,10 +57,22 @@ export function useStore() {
   const [catalog, setCatalog] = useState(startCatalog);
   const [state, setState] = useState(() => load(catalog));
 
-  useEffect(() => watchCatalog((c) => {
+  // status: 'loading' | 'ok' | 'error'; at: time of the last successful fetch.
+  const [catalogStatus, setCatalogStatus] = useState({ status: 'loading', at: null });
+  const applyCatalog = (c) => {
     setCatalog(c);
     setState((s) => seedOwned(s, c));
-  }), []);
+    setCatalogStatus({ status: 'ok', at: Date.now() });
+  };
+  useEffect(() => watchCatalog(applyCatalog, () => setCatalogStatus((st) => ({ ...st, status: 'error' }))), []);
+  const refreshCatalog = async () => {
+    setCatalogStatus((st) => ({ ...st, status: 'loading' }));
+    try {
+      applyCatalog(await fetchCatalog());
+    } catch {
+      setCatalogStatus((st) => ({ ...st, status: 'error' }));
+    }
+  };
 
   useEffect(() => {
     try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {}
@@ -129,7 +141,7 @@ export function useStore() {
     resetAll: () => setState(seedOwned(initial(), catalog)),
   };
 
-  return { state, gear, gearById, actions };
+  return { state, gear, gearById, actions, catalogStatus, refreshCatalog };
 }
 
 export const listKey = (item) => (item.type === 'body' ? 'bodyIds' : item.type === 'lens' ? 'lensIds' : 'accessoryIds');

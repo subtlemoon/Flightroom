@@ -741,6 +741,666 @@
       "year": 2021
     },
     {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "batteryAlso": [
+        {
+          "model": "EN-EL15",
+          "note": "Older EN-EL15 batteries (including third-party ones) work, but give fewer shots per charge and cannot charge in the camera over USB."
+        }
+      ],
+      "id": "nikon-zf",
+      "brand": "Nikon",
+      "model": "Zf",
+      "mount": "Nikon Z",
+      "sensor": "Full Frame",
+      "megapixels": 24.5,
+      "ibis": true,
+      "maxVideo": "4K 60p (crop)",
+      "rawFormat": "NEF",
+      "videoFormats": [
+        "H.265 (HEVC)",
+        "H.264"
+      ],
+      "cardSlots": [
+        "SD",
+        "microSD"
+      ],
+      "battery": "EN-EL15c",
+      "shoe": "Nikon i-TTL",
+      "weight": 710,
+      "year": 2023
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [
+        {
+          "feature": "CFexpress Type B cards",
+          "cards": [
+            "CFexpress B"
+          ],
+          "minFirmware": "2.20"
+        }
+      ],
+      "id": "nikon-z7",
+      "brand": "Nikon",
+      "model": "Z7",
+      "mount": "Nikon Z",
+      "sensor": "Full Frame",
+      "megapixels": 45.7,
+      "ibis": true,
+      "maxVideo": "4K 30p",
+      "rawFormat": "NEF",
+      "videoFormats": [
+        "H.264"
+      ],
+      "cardSlots": [
+        "XQD"
+      ],
+      "battery": "EN-EL15b",
+      "shoe": "Nikon i-TTL",
+      "weight": 675,
+      "year": 2018
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "nikon-z50ii",
+      "brand": "Nikon",
+      "model": "Z50II",
+      "mount": "Nikon Z",
+      "sensor": "APS-C",
+      "megapixels": 20.9,
+      "ibis": false,
+      "maxVideo": "4K 60p (crop)",
+      "rawFormat": "NEF",
+      "videoFormats": [
+        "H.265 (HEVC)",
+        "H.264"
+      ],
+      "cardSlots": [
+        "SD"
+      ],
+      "battery": "EN-EL25a",
+      "shoe": "Nikon i-TTL",
+      "weight": 550,
+      "year": 2024
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "nikon-z50",
+      "brand": "Nikon",
+      "model": "Z50",
+      "mount": "Nikon Z",
+      "sensor": "APS-C",
+      "megapixels": 20.9,
+      "ibis": false,
+      "maxVideo": "4K 30p",
+      "rawFormat": "NEF",
+      "videoFormats": [
+        "H.264"
+      ],
+      "cardSlots": [
+        "SD"
+      ],
+      "battery": "EN-EL25",
+      "shoe": "Nikon i-TTL",
+      "weight": 450,
+      "year": 2019
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "nikon-z30",
+      "brand": "Nikon",
+      "model": "Z30",
+      "mount": "Nikon Z",
+      "sensor": "APS-C",
+      "megapixels": 20.9,
+      "ibis": false,
+      "maxVideo": "4K 30p",
+      "rawFormat": "NEF",
+      "videoFormats": [
+        "H.264"
+      ],
+      "cardSlots": [
+        "SD"
+      ],
+      "battery": "EN-EL25",
+      "shoe": "Nikon i-TTL",
+      "weight": 405,
+      "year": 2022
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "sony-a9iii",
+      "brand": "Sony",
+      "model": "α9 III",
+      "mount": "Sony E",
+      "sensor": "Full Frame",
+      "megapixels": 24.6,
+      "ibis": true,
+      "maxVideo": "4K 120p",
+      "rawFormat": "ARW",
+      "videoFormats": [
+        "XAVC S",
+        "XAVC HS",
+        "XAVC S-I"
+      ],
+      "cardSlots": [
+        "CFexpress A / SD",
+        "CFexpress A / SD"
+      ],
+      "battery": "NP-FZ100",
+      "shoe": "Sony MI",
+      "weight": 702,
+      "year": 2023
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "sony-a7cii",
+      "brand": "Sony",
+      "model": "α7C II",
+      "mount": "Sony E",
+      "sensor": "Full Frame",
+      "megapixels": 33,
+      "ibis": true,
+      "maxVideo": "4K 60p (crop)",
+      "rawFormat": "ARW",
+      "videoFormats": [
+        "XAVC S",
+        "XAVC HS",
+        "XAVC S-I"
+      ],
+      "cardSlots": [
+        "SD"
+      ],
+      "battery": "NP-FZ100",
+      "shoe": "Sony MI",
+      "weight": 514,
+      "year": 2023
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "sony-a7cr",
+      "brand": "Sony",
+      "model": "α7CR",
+      "mount": "Sony E",
+      "sensor": "Full Frame",
+      "megapixels": 61,
+      "ibis": true,
+      "maxVideo": "4K 60p (crop)",
+      "rawFormat": "ARW",
+      "videoFormats": [
+        "XAVC S",
+        "XAVC HS",
+        "XAVC S-I"
+      ],
+      "cardSlots": [
+        "SD"
+      ],
+      "battery": "NP-FZ100",
+      "shoe": "Sony MI",
+      "weight": 515,
+      "year": 2023
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "sony-zve1",
+      "brand": "Sony",
+      "model": "ZV-E1",
+      "mount": "Sony E",
+      "sensor": "Full Frame",
+      "megapixels": 12,
+      "ibis": true,
+      "maxVideo": "4K 120p",
+      "rawFormat": "ARW",
+      "videoFormats": [
+        "XAVC S",
+        "XAVC HS",
+        "XAVC S-I"
+      ],
+      "cardSlots": [
+        "SD"
+      ],
+      "battery": "NP-FZ100",
+      "shoe": "Sony MI",
+      "weight": 483,
+      "year": 2023
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "sony-zve10ii",
+      "brand": "Sony",
+      "model": "ZV-E10 II",
+      "mount": "Sony E",
+      "sensor": "APS-C",
+      "megapixels": 26,
+      "ibis": false,
+      "maxVideo": "4K 60p (crop)",
+      "rawFormat": "ARW",
+      "videoFormats": [
+        "XAVC S",
+        "XAVC HS",
+        "XAVC S-I"
+      ],
+      "cardSlots": [
+        "SD"
+      ],
+      "battery": "NP-FZ100",
+      "shoe": "Sony MI",
+      "weight": 377,
+      "year": 2024
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "sony-a7iii",
+      "brand": "Sony",
+      "model": "α7 III",
+      "mount": "Sony E",
+      "sensor": "Full Frame",
+      "megapixels": 24,
+      "ibis": true,
+      "maxVideo": "4K 30p",
+      "rawFormat": "ARW",
+      "videoFormats": [
+        "XAVC S"
+      ],
+      "cardSlots": [
+        "SD",
+        "SD"
+      ],
+      "battery": "NP-FZ100",
+      "shoe": "Sony MI",
+      "digitalAudio": false,
+      "weight": 650,
+      "year": 2018
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "canon-r1",
+      "brand": "Canon",
+      "model": "EOS R1",
+      "mount": "Canon RF",
+      "sensor": "Full Frame",
+      "megapixels": 24,
+      "ibis": true,
+      "maxVideo": "6K 60p RAW",
+      "rawFormat": "CR3",
+      "videoFormats": [
+        "Cinema RAW Light",
+        "XF-AVC",
+        "H.265 (HEVC)",
+        "H.264"
+      ],
+      "cardSlots": [
+        "CFexpress B",
+        "CFexpress B"
+      ],
+      "battery": "LP-E19",
+      "shoe": "Canon Multi-function",
+      "weight": 1115,
+      "year": 2024
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "canon-r3",
+      "brand": "Canon",
+      "model": "EOS R3",
+      "mount": "Canon RF",
+      "sensor": "Full Frame",
+      "megapixels": 24,
+      "ibis": true,
+      "maxVideo": "6K 60p RAW",
+      "rawFormat": "CR3",
+      "videoFormats": [
+        "Cinema RAW Light",
+        "H.265 (HEVC)",
+        "H.264"
+      ],
+      "cardSlots": [
+        "CFexpress B",
+        "SD"
+      ],
+      "battery": "LP-E19",
+      "shoe": "Canon Multi-function",
+      "weight": 1015,
+      "year": 2021
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "canon-r6",
+      "brand": "Canon",
+      "model": "EOS R6",
+      "mount": "Canon RF",
+      "sensor": "Full Frame",
+      "megapixels": 20,
+      "ibis": true,
+      "maxVideo": "4K 60p",
+      "rawFormat": "CR3",
+      "videoFormats": [
+        "H.265 (HEVC)",
+        "H.264"
+      ],
+      "cardSlots": [
+        "SD",
+        "SD"
+      ],
+      "battery": "LP-E6NH",
+      "shoe": "Canon Multi-function",
+      "weight": 680,
+      "year": 2020
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "canon-r10",
+      "brand": "Canon",
+      "model": "EOS R10",
+      "mount": "Canon RF",
+      "sensor": "APS-C",
+      "megapixels": 24,
+      "ibis": false,
+      "maxVideo": "4K 60p (crop)",
+      "rawFormat": "CR3",
+      "videoFormats": [
+        "H.265 (HEVC)",
+        "H.264"
+      ],
+      "cardSlots": [
+        "SD"
+      ],
+      "battery": "LP-E17",
+      "shoe": "Canon Multi-function",
+      "weight": 429,
+      "year": 2022
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "canon-r50",
+      "brand": "Canon",
+      "model": "EOS R50",
+      "mount": "Canon RF",
+      "sensor": "APS-C",
+      "megapixels": 24,
+      "ibis": false,
+      "maxVideo": "4K 30p",
+      "rawFormat": "CR3",
+      "videoFormats": [
+        "H.264"
+      ],
+      "cardSlots": [
+        "SD"
+      ],
+      "battery": "LP-E17",
+      "shoe": "Canon Multi-function",
+      "weight": 375,
+      "year": 2023
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "canon-r100",
+      "brand": "Canon",
+      "model": "EOS R100",
+      "mount": "Canon RF",
+      "sensor": "APS-C",
+      "megapixels": 24,
+      "ibis": false,
+      "maxVideo": "4K 24p (crop)",
+      "rawFormat": "CR3",
+      "videoFormats": [
+        "H.264"
+      ],
+      "cardSlots": [
+        "SD"
+      ],
+      "battery": "LP-E17",
+      "shoe": "Canon Multi-function",
+      "weight": 356,
+      "year": 2023
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "fuji-xh2",
+      "brand": "Fujifilm",
+      "model": "X-H2",
+      "mount": "Fujifilm X",
+      "sensor": "APS-C",
+      "megapixels": 40,
+      "ibis": true,
+      "maxVideo": "8K 30p",
+      "rawFormat": "RAF",
+      "videoFormats": [
+        "ProRes 422 HQ",
+        "H.265 (HEVC)",
+        "H.264"
+      ],
+      "cardSlots": [
+        "CFexpress B",
+        "SD"
+      ],
+      "battery": "NP-W235",
+      "shoe": "Fujifilm TTL",
+      "weight": 660,
+      "year": 2022
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "fuji-xt50",
+      "brand": "Fujifilm",
+      "model": "X-T50",
+      "mount": "Fujifilm X",
+      "sensor": "APS-C",
+      "megapixels": 40,
+      "ibis": true,
+      "maxVideo": "6.2K 30p",
+      "rawFormat": "RAF",
+      "videoFormats": [
+        "H.265 (HEVC)",
+        "H.264"
+      ],
+      "cardSlots": [
+        "SD"
+      ],
+      "battery": "NP-W126S",
+      "shoe": "Fujifilm TTL",
+      "weight": 438,
+      "year": 2024
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "fuji-xm5",
+      "brand": "Fujifilm",
+      "model": "X-M5",
+      "mount": "Fujifilm X",
+      "sensor": "APS-C",
+      "megapixels": 26,
+      "ibis": false,
+      "maxVideo": "6.2K 30p",
+      "rawFormat": "RAF",
+      "videoFormats": [
+        "H.265 (HEVC)",
+        "H.264"
+      ],
+      "cardSlots": [
+        "SD"
+      ],
+      "battery": "NP-W126S",
+      "shoe": "Fujifilm TTL",
+      "weight": 355,
+      "year": 2024
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "fuji-x100vi",
+      "brand": "Fujifilm",
+      "model": "X100VI",
+      "mount": "Fixed lens (23mm f/2)",
+      "fixedLens": true,
+      "sensor": "APS-C",
+      "megapixels": 40,
+      "ibis": true,
+      "maxVideo": "6.2K 30p",
+      "rawFormat": "RAF",
+      "videoFormats": [
+        "H.265 (HEVC)",
+        "H.264"
+      ],
+      "cardSlots": [
+        "SD"
+      ],
+      "battery": "NP-W126S",
+      "shoe": "Fujifilm TTL",
+      "weight": 521,
+      "year": 2024
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "fuji-gfx100ii",
+      "brand": "Fujifilm",
+      "model": "GFX100 II",
+      "mount": "Fujifilm G",
+      "sensor": "Medium Format",
+      "megapixels": 102,
+      "ibis": true,
+      "maxVideo": "8K 30p",
+      "rawFormat": "RAF",
+      "videoFormats": [
+        "ProRes 422 HQ",
+        "H.265 (HEVC)",
+        "H.264"
+      ],
+      "cardSlots": [
+        "CFexpress B",
+        "SD"
+      ],
+      "battery": "NP-W235",
+      "shoe": "Fujifilm TTL",
+      "weight": 1030,
+      "year": 2023
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "pana-s5iix",
+      "brand": "Panasonic",
+      "model": "Lumix S5IIX",
+      "mount": "L-Mount",
+      "sensor": "Full Frame",
+      "megapixels": 24,
+      "ibis": true,
+      "maxVideo": "6K 30p",
+      "rawFormat": "RW2",
+      "videoFormats": [
+        "ProRes 422 HQ",
+        "H.265 (HEVC)",
+        "H.264"
+      ],
+      "cardSlots": [
+        "SD",
+        "SD"
+      ],
+      "battery": "DMW-BLK22",
+      "shoe": "Panasonic TTL",
+      "weight": 740,
+      "year": 2023
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "pana-gh7",
+      "brand": "Panasonic",
+      "model": "Lumix GH7",
+      "mount": "Micro Four Thirds",
+      "sensor": "Micro Four Thirds",
+      "megapixels": 25,
+      "ibis": true,
+      "maxVideo": "5.7K 30p RAW",
+      "rawFormat": "RW2",
+      "videoFormats": [
+        "ProRes RAW",
+        "ProRes 422 HQ",
+        "H.265 (HEVC)",
+        "H.264"
+      ],
+      "cardSlots": [
+        "CFexpress B",
+        "SD"
+      ],
+      "battery": "DMW-BLK22",
+      "shoe": "Panasonic TTL",
+      "weight": 805,
+      "year": 2024
+    },
+    {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "pana-g9ii",
+      "brand": "Panasonic",
+      "model": "Lumix G9II",
+      "mount": "Micro Four Thirds",
+      "sensor": "Micro Four Thirds",
+      "megapixels": 25,
+      "ibis": true,
+      "maxVideo": "5.7K 30p",
+      "rawFormat": "RW2",
+      "videoFormats": [
+        "ProRes 422 HQ",
+        "H.265 (HEVC)",
+        "H.264"
+      ],
+      "cardSlots": [
+        "SD",
+        "SD"
+      ],
+      "battery": "DMW-BLK22",
+      "shoe": "Panasonic TTL",
+      "weight": 658,
+      "year": 2023
+    },
+    {
       "type": "lens",
       "id": "sony-2470gm2",
       "brand": "Sony",
@@ -1244,6 +1904,683 @@
       "weight": 470
     },
     {
+      "type": "lens",
+      "id": "nikon-z24120",
+      "brand": "Nikon",
+      "model": "NIKKOR Z 24-120mm f/4 S",
+      "mount": "Nikon Z",
+      "coverage": "Full Frame",
+      "focal": "24-120mm",
+      "aperture": "f/4",
+      "stabilized": false,
+      "filterThread": 77,
+      "weight": 630
+    },
+    {
+      "type": "lens",
+      "id": "nikon-z1424s",
+      "brand": "Nikon",
+      "model": "NIKKOR Z 14-24mm f/2.8 S",
+      "mount": "Nikon Z",
+      "coverage": "Full Frame",
+      "focal": "14-24mm",
+      "aperture": "f/2.8",
+      "stabilized": false,
+      "filterThread": 112,
+      "weight": 650,
+      "notes": "112mm filters fit the included HB-97 hood."
+    },
+    {
+      "type": "lens",
+      "id": "nikon-z85s",
+      "brand": "Nikon",
+      "model": "NIKKOR Z 85mm f/1.8 S",
+      "mount": "Nikon Z",
+      "coverage": "Full Frame",
+      "focal": "85mm",
+      "aperture": "f/1.8",
+      "stabilized": false,
+      "filterThread": 67,
+      "weight": 470
+    },
+    {
+      "type": "lens",
+      "id": "nikon-z35s",
+      "brand": "Nikon",
+      "model": "NIKKOR Z 35mm f/1.8 S",
+      "mount": "Nikon Z",
+      "coverage": "Full Frame",
+      "focal": "35mm",
+      "aperture": "f/1.8",
+      "stabilized": false,
+      "filterThread": 62,
+      "weight": 370
+    },
+    {
+      "type": "lens",
+      "id": "nikon-z50f12",
+      "brand": "Nikon",
+      "model": "NIKKOR Z 50mm f/1.2 S",
+      "mount": "Nikon Z",
+      "coverage": "Full Frame",
+      "focal": "50mm",
+      "aperture": "f/1.2",
+      "stabilized": false,
+      "filterThread": 82,
+      "weight": 1090
+    },
+    {
+      "type": "lens",
+      "id": "nikon-z135plena",
+      "brand": "Nikon",
+      "model": "NIKKOR Z 135mm f/1.8 S Plena",
+      "mount": "Nikon Z",
+      "coverage": "Full Frame",
+      "focal": "135mm",
+      "aperture": "f/1.8",
+      "stabilized": false,
+      "filterThread": 82,
+      "weight": 995
+    },
+    {
+      "type": "lens",
+      "id": "nikon-z100400",
+      "brand": "Nikon",
+      "model": "NIKKOR Z 100-400mm f/4.5-5.6 VR S",
+      "mount": "Nikon Z",
+      "coverage": "Full Frame",
+      "focal": "100-400mm",
+      "aperture": "f/4.5-5.6",
+      "stabilized": true,
+      "filterThread": 77,
+      "weight": 1355
+    },
+    {
+      "type": "lens",
+      "id": "nikon-z400f45",
+      "brand": "Nikon",
+      "model": "NIKKOR Z 400mm f/4.5 VR S",
+      "mount": "Nikon Z",
+      "coverage": "Full Frame",
+      "focal": "400mm",
+      "aperture": "f/4.5",
+      "stabilized": true,
+      "filterThread": 95,
+      "weight": 1245
+    },
+    {
+      "type": "lens",
+      "id": "nikon-z600f63",
+      "brand": "Nikon",
+      "model": "NIKKOR Z 600mm f/6.3 VR S",
+      "mount": "Nikon Z",
+      "coverage": "Full Frame",
+      "focal": "600mm",
+      "aperture": "f/6.3",
+      "stabilized": true,
+      "filterThread": 95,
+      "weight": 1470
+    },
+    {
+      "type": "lens",
+      "id": "nikon-z2875",
+      "brand": "Nikon",
+      "model": "NIKKOR Z 28-75mm f/2.8",
+      "mount": "Nikon Z",
+      "coverage": "Full Frame",
+      "focal": "28-75mm",
+      "aperture": "f/2.8",
+      "stabilized": false,
+      "filterThread": 67,
+      "weight": 565
+    },
+    {
+      "type": "lens",
+      "id": "nikon-z70180",
+      "brand": "Nikon",
+      "model": "NIKKOR Z 70-180mm f/2.8",
+      "mount": "Nikon Z",
+      "coverage": "Full Frame",
+      "focal": "70-180mm",
+      "aperture": "f/2.8",
+      "stabilized": false,
+      "filterThread": 67,
+      "weight": 795
+    },
+    {
+      "type": "lens",
+      "id": "nikon-z24200",
+      "brand": "Nikon",
+      "model": "NIKKOR Z 24-200mm f/4-6.3 VR",
+      "mount": "Nikon Z",
+      "coverage": "Full Frame",
+      "focal": "24-200mm",
+      "aperture": "f/4-6.3",
+      "stabilized": true,
+      "filterThread": 67,
+      "weight": 570
+    },
+    {
+      "type": "lens",
+      "id": "nikon-z40",
+      "brand": "Nikon",
+      "model": "NIKKOR Z 40mm f/2",
+      "mount": "Nikon Z",
+      "coverage": "Full Frame",
+      "focal": "40mm",
+      "aperture": "f/2",
+      "stabilized": false,
+      "filterThread": 52,
+      "weight": 170
+    },
+    {
+      "type": "lens",
+      "id": "nikon-zmc105",
+      "brand": "Nikon",
+      "model": "NIKKOR Z MC 105mm f/2.8 VR S",
+      "mount": "Nikon Z",
+      "coverage": "Full Frame",
+      "focal": "105mm macro",
+      "aperture": "f/2.8",
+      "stabilized": true,
+      "filterThread": 62,
+      "weight": 630
+    },
+    {
+      "type": "lens",
+      "id": "nikon-zdx18140",
+      "brand": "Nikon",
+      "model": "NIKKOR Z DX 18-140mm f/3.5-6.3 VR",
+      "mount": "Nikon Z",
+      "coverage": "APS-C",
+      "focal": "18-140mm",
+      "aperture": "f/3.5-6.3",
+      "stabilized": true,
+      "filterThread": 62,
+      "weight": 315
+    },
+    {
+      "type": "lens",
+      "id": "nikon-zdx50250",
+      "brand": "Nikon",
+      "model": "NIKKOR Z DX 50-250mm f/4.5-6.3 VR",
+      "mount": "Nikon Z",
+      "coverage": "APS-C",
+      "focal": "50-250mm",
+      "aperture": "f/4.5-6.3",
+      "stabilized": true,
+      "filterThread": 62,
+      "weight": 405
+    },
+    {
+      "type": "lens",
+      "id": "tamron-35150-z",
+      "brand": "Tamron",
+      "model": "35-150mm F/2-2.8 Di III VXD (Z)",
+      "mount": "Nikon Z",
+      "coverage": "Full Frame",
+      "focal": "35-150mm",
+      "aperture": "f/2-2.8",
+      "stabilized": false,
+      "filterThread": 82,
+      "weight": 1165
+    },
+    {
+      "type": "lens",
+      "id": "tamron-2875g2-z",
+      "brand": "Tamron",
+      "model": "28-75mm F/2.8 Di III VXD G2 (Z)",
+      "mount": "Nikon Z",
+      "coverage": "Full Frame",
+      "focal": "28-75mm",
+      "aperture": "f/2.8",
+      "stabilized": false,
+      "filterThread": 67,
+      "weight": 540
+    },
+    {
+      "type": "lens",
+      "id": "tamron-70300-z",
+      "brand": "Tamron",
+      "model": "70-300mm F/4.5-6.3 Di III RXD (Z)",
+      "mount": "Nikon Z",
+      "coverage": "Full Frame",
+      "focal": "70-300mm",
+      "aperture": "f/4.5-6.3",
+      "stabilized": false,
+      "filterThread": 67,
+      "weight": 580
+    },
+    {
+      "type": "lens",
+      "id": "sony-50gm",
+      "brand": "Sony",
+      "model": "FE 50mm F1.2 GM",
+      "mount": "Sony E",
+      "coverage": "Full Frame",
+      "focal": "50mm",
+      "aperture": "f/1.2",
+      "stabilized": false,
+      "filterThread": 72,
+      "weight": 778
+    },
+    {
+      "type": "lens",
+      "id": "sony-100400gm",
+      "brand": "Sony",
+      "model": "FE 100-400mm F4.5-5.6 GM OSS",
+      "mount": "Sony E",
+      "coverage": "Full Frame",
+      "focal": "100-400mm",
+      "aperture": "f/4.5-5.6",
+      "stabilized": true,
+      "filterThread": 77,
+      "weight": 1395
+    },
+    {
+      "type": "lens",
+      "id": "sony-2070g",
+      "brand": "Sony",
+      "model": "FE 20-70mm F4 G",
+      "mount": "Sony E",
+      "coverage": "Full Frame",
+      "focal": "20-70mm",
+      "aperture": "f/4",
+      "stabilized": false,
+      "filterThread": 72,
+      "weight": 488
+    },
+    {
+      "type": "lens",
+      "id": "sony-24105g",
+      "brand": "Sony",
+      "model": "FE 24-105mm F4 G OSS",
+      "mount": "Sony E",
+      "coverage": "Full Frame",
+      "focal": "24-105mm",
+      "aperture": "f/4",
+      "stabilized": true,
+      "filterThread": 77,
+      "weight": 663
+    },
+    {
+      "type": "lens",
+      "id": "sony-1635gm2",
+      "brand": "Sony",
+      "model": "FE 16-35mm F2.8 GM II",
+      "mount": "Sony E",
+      "coverage": "Full Frame",
+      "focal": "16-35mm",
+      "aperture": "f/2.8",
+      "stabilized": false,
+      "filterThread": 82,
+      "weight": 547
+    },
+    {
+      "type": "lens",
+      "id": "sony-2450g",
+      "brand": "Sony",
+      "model": "FE 24-50mm F2.8 G",
+      "mount": "Sony E",
+      "coverage": "Full Frame",
+      "focal": "24-50mm",
+      "aperture": "f/2.8",
+      "stabilized": false,
+      "filterThread": 67,
+      "weight": 440
+    },
+    {
+      "type": "lens",
+      "id": "tamron-2875g2-e",
+      "brand": "Tamron",
+      "model": "28-75mm F/2.8 Di III VXD G2 (E)",
+      "mount": "Sony E",
+      "coverage": "Full Frame",
+      "focal": "28-75mm",
+      "aperture": "f/2.8",
+      "stabilized": false,
+      "filterThread": 67,
+      "weight": 540
+    },
+    {
+      "type": "lens",
+      "id": "tamron-50400-e",
+      "brand": "Tamron",
+      "model": "50-400mm F/4.5-6.3 Di III VC VXD (E)",
+      "mount": "Sony E",
+      "coverage": "Full Frame",
+      "focal": "50-400mm",
+      "aperture": "f/4.5-6.3",
+      "stabilized": true,
+      "filterThread": 67,
+      "weight": 1155
+    },
+    {
+      "type": "lens",
+      "id": "sigma-100400-e",
+      "brand": "Sigma",
+      "model": "100-400mm F5-6.3 DG DN OS | C (E)",
+      "mount": "Sony E",
+      "coverage": "Full Frame",
+      "focal": "100-400mm",
+      "aperture": "f/5-6.3",
+      "stabilized": true,
+      "filterThread": 67,
+      "weight": 1135
+    },
+    {
+      "type": "lens",
+      "id": "canon-rf24105",
+      "brand": "Canon",
+      "model": "RF 24-105mm F4 L IS USM",
+      "mount": "Canon RF",
+      "coverage": "Full Frame",
+      "focal": "24-105mm",
+      "aperture": "f/4",
+      "stabilized": true,
+      "filterThread": 77,
+      "weight": 700
+    },
+    {
+      "type": "lens",
+      "id": "canon-rf2870stm",
+      "brand": "Canon",
+      "model": "RF 28-70mm F2.8 IS STM",
+      "mount": "Canon RF",
+      "coverage": "Full Frame",
+      "focal": "28-70mm",
+      "aperture": "f/2.8",
+      "stabilized": true,
+      "filterThread": 67,
+      "weight": 495
+    },
+    {
+      "type": "lens",
+      "id": "canon-rf100400",
+      "brand": "Canon",
+      "model": "RF 100-400mm F5.6-8 IS USM",
+      "mount": "Canon RF",
+      "coverage": "Full Frame",
+      "focal": "100-400mm",
+      "aperture": "f/5.6-8",
+      "stabilized": true,
+      "filterThread": 67,
+      "weight": 635
+    },
+    {
+      "type": "lens",
+      "id": "canon-rf200800",
+      "brand": "Canon",
+      "model": "RF 200-800mm F6.3-9 IS USM",
+      "mount": "Canon RF",
+      "coverage": "Full Frame",
+      "focal": "200-800mm",
+      "aperture": "f/6.3-9",
+      "stabilized": true,
+      "filterThread": 95,
+      "weight": 2050
+    },
+    {
+      "type": "lens",
+      "id": "canon-rf85f2",
+      "brand": "Canon",
+      "model": "RF 85mm F2 Macro IS STM",
+      "mount": "Canon RF",
+      "coverage": "Full Frame",
+      "focal": "85mm",
+      "aperture": "f/2",
+      "stabilized": true,
+      "filterThread": 67,
+      "weight": 500
+    },
+    {
+      "type": "lens",
+      "id": "canon-rf35f18",
+      "brand": "Canon",
+      "model": "RF 35mm F1.8 Macro IS STM",
+      "mount": "Canon RF",
+      "coverage": "Full Frame",
+      "focal": "35mm",
+      "aperture": "f/1.8",
+      "stabilized": true,
+      "filterThread": 52,
+      "weight": 305
+    },
+    {
+      "type": "lens",
+      "id": "canon-rf50f12",
+      "brand": "Canon",
+      "model": "RF 50mm F1.2 L USM",
+      "mount": "Canon RF",
+      "coverage": "Full Frame",
+      "focal": "50mm",
+      "aperture": "f/1.2",
+      "stabilized": false,
+      "filterThread": 77,
+      "weight": 950
+    },
+    {
+      "type": "lens",
+      "id": "canon-rfs1845",
+      "brand": "Canon",
+      "model": "RF-S 18-45mm F4.5-6.3 IS STM",
+      "mount": "Canon RF",
+      "coverage": "APS-C",
+      "focal": "18-45mm",
+      "aperture": "f/4.5-6.3",
+      "stabilized": true,
+      "filterThread": 49,
+      "weight": 130
+    },
+    {
+      "type": "lens",
+      "id": "fuji-70300",
+      "brand": "Fujifilm",
+      "model": "XF 70-300mm F4-5.6 R LM OIS WR",
+      "mount": "Fujifilm X",
+      "coverage": "APS-C",
+      "focal": "70-300mm",
+      "aperture": "f/4-5.6",
+      "stabilized": true,
+      "filterThread": 67,
+      "weight": 580
+    },
+    {
+      "type": "lens",
+      "id": "fuji-23f14",
+      "brand": "Fujifilm",
+      "model": "XF 23mm F1.4 R LM WR",
+      "mount": "Fujifilm X",
+      "coverage": "APS-C",
+      "focal": "23mm",
+      "aperture": "f/1.4",
+      "stabilized": false,
+      "filterThread": 58,
+      "weight": 375
+    },
+    {
+      "type": "lens",
+      "id": "fuji-56f12",
+      "brand": "Fujifilm",
+      "model": "XF 56mm F1.2 R WR",
+      "mount": "Fujifilm X",
+      "coverage": "APS-C",
+      "focal": "56mm",
+      "aperture": "f/1.2",
+      "stabilized": false,
+      "filterThread": 62,
+      "weight": 445
+    },
+    {
+      "type": "lens",
+      "id": "fuji-150600",
+      "brand": "Fujifilm",
+      "model": "XF 150-600mm F5.6-8 R LM OIS WR",
+      "mount": "Fujifilm X",
+      "coverage": "APS-C",
+      "focal": "150-600mm",
+      "aperture": "f/5.6-8",
+      "stabilized": true,
+      "filterThread": 82,
+      "weight": 1605
+    },
+    {
+      "type": "lens",
+      "id": "fuji-1680",
+      "brand": "Fujifilm",
+      "model": "XF 16-80mm F4 R OIS WR",
+      "mount": "Fujifilm X",
+      "coverage": "APS-C",
+      "focal": "16-80mm",
+      "aperture": "f/4",
+      "stabilized": true,
+      "filterThread": 72,
+      "weight": 440
+    },
+    {
+      "type": "lens",
+      "id": "fuji-1024",
+      "brand": "Fujifilm",
+      "model": "XF 10-24mm F4 R OIS WR",
+      "mount": "Fujifilm X",
+      "coverage": "APS-C",
+      "focal": "10-24mm",
+      "aperture": "f/4",
+      "stabilized": true,
+      "filterThread": 72,
+      "weight": 385
+    },
+    {
+      "type": "lens",
+      "id": "fuji-gf45100",
+      "brand": "Fujifilm",
+      "model": "GF 45-100mm F4 R LM OIS WR",
+      "mount": "Fujifilm G",
+      "coverage": "Medium Format",
+      "focal": "45-100mm",
+      "aperture": "f/4",
+      "stabilized": true,
+      "filterThread": 82,
+      "weight": 1005
+    },
+    {
+      "type": "lens",
+      "id": "fuji-gf3264",
+      "brand": "Fujifilm",
+      "model": "GF 32-64mm F4 R LM WR",
+      "mount": "Fujifilm G",
+      "coverage": "Medium Format",
+      "focal": "32-64mm",
+      "aperture": "f/4",
+      "stabilized": false,
+      "filterThread": 77,
+      "weight": 875
+    },
+    {
+      "type": "lens",
+      "id": "pana-2060",
+      "brand": "Panasonic",
+      "model": "Lumix S 20-60mm F3.5-5.6",
+      "mount": "L-Mount",
+      "coverage": "Full Frame",
+      "focal": "20-60mm",
+      "aperture": "f/3.5-5.6",
+      "stabilized": false,
+      "filterThread": 67,
+      "weight": 350
+    },
+    {
+      "type": "lens",
+      "id": "pana-s70200",
+      "brand": "Panasonic",
+      "model": "Lumix S PRO 70-200mm F2.8 O.I.S.",
+      "mount": "L-Mount",
+      "coverage": "Full Frame",
+      "focal": "70-200mm",
+      "aperture": "f/2.8",
+      "stabilized": true,
+      "filterThread": 82,
+      "weight": 1570
+    },
+    {
+      "type": "lens",
+      "id": "sigma-2470art-l",
+      "brand": "Sigma",
+      "model": "24-70mm F2.8 DG DN II | Art (L)",
+      "mount": "L-Mount",
+      "coverage": "Full Frame",
+      "focal": "24-70mm",
+      "aperture": "f/2.8",
+      "stabilized": false,
+      "filterThread": 82,
+      "weight": 735
+    },
+    {
+      "type": "lens",
+      "id": "sigma-100400-l",
+      "brand": "Sigma",
+      "model": "100-400mm F5-6.3 DG DN OS | C (L)",
+      "mount": "L-Mount",
+      "coverage": "Full Frame",
+      "focal": "100-400mm",
+      "aperture": "f/5-6.3",
+      "stabilized": true,
+      "filterThread": 67,
+      "weight": 1135
+    },
+    {
+      "type": "lens",
+      "id": "pana-1235ii",
+      "brand": "Panasonic",
+      "model": "Lumix G X 12-35mm F2.8 II",
+      "mount": "Micro Four Thirds",
+      "coverage": "Micro Four Thirds",
+      "focal": "12-35mm",
+      "aperture": "f/2.8",
+      "stabilized": true,
+      "filterThread": 58,
+      "weight": 305
+    },
+    {
+      "type": "lens",
+      "id": "pana-1260leica",
+      "brand": "Panasonic",
+      "model": "Leica DG 12-60mm F2.8-4.0",
+      "mount": "Micro Four Thirds",
+      "coverage": "Micro Four Thirds",
+      "focal": "12-60mm",
+      "aperture": "f/2.8-4",
+      "stabilized": true,
+      "filterThread": 62,
+      "weight": 320
+    },
+    {
+      "type": "lens",
+      "id": "pana-100400ii",
+      "brand": "Panasonic",
+      "model": "Leica DG 100-400mm F4.0-6.3 II",
+      "mount": "Micro Four Thirds",
+      "coverage": "Micro Four Thirds",
+      "focal": "100-400mm",
+      "aperture": "f/4-6.3",
+      "stabilized": true,
+      "filterThread": 72,
+      "weight": 985
+    },
+    {
+      "type": "lens",
+      "id": "om-1240ii",
+      "brand": "OM System",
+      "model": "M.Zuiko 12-40mm F2.8 PRO II",
+      "mount": "Micro Four Thirds",
+      "coverage": "Micro Four Thirds",
+      "focal": "12-40mm",
+      "aperture": "f/2.8",
+      "stabilized": false,
+      "filterThread": 62,
+      "weight": 382
+    },
+    {
       "type": "accessory",
       "id": "nikon-ftz2",
       "thirdParty": "good",
@@ -1667,6 +3004,234 @@
       "maxPayload": 15000,
       "weight": 1500,
       "notes": "Payload and weight are approximate. Check the label on your tripod."
+    },
+    {
+      "type": "accessory",
+      "id": "fringer-efnz",
+      "category": "Adapter",
+      "brand": "Fringer",
+      "model": "EF-NZ (EF to Nikon Z)",
+      "fromMount": "Canon EF",
+      "toMount": "Nikon Z",
+      "weight": 130,
+      "af": "good",
+      "notes": "Autofocus works with most Canon and Sigma EF lenses. Check Fringer’s compatibility list for your lens."
+    },
+    {
+      "type": "accessory",
+      "id": "bat-enel15b",
+      "category": "Battery",
+      "brand": "Nikon",
+      "model": "EN-EL15b",
+      "batteryModel": "EN-EL15b",
+      "weight": 80
+    },
+    {
+      "type": "accessory",
+      "id": "bat-enel25",
+      "category": "Battery",
+      "brand": "Nikon",
+      "model": "EN-EL25",
+      "batteryModel": "EN-EL25",
+      "weight": 50
+    },
+    {
+      "type": "accessory",
+      "id": "bat-enel25a",
+      "category": "Battery",
+      "brand": "Nikon",
+      "model": "EN-EL25a",
+      "batteryModel": "EN-EL25a",
+      "alsoFits": [
+        "EN-EL25"
+      ],
+      "weight": 55
+    },
+    {
+      "type": "accessory",
+      "id": "bat-lpe19",
+      "category": "Battery",
+      "brand": "Canon",
+      "model": "LP-E19",
+      "batteryModel": "LP-E19",
+      "weight": 185
+    },
+    {
+      "type": "accessory",
+      "id": "bat-npw126s",
+      "category": "Battery",
+      "brand": "Fujifilm",
+      "model": "NP-W126S",
+      "batteryModel": "NP-W126S",
+      "weight": 47
+    },
+    {
+      "type": "accessory",
+      "id": "bat-blk22",
+      "category": "Battery",
+      "brand": "Panasonic",
+      "model": "DMW-BLK22",
+      "batteryModel": "DMW-BLK22",
+      "weight": 92
+    },
+    {
+      "type": "accessory",
+      "id": "card-sd-v30-128",
+      "category": "Memory card",
+      "brand": "SanDisk",
+      "model": "Extreme PRO SD UHS-I V30 128GB",
+      "cardType": "SD",
+      "speedNote": "UHS-I V30: fine for photos and most 4K, too slow for high-bitrate All-Intra or ProRes."
+    },
+    {
+      "type": "accessory",
+      "id": "card-sd-v90-tough",
+      "category": "Memory card",
+      "brand": "Sony",
+      "model": "TOUGH SD UHS-II V90 128GB",
+      "cardType": "SD"
+    },
+    {
+      "type": "accessory",
+      "id": "card-lexar-cfb512",
+      "category": "Memory card",
+      "brand": "Lexar",
+      "model": "Professional CFexpress Type B Diamond 512GB",
+      "cardType": "CFexpress B"
+    },
+    {
+      "type": "accessory",
+      "id": "card-microsd-v30-256",
+      "category": "Memory card",
+      "brand": "SanDisk",
+      "model": "Extreme microSDXC UHS-I V30 256GB",
+      "cardType": "microSD"
+    },
+    {
+      "type": "accessory",
+      "id": "filter-cpl72",
+      "category": "Filter",
+      "brand": "B+W",
+      "model": "Circular Polarizer 72mm",
+      "threadSize": 72,
+      "weight": 35
+    },
+    {
+      "type": "accessory",
+      "id": "filter-cpl82",
+      "category": "Filter",
+      "brand": "B+W",
+      "model": "Circular Polarizer 82mm",
+      "threadSize": 82,
+      "weight": 45
+    },
+    {
+      "type": "accessory",
+      "id": "filter-vnd67",
+      "category": "Filter",
+      "brand": "K&F Concept",
+      "model": "Variable ND 2-32 67mm",
+      "threadSize": 67,
+      "weight": 40
+    },
+    {
+      "type": "accessory",
+      "id": "filter-vnd77",
+      "category": "Filter",
+      "brand": "K&F Concept",
+      "model": "Variable ND 2-32 77mm",
+      "threadSize": 77,
+      "weight": 50
+    },
+    {
+      "type": "accessory",
+      "id": "flash-sb700",
+      "category": "Flash",
+      "brand": "Nikon",
+      "model": "Speedlight SB-700",
+      "shoe": "Nikon i-TTL",
+      "weight": 360
+    },
+    {
+      "type": "accessory",
+      "id": "flash-tt685n",
+      "category": "Flash",
+      "brand": "Godox",
+      "model": "TT685II-N (Nikon)",
+      "shoe": "Nikon i-TTL",
+      "weight": 410
+    },
+    {
+      "type": "accessory",
+      "id": "flash-el5",
+      "category": "Flash",
+      "brand": "Canon",
+      "model": "Speedlite EL-5",
+      "shoe": "Canon Multi-function",
+      "weight": 375
+    },
+    {
+      "type": "accessory",
+      "id": "flash-hvlf60",
+      "category": "Flash",
+      "brand": "Sony",
+      "model": "HVL-F60RM2",
+      "shoe": "Sony MI",
+      "weight": 450
+    },
+    {
+      "type": "accessory",
+      "id": "mic-wirelessgo2",
+      "category": "Microphone",
+      "brand": "RØDE",
+      "model": "Wireless GO II",
+      "connection": "3.5mm",
+      "weight": 62
+    },
+    {
+      "type": "accessory",
+      "id": "mic-djimic2",
+      "category": "Microphone",
+      "brand": "DJI",
+      "model": "Mic 2",
+      "connection": "3.5mm",
+      "weight": 78
+    },
+    {
+      "type": "accessory",
+      "id": "mic-videomicgo2",
+      "category": "Microphone",
+      "brand": "RØDE",
+      "model": "VideoMic GO II",
+      "connection": "3.5mm",
+      "weight": 33
+    },
+    {
+      "type": "accessory",
+      "id": "gimbal-rs4mini",
+      "category": "Gimbal",
+      "brand": "DJI",
+      "model": "RS 4 Mini",
+      "maxPayload": 2000,
+      "weight": 890
+    },
+    {
+      "type": "accessory",
+      "id": "gimbal-rs3pro",
+      "category": "Gimbal",
+      "brand": "DJI",
+      "model": "RS 3 Pro",
+      "maxPayload": 4500,
+      "weight": 1500
+    },
+    {
+      "type": "accessory",
+      "id": "gimbal-crane4",
+      "category": "Gimbal",
+      "brand": "Zhiyun",
+      "model": "Crane 4",
+      "maxPayload": 6000,
+      "weight": 1850
     }
   ],
   "myGear": [

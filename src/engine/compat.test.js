@@ -5,7 +5,7 @@ import { MY_GEAR, MY_GROUPS } from '../data/mygear.js';
 import { buildCatalog } from '../data/catalog.js';
 import { isValidCatalog } from '../remote.js';
 import { readFileSync } from 'node:fs';
-import { checkPreset, lensOnBody, cardOnBody, compareVersions } from './compat.js';
+import { checkPreset, lensOnBody, cardOnBody, compareVersions, applyResolved, checkKey } from './compat.js';
 
 const byId = Object.fromEntries(CATALOG.map((g) => [g.id, g]));
 const adapters = CATALOG.filter((g) => g.category === 'Adapter');
@@ -182,5 +182,21 @@ describe('seed presets', () => {
       const r = checkPreset(p, byId, {}, CATALOG);
       expect(r.checks.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('resolved issues', () => {
+  it('resolving an issue removes it from counts and verdict', () => {
+    const r = run(['nikon-z7ii'], [], ['card-amzn-microsd512']);
+    expect(r.overall).toBe('warn');
+    const issue = r.checks.find((c) => c.level === 'warn');
+    const after = applyResolved(r, [checkKey(issue)]);
+    expect(['ok', 'info']).toContain(after.overall);
+    expect(after.counts.warn).toBe(0);
+    expect(after.resolvedCount).toBe(1);
+  });
+  it('stale resolved keys are ignored', () => {
+    const r = run(['nikon-z7ii'], [], ['card-amzn-microsd512']);
+    expect(applyResolved(r, ['Storage|something else']).overall).toBe('warn');
   });
 });

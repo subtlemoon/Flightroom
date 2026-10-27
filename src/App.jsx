@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useStore } from './store.js';
 import { Icon } from './components/ui.jsx';
 import { GearDetail, GearForm } from './components/gear.jsx';
@@ -55,7 +55,10 @@ export default function App() {
             </button>
           ))}
         </div>
-        <div className="sidebar-foot">{navBtn('settings', 'Settings', 'settings')}</div>
+        <div className="sidebar-foot">
+          <RefreshButton status={store.catalogStatus} onRefresh={store.refreshCatalog} count={store.gear.length} />
+          {navBtn('settings', 'Settings', 'settings')}
+        </div>
       </nav>
 
       <main className="content">{main}</main>
@@ -78,6 +81,27 @@ export default function App() {
         <DeleteGroupButton onDelete={() => { actions.deleteGroup(group.id); setView({ name: 'group', groupId: state.groups.find((g) => g.id !== group.id)?.id }); }} name={group.name} />
       )}
     </div>
+  );
+}
+
+function timeAgo(at) {
+  const mins = Math.round((Date.now() - at) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  return `${Math.round(mins / 60)} h ago`;
+}
+
+function RefreshButton({ status, onRefresh, count }) {
+  const [, tick] = useState(0);
+  useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 30000); return () => clearInterval(t); }, []);
+  const sub = status.status === 'loading' ? 'Checking GitHub…'
+    : status.status === 'error' ? 'Offline: using saved list'
+    : `${count} items · updated ${timeAgo(status.at)}`;
+  return (
+    <button className={`nav-item refresh${status.status === 'loading' ? ' spinning' : ''}`} onClick={onRefresh} disabled={status.status === 'loading'}>
+      <Icon name="refresh" />
+      <span className="grow"><span className="block">Refresh gear list</span><span className={`nav-sub${status.status === 'error' ? ' err' : ''}`}>{sub}</span></span>
+    </button>
   );
 }
 

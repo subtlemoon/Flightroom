@@ -30,8 +30,8 @@ export async function fetchCatalog() {
 
 // Calls onCatalog with the latest catalog now and every 30 minutes. Failures
 // (offline, GitHub down) are ignored and the cached or built-in list stays.
-export function watchCatalog(onCatalog) {
-  const run = () => fetchCatalog().then(onCatalog).catch(() => {});
+export function watchCatalog(onCatalog, onError = () => {}) {
+  const run = () => fetchCatalog().then(onCatalog).catch(onError);
   run();
   const timer = setInterval(run, REFRESH_MS);
   return () => clearInterval(timer);

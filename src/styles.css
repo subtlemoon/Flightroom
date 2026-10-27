@@ -276,3 +276,19 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
   .preset-layout { grid-template-columns: 1fr; }
   .kit { position: static; }
 }
+
+/* Refresh gear list */
+.nav-item.refresh { align-items: flex-start; }
+.nav-item.refresh svg { margin-top: 2px; flex-shrink: 0; }
+.nav-item.refresh:disabled { cursor: default; }
+.nav-item.spinning svg { animation: spin 1s linear infinite; }
+.block { display: block; }
+.nav-sub { display: block; font-size: 11px; color: var(--muted); margin-top: 1px; }
+.nav-sub.err { color: var(--warn); }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Resolved issues */
+.check { align-items: flex-start; }
+.resolve-btn { flex-shrink: 0; align-self: center; }
+.check.resolved { opacity: .6; }
+.check.resolved .check-title { text-decoration: line-through; text-decoration-color: rgba(255,255,255,.35); }
