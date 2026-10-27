@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { GearCard, useGearFilter } from './gear.jsx';
 import { Icon, Modal } from './ui.jsx';
 import { EDITING_APPS } from '../data/software.js';
+import { START_PAGES } from './home.jsx';
 import { DEFAULT_RATING_KEYS, DEFAULT_ZOOM_KEY, RESERVED_KEYS, ZOOM_LEVELS, assignKey, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zoomLevel } from '../cull/keys.js';
 
 export function MyGearView({ store, onOpenGear, onBrowse, onCustom }) {
@@ -223,6 +224,18 @@ export function SettingsView({ store }) {
     <div className="view narrow">
       <header className="view-head"><div className="grow"><div className="eyebrow">App</div><h1>Settings</h1></div></header>
       <UpdatesCard />
+      <section className="card">
+        <h3 className="section-title">Start page</h3>
+        <div className="update-row">
+          <p className="muted grow start-page-text">The page GearCheck opens on.</p>
+          <select value={state.settings.startPage || 'home'} onChange={(e) => actions.setSettings({ startPage: e.target.value })}>
+            {START_PAGES.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+            <optgroup label="Groups">
+              {state.groups.map((g) => <option key={g.id} value={`group:${g.id}`}>{g.icon} {g.name}</option>)}
+            </optgroup>
+          </select>
+        </div>
+      </section>
       <CullingCard store={store} />
       <section className="card">
         <h3 className="section-title">Editing apps you use</h3>

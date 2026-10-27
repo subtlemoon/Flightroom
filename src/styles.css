@@ -402,3 +402,21 @@ a.btn { text-decoration: none; color: inherit; }
 .tree-progress span { display: block; height: 100%; background: #ffc247; border-radius: 99px; }
 .tree-forget { opacity: 0; }
 .tree-item:hover .tree-forget { opacity: 1; }
+
+/* Home */
+.home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
+.home-card { display: flex; flex-direction: column; gap: 6px; padding: 18px 20px; border-radius: var(--radius); background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02)); border: 1px solid var(--line); }
+.home-cull { background: linear-gradient(135deg, rgba(139, 123, 255, .16), rgba(63, 208, 255, .05)); border-color: rgba(139, 123, 255, .3); }
+.home-card-head { display: flex; align-items: center; gap: 8px; color: var(--muted); margin-bottom: 6px; }
+.home-card-head h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; font-weight: 600; }
+.home-big { font-size: 19px; font-weight: 650; letter-spacing: -0.01em; }
+.home-text { color: #d5dae4; line-height: 1.55; }
+.home-actions { margin-top: auto; padding-top: 12px; }
+.home-list { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.home-list-item { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border: 0; border-radius: 9px; background: transparent; text-align: left; cursor: pointer; color: #c9cfdb; }
+.home-list-item:hover { background: var(--panel-2); color: var(--text); }
+.home-list-item.static { cursor: default; padding: 4px 10px; }
+.home-list-item.static:hover { background: transparent; }
+.tree-progress.wide { width: 100%; margin: 4px 0 2px; }
+.home-foot { margin-top: 18px; }
+.card .start-page-text { margin: 0; }
