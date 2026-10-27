@@ -28,10 +28,16 @@ camera's files.
 
 ## Updates
 
-Every push to `main` runs `.github/workflows/release.yml` on a Windows runner:
-it runs the tests, sets the version to `1.1.<build number>`, builds the
-installer and publishes it as a GitHub release. Installed copies check for a
-new release on launch, download it in the background, and offer to restart.
+The app version is the `version` in `package.json`, as major.minor.patch:
+a new feature or tab bumps minor (1.1.10 → 1.2.0), a fix bumps patch
+(1.2.0 → 1.2.1), and a big overhaul bumps major (2.0.0). Every push to `main`
+runs `.github/workflows/release.yml` on a Windows runner: it runs the tests and,
+if that version has no GitHub release yet, builds the installer and publishes it
+as release `v<version>`. Pushes that keep the version (catalog or news updates)
+publish nothing. Installed copies check for a new release on launch, download it
+in the background, and install it when the app closes.
+
+(Releases up to v1.1.10 were numbered 1.1.<build number> automatically.)
 
 ## Live gear catalog
 
