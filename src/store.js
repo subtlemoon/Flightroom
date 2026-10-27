@@ -27,11 +27,22 @@ function seedOwned(s) {
   const fresh = MY_GEAR.filter((id) => !seeded.includes(id));
   const seededGroups = s.seededGroups || [];
   const newGroups = MY_GROUPS.filter((g) => !seededGroups.includes(g.id) && !s.groups.some((x) => x.id === g.id));
+  // Newly listed gear also joins existing copies of the seeded presets.
+  const presetDefs = Object.fromEntries(MY_GROUPS.flatMap((g) => g.presets).map((p) => [p.id, p]));
+  const groups = s.groups.map((g) => ({
+    ...g,
+    presets: g.presets.map((p) => {
+      const def = presetDefs[p.id];
+      if (!def || !fresh.length) return p;
+      const merge = (k) => [...p[k], ...def[k].filter((id) => fresh.includes(id) && !p[k].includes(id))];
+      return { ...p, bodyIds: merge('bodyIds'), lensIds: merge('lensIds'), accessoryIds: merge('accessoryIds') };
+    }),
+  }));
   return {
     ...s,
     owned: [...new Set([...s.owned, ...fresh])],
     seededOwned: [...seeded, ...fresh],
-    groups: [...structuredClone(newGroups), ...s.groups],
+    groups: [...structuredClone(newGroups), ...groups],
     seededGroups: [...seededGroups, ...MY_GROUPS.map((g) => g.id)],
   };
 }

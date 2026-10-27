@@ -17,7 +17,12 @@ export const SENSORS = ['Full Frame', 'APS-C', 'Super 35', 'Micro Four Thirds'];
 // Crop sensors that an APS-C lens still covers.
 export const CROP_SENSORS = ['APS-C', 'Super 35', 'Micro Four Thirds'];
 
-const body = (b) => ({ type: 'body', firmware: '', firmwareFeatures: [], ...b });
+const EN_EL15_NOTE = 'Older EN-EL15 batteries (including third-party ones) work, but give fewer shots per charge and cannot charge in the camera over USB.';
+const body = (b) => ({
+  type: 'body', firmware: '', firmwareFeatures: [],
+  ...(b.battery === 'EN-EL15c' && { batteryAlso: [{ model: 'EN-EL15', note: EN_EL15_NOTE }] }),
+  ...b,
+});
 const lens = (l) => ({ type: 'lens', ...l });
 const acc = (a) => ({ type: 'accessory', ...a });
 
@@ -142,6 +147,7 @@ export const ACCESSORIES = [
   acc({ id: 'bat-lpe6p', category: 'Battery', brand: 'Canon', model: 'LP-E6P', batteryModel: 'LP-E6P', weight: 80 }),
   acc({ id: 'bat-lpe17', category: 'Battery', brand: 'Canon', model: 'LP-E17', batteryModel: 'LP-E17', weight: 45 }),
   acc({ id: 'bat-enel15c', category: 'Battery', brand: 'Nikon', model: 'EN-EL15c', batteryModel: 'EN-EL15c', weight: 80, alsoFits: ['EN-EL15b'] }),
+  acc({ id: 'bat-pholsy-enel15', category: 'Battery', brand: 'Pholsy', model: 'EN-EL15 replacement battery (2-pack)', batteryModel: 'EN-EL15', weight: 75 }),
   acc({ id: 'bat-enel18d', category: 'Battery', brand: 'Nikon', model: 'EN-EL18d', batteryModel: 'EN-EL18d', weight: 160 }),
   acc({ id: 'bat-npw235', category: 'Battery', brand: 'Fujifilm', model: 'NP-W235', batteryModel: 'NP-W235', weight: 77 }),
   acc({ id: 'bat-npf570', category: 'Battery', brand: 'Sony', model: 'NP-F570 (L-series)', batteryModel: 'NP-F570', weight: 120 }),

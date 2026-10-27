@@ -104,6 +104,11 @@ describe('accessories', () => {
   it('flags wrong battery', () => {
     expect(find(run(['sony-a7iv'], [], ['bat-lpe6nh']), /fits no body/).level).toBe('bad');
   });
+  it('older EN-EL15 works in the Z7II with a note', () => {
+    const r = run(['nikon-z7ii'], [], ['bat-pholsy-enel15']);
+    expect(find(r, /EN-EL15 replacement battery.*fits/).level).toBe('warn');
+    expect(find(r, /No spare battery/)).toBeFalsy();
+  });
   it('LP-E6NH in R5 Mark II works with limits', () => {
     expect(find(run(['canon-r5ii'], [], ['bat-lpe6nh']), /LP-E6NH fits/).level).toBe('warn');
   });
