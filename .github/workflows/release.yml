@@ -75,8 +75,12 @@ jobs:
         run: |
           Invoke-WebRequest https://github.com/subtlemoon/gearcheck/releases/download/v1.5.0/GearCheck-Setup-1.5.0.exe -OutFile gc.exe
           Start-Process .\gc.exe -ArgumentList '/S' -Wait
+          # The installer can hand off to a copy of itself and return early,
+          # so give the files a minute to appear.
           $exe = "$env:LOCALAPPDATA\Programs\gearcheck\GearCheck.exe"
+          for ($i = 0; $i -lt 60 -and !(Test-Path $exe); $i++) { Start-Sleep 1 }
           if (!(Test-Path $exe)) { throw "GearCheck did not install" }
+          Start-Sleep 5
           Start-Process $exe
           Start-Sleep 25
           Stop-Process -Name GearCheck -Force -ErrorAction SilentlyContinue
