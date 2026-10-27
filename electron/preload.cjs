@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('gearcheck', {
     pickFolder: () => ipcRenderer.invoke('cull:pick'),
     scan: (folder) => ipcRenderer.invoke('cull:scan', folder),
     meta: (ids) => ipcRenderer.invoke('cull:meta', ids),
+    listDirs: (dir) => ipcRenderer.invoke('cull:listDirs', dir),
     rate: (photo, rating) => ipcRenderer.invoke('cull:rate', { id: photo.id, ratingIn: photo.ratingIn, sidecar: photo.sidecar, rating }),
     saveThumb: (id, bytes) => ipcRenderer.invoke('cull:saveThumb', id, bytes),
     cacheSize: () => ipcRenderer.invoke('cull:cacheSize'),

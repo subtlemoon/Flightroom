@@ -166,6 +166,16 @@ async function setRating({ id, rating, ratingIn, sidecar }) {
   return { ok: true };
 }
 
+// Subfolders of `dir`, for the folder list on the Culling home page.
+async function listDirs(dir) {
+  const entries = await fsp.readdir(path.resolve(dir), { withFileTypes: true });
+  const names = entries
+    .filter((d) => d.isDirectory() && !/^[.$]/.test(d.name) && d.name !== 'System Volume Information')
+    .map((d) => d.name)
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+  return { dir: path.resolve(dir), names };
+}
+
 async function dirSize(dir) {
   const names = await fsp.readdir(dir).catch(() => []);
   let bytes = 0;
@@ -184,6 +194,7 @@ function setupPhotos(getWindow) {
   });
   ipcMain.handle('cull:scan', safe(scanFolder));
   ipcMain.handle('cull:meta', safe(photoMeta));
+  ipcMain.handle('cull:listDirs', safe(listDirs));
   ipcMain.handle('cull:rate', safe(setRating));
   ipcMain.handle('cull:saveThumb', safe(async (id, bytes) => {
     if (!inOpenFolder(id)) return { ok: false };
