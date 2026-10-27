@@ -1,18 +1,26 @@
-# GearCheck
+# Flightroom
 
-A Windows app for planning camera kits. Add your gear, see full specs, and check
-what works together: lens mounts and adapters (like the Nikon FTZ), firmware
-requirements, batteries, memory cards, filters, flashes, mics, gimbal and tripod
-payload, and whether Lightroom, Premiere Pro and DaVinci Resolve can open each
-camera's files.
+A Windows app for photographers: cull a shoot fast, develop the RAW files with
+Lightroom-style controls, and plan camera kits. (It was called GearCheck up to
+version 1.5; GearCheck installs update into Flightroom on their own and keep
+their gear, groups, settings and culling folders.)
+
+Kit planning: add your gear, see full specs, and check what works together:
+lens mounts and adapters (like the Nikon FTZ), firmware requirements, batteries,
+memory cards, filters, flashes, mics, gimbal and tripod payload, and whether
+Lightroom, Premiere Pro and DaVinci Resolve can open each camera's files.
+
+It is a [Tauri](https://tauri.app) app: a Rust desktop side and a React window
+shown by the system's WebView2, so there is no bundled browser.
 
 ## Developing
 
     npm install
-    npm run dev      # UI in the browser at http://localhost:5173
-    npm start        # build and open in Electron
-    npm test         # compatibility engine tests
-    npm run dist     # Windows installer + portable exe in release/ (on Linux needs wine + wine32)
+    npm run dev      # UI only, in the browser at http://localhost:5173
+    npm start        # the desktop app with live reload (needs Rust)
+    npm test         # JS tests
+    npm run test:rust
+    npm run dist     # Windows installer (build it on Windows; CI does)
 
 ## Where things live
 
@@ -20,11 +28,15 @@ camera's files.
 - `src/data/software.js` editing app support per file format
 - `src/data/presets.js` starter groups and presets
 - `src/engine/compat.js` compatibility rules
-- `src/components/` UI
-- `electron/main.cjs` desktop window
-- `electron/photos.cjs`, `electron/photo-lib.cjs` culling: folder listing, embedded
-  JPEG previews (served as `gcimg://`), thumbnail cache, XMP star ratings
-- `src/components/cull.jsx`, `src/cull/` culling view, preview decoding and prefetch
+- `src/components/` UI; `src/bridge.js` the window's calls to the desktop side
+- `src-tauri/src/lib.rs` window, `gcimg://` file protocol, command list
+- `src-tauri/src/photos.rs`, `photolib.rs` culling: folder listing, embedded
+  JPEG previews, thumbnail cache, XMP star ratings
+- `src-tauri/src/develop.rs` RAW decoding (rawler), demosaicing, JPEG export
+- `src-tauri/src/xmp.rs` reading and writing `.xmp` sidecars
+- `src-tauri/src/updater.rs` updates; `migrate.rs` taking over GearCheck's data
+- `src-tauri/installer-hooks.nsh` removes the old GearCheck program on install
+- `src/cull/`, `src/develop/` culling previews and the develop renderer
 
 ## Updates
 
@@ -34,8 +46,12 @@ a new feature or tab bumps minor (1.1.10 → 1.2.0), a fix bumps patch
 runs `.github/workflows/release.yml` on a Windows runner: it runs the tests and,
 if that version has no GitHub release yet, builds the installer and publishes it
 as release `v<version>`. Pushes that keep the version (catalog or news updates)
-publish nothing. Installed copies check for a new release on launch, download it
-in the background, and install it when the app closes.
+publish nothing. Installed copies check for a new release on launch and every hour,
+download it in the background (checking its SHA-256 from `latest.json`), and
+install it when the app closes. Each release also carries `latest.yml`, which
+GearCheck 1.x's updater reads, so old GearCheck installs update into Flightroom.
+CI also tests that hand-over on Windows: it installs GearCheck 1.5.0, runs the
+new installer the way GearCheck's updater does, and checks the result.
 
 (Releases up to v1.1.10 were numbered 1.1.<build number> automatically.)
 
@@ -62,3 +78,18 @@ full-size one for viewing), decodes them off the UI thread at screen size, and
 decodes the neighbouring photos ahead of time. Thumbnails are cached in the app
 data folder. Star ratings are written as `xmp:Rating` to a `.xmp` sidecar next to
 each RAW file (Lightroom/Bridge/Capture One convention), or inside standalone JPEGs.
+
+## Develop
+
+The Develop tab decodes the real RAW data (not the embedded JPEG) with
+[rawler](https://github.com/dnglab/dnglab): white balance and the camera's
+colour matrices come from the file. The desktop side sends the window a
+screen-sized version of the photo as half-float linear RGB, plus full-resolution
+demosaiced crops when you zoom in, and all the adjustments run as WebGL2 shaders,
+so sliders update live.
+
+Edits are never written into the RAW file. They are saved as Lightroom
+(Camera Raw) settings in the photo's `.xmp` sidecar (`crs:Exposure2012`,
+`crs:Contrast2012`, tone curve, HSL, crop, and so on), the same file Lightroom
+reads, alongside the star rating. Export renders the full-resolution photo in
+tiles and saves sRGB JPEGs with the camera's Exif.

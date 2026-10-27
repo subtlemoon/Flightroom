@@ -5,7 +5,7 @@ import react from '@vitejs/plugin-react';
 // Copies the subject detector's WebAssembly runtime next to its model in dist/vision
 // (the model itself is in vision/). The desktop side serves both to the window.
 const vision = () => ({
-  name: 'gearcheck-vision',
+  name: 'flightroom-vision',
   writeBundle() {
     const out = 'dist/vision';
     mkdirSync(out, { recursive: true });
