@@ -1,0 +1,62 @@
+{
+  "name": "gearcheck",
+  "version": "1.0.0",
+  "description": "Camera gear compatibility planner",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "vitest run",
+    "start": "vite build && electron .",
+    "dist": "vite build && electron-builder --win nsis portable --x64",
+    "release": "vite build && electron-builder --win nsis --x64 --publish always"
+  },
+  "author": "Jaewon",
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^5.4.21",
+    "vitest": "^2.1.9"
+  },
+  "productName": "GearCheck",
+  "private": true,
+  "build": {
+    "appId": "com.jaewon.gearcheck",
+    "productName": "GearCheck",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.png",
+      "artifactName": "GearCheck-${version}-${arch}-${target}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "artifactName": "GearCheck-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "GearCheck-Portable-${version}.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "OWNER",
+      "repo": "REPO",
+      "releaseType": "release"
+    }
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11"
+  }
+}
