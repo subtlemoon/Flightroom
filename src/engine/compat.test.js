@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { CATALOG } from '../data/gear.js';
 import { SEED_GROUPS } from '../data/presets.js';
 import { MY_GEAR, MY_GROUPS } from '../data/mygear.js';
+import { buildCatalog } from '../data/catalog.js';
+import { isValidCatalog } from '../remote.js';
+import { readFileSync } from 'node:fs';
 import { checkPreset, lensOnBody, cardOnBody, compareVersions } from './compat.js';
 
 const byId = Object.fromEntries(CATALOG.map((g) => [g.id, g]));
@@ -12,6 +15,16 @@ const find = (r, re) => r.checks.find((c) => re.test(c.title));
 describe('catalog', () => {
   it('has unique ids', () => {
     expect(new Set(CATALOG.map((g) => g.id)).size).toBe(CATALOG.length);
+  });
+  it('catalog.json is up to date (run npm run catalog)', () => {
+    const published = JSON.parse(readFileSync(new URL('../../catalog.json', import.meta.url), 'utf8'));
+    expect(published).toEqual(JSON.parse(JSON.stringify(buildCatalog())));
+    expect(isValidCatalog(published)).toBe(true);
+  });
+  it('rejects malformed catalogs', () => {
+    expect(isValidCatalog({ gear: [] , myGear: [], myGroups: [] })).toBe(false);
+    expect(isValidCatalog({ gear: [{ id: 'x', type: 'toaster' }], myGear: [], myGroups: [] })).toBe(false);
+    expect(isValidCatalog(null)).toBe(false);
   });
   it('my gear references real gear', () => {
     for (const id of MY_GEAR) expect(byId[id], id).toBeTruthy();

@@ -29,3 +29,11 @@ Every push to `main` runs `.github/workflows/release.yml` on a Windows runner:
 it runs the tests, sets the version to `1.1.<build number>`, builds the
 installer and publishes it as a GitHub release. Installed copies check for a
 new release on launch, download it in the background, and offer to restart.
+
+## Live gear catalog
+
+`catalog.json` (generated from `src/data` by `npm run catalog`) is fetched by the
+app from GitHub on launch and every 30 minutes, so gear and "my gear" changes
+reach the app as soon as they are pushed, without an app update. The last
+fetched copy is cached for offline use, and the built-in list is the fallback.
+A test fails if `catalog.json` is out of date.

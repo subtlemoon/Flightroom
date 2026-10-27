@@ -9,7 +9,8 @@
     "test": "vitest run",
     "start": "vite build && electron .",
     "dist": "vite build && electron-builder --win nsis portable --x64",
-    "release": "vite build && electron-builder --win nsis --x64 --publish always"
+    "release": "vite build && electron-builder --win nsis --x64 --publish always",
+    "catalog": "node scripts/build-catalog.mjs"
   },
   "author": "Jaewon",
   "devDependencies": {
@@ -59,5 +60,6 @@
   "dependencies": {
     "electron-updater": "^6.8.11"
   },
-  "repository": "https://github.com/subtlemoon/gearcheck"
+  "repository": "https://github.com/subtlemoon/gearcheck",
+  "type": "module"
 }

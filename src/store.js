@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { CATALOG } from './data/gear.js';
 import { SEED_GROUPS } from './data/presets.js';
 import { MY_GEAR, MY_GROUPS } from './data/mygear.js';
+import { cachedCatalog, watchCatalog } from './remote.js';
 
 const KEY = 'gearcheck-v1';
 
@@ -13,22 +14,25 @@ const initial = () => ({
   settings: { apps: ['lightroom', 'premiere', 'resolve'] },
 });
 
-function load() {
+// Latest known catalog: from GitHub if it was ever fetched, else the built-in one.
+const startCatalog = () => cachedCatalog() || { gear: CATALOG, myGear: MY_GEAR, myGroups: MY_GROUPS };
+
+function load(catalog) {
   let s = initial();
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) s = { ...s, ...JSON.parse(raw) };
   } catch {}
-  return seedOwned(s);
+  return seedOwned(s, catalog);
 }
 
-function seedOwned(s) {
+function seedOwned(s, { myGear, myGroups }) {
   const seeded = s.seededOwned || [];
-  const fresh = MY_GEAR.filter((id) => !seeded.includes(id));
+  const fresh = myGear.filter((id) => !seeded.includes(id));
   const seededGroups = s.seededGroups || [];
-  const newGroups = MY_GROUPS.filter((g) => !seededGroups.includes(g.id) && !s.groups.some((x) => x.id === g.id));
+  const newGroups = myGroups.filter((g) => !seededGroups.includes(g.id) && !s.groups.some((x) => x.id === g.id));
   // Newly listed gear also joins existing copies of the seeded presets.
-  const presetDefs = Object.fromEntries(MY_GROUPS.flatMap((g) => g.presets).map((p) => [p.id, p]));
+  const presetDefs = Object.fromEntries(myGroups.flatMap((g) => g.presets).map((p) => [p.id, p]));
   const groups = s.groups.map((g) => ({
     ...g,
     presets: g.presets.map((p) => {
@@ -43,24 +47,30 @@ function seedOwned(s) {
     owned: [...new Set([...s.owned, ...fresh])],
     seededOwned: [...seeded, ...fresh],
     groups: [...structuredClone(newGroups), ...groups],
-    seededGroups: [...seededGroups, ...MY_GROUPS.map((g) => g.id)],
+    seededGroups: [...new Set([...seededGroups, ...myGroups.map((g) => g.id)])],
   };
 }
 
 export const uid = (p) => `${p}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
 export function useStore() {
-  const [state, setState] = useState(load);
+  const [catalog, setCatalog] = useState(startCatalog);
+  const [state, setState] = useState(() => load(catalog));
+
+  useEffect(() => watchCatalog((c) => {
+    setCatalog(c);
+    setState((s) => seedOwned(s, c));
+  }), []);
 
   useEffect(() => {
     try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {}
   }, [state]);
 
   const gear = useMemo(() => {
-    const builtIn = CATALOG.map((g) => ({ ...g, ...state.overrides[g.id], builtIn: true }));
+    const builtIn = catalog.gear.map((g) => ({ ...g, ...state.overrides[g.id], builtIn: true }));
     const custom = Object.values(state.custom).map((g) => ({ ...g, builtIn: false }));
     return [...builtIn, ...custom];
-  }, [state.custom, state.overrides]);
+  }, [catalog, state.custom, state.overrides]);
   const gearById = useMemo(() => Object.fromEntries(gear.map((g) => [g.id, g])), [gear]);
 
   const update = (fn) => setState((s) => fn(structuredClone(s)) );
@@ -73,7 +83,7 @@ export function useStore() {
       return s;
     }),
     saveGear: (item) => update((s) => {
-      if (CATALOG.some((g) => g.id === item.id)) {
+      if (catalog.gear.some((g) => g.id === item.id)) {
         const { builtIn, ...rest } = item;
         s.overrides[item.id] = rest;
       } else {
@@ -116,7 +126,7 @@ export function useStore() {
     })),
     setApps: (apps) => update((s) => { s.settings.apps = apps; return s; }),
     importData: (data) => setState({ ...initial(), ...data }),
-    resetAll: () => setState(seedOwned(initial())),
+    resetAll: () => setState(seedOwned(initial(), catalog)),
   };
 
   return { state, gear, gearById, actions };

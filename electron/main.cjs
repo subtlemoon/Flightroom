@@ -1,11 +1,9 @@
-const { app, BrowserWindow, dialog, shell } = require('electron');
+const { app, BrowserWindow, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 
-let win;
-
 function createWindow() {
-  win = new BrowserWindow({
+  const win = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 960,
@@ -25,24 +23,16 @@ function createWindow() {
   else win.loadFile(path.join(__dirname, '../dist/index.html'));
 }
 
-// New versions are published as GitHub releases by the build workflow.
-// They download in the background and install on the next restart.
+// New versions are published as GitHub releases by the build workflow. They
+// download silently in the background and install silently when the app closes.
 function setupUpdates() {
   if (!app.isPackaged) return;
+  autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.on('update-downloaded', async (info) => {
-    const { response } = await dialog.showMessageBox(win, {
-      type: 'info',
-      buttons: ['Restart now', 'Later'],
-      defaultId: 0,
-      title: 'Update ready',
-      message: `GearCheck ${info.version} is ready`,
-      detail: 'Restart to use the new version, or it will install the next time you close the app.',
-    });
-    if (response === 0) autoUpdater.quitAndInstall();
-  });
   autoUpdater.on('error', (err) => console.error('Update check failed:', err.message));
-  autoUpdater.checkForUpdates().catch(() => {});
+  const check = () => autoUpdater.checkForUpdates().catch(() => {});
+  check();
+  setInterval(check, 60 * 60 * 1000);
 }
 
 app.whenReady().then(() => {
