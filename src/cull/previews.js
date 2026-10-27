@@ -92,6 +92,17 @@ export const loadThumb = (photo) => cached(`thumb:${photo.id}`, async () => {
   }
 });
 
+// The small preview as a fresh bitmap that isn't kept in the cache; the caller
+// closes it. Used by auto-rating, which looks at every photo once.
+export async function decodeThumb(photo) {
+  try {
+    return await createImageBitmap(await fetchBlob(imgUrl('thumb', photo.id)));
+  } catch (err) {
+    if (err.status !== 404) throw err;
+    return (await makeThumb(photo)).bmp;
+  }
+}
+
 // For <img> tags in the filmstrip: the cached thumbnail URL, or a freshly made one.
 const madeUrls = new Map();
 export async function thumbFallbackUrl(photo) {
