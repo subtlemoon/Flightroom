@@ -369,3 +369,7 @@ a.btn { text-decoration: none; color: inherit; }
 .card .cull-cache { margin: 12px 0 0; padding-top: 12px; border-top: 1px solid var(--line); }
 .zoom-setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 4px 0 6px; flex-wrap: wrap; }
 .card .zoom-setting + .muted { margin-bottom: 12px; }
+
+/* Update ready */
+.update-ready { display: flex; align-items: center; gap: 10px; padding: 10px; margin-bottom: 8px; border-radius: 10px; background: rgba(139, 123, 255, 0.12); border: 1px solid rgba(139, 123, 255, 0.3); }
+.update-ready-title { font-weight: 600; font-size: 13px; }

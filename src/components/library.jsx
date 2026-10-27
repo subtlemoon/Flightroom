@@ -87,7 +87,9 @@ function UpdatesCard() {
           <div className="update-version">GearCheck {version}</div>
           <div className={`muted small update-${status?.state || 'idle'}`}>{status?.message || 'Not checked yet'}</div>
         </div>
-        <button className="btn" disabled={busy} onClick={() => bridge.checkForUpdates()}><Icon name="refresh" size={16} />Check now</button>
+        {status?.state === 'ready'
+          ? <button className="btn btn-primary" onClick={() => bridge.installUpdate()}><Icon name="refresh" size={16} />Restart now</button>
+          : <button className="btn" disabled={busy} onClick={() => bridge.checkForUpdates()}><Icon name="refresh" size={16} />Check now</button>}
       </div>
       <p className="muted small">Updates download in the background and install when you close the app.</p>
     </section>
