@@ -1,3 +1,4 @@
+import { bridge as app } from '../bridge.js';
 import { useEffect, useRef, useState } from 'react';
 import { GearCard, useGearFilter } from './gear.jsx';
 import { Icon, Modal } from './ui.jsx';
@@ -69,7 +70,7 @@ export function CatalogView({ store, onOpenGear, onCustom }) {
 
 // Version and background update status, from the desktop app (absent in a browser).
 function UpdatesCard() {
-  const bridge = window.gearcheck;
+  const bridge = app;
   const [version, setVersion] = useState('');
   const [status, setStatus] = useState(null);
   useEffect(() => {
@@ -85,7 +86,7 @@ function UpdatesCard() {
       <h3 className="section-title">App updates</h3>
       <div className="update-row">
         <div className="grow">
-          <div className="update-version">GearCheck {version}</div>
+          <div className="update-version">Flightroom {version}</div>
           <div className={`muted small update-${status?.state || 'idle'}`}>{status?.message || 'Not checked yet'}</div>
         </div>
         {status?.state === 'ready'
@@ -102,7 +103,7 @@ const fmtBytes = (b) => (b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(
 // Rating shortcuts, auto-advance and the thumbnail cache for the Culling tab.
 function CullingCard({ store }) {
   const { state, actions } = store;
-  const bridge = window.gearcheck?.cull;
+  const bridge = app?.cull;
   const keys = ratingKeys(state.settings);
   const zKey = zoomKey(state.settings);
   const [listening, setListening] = useState(null); // rating (or 'zoom') waiting for a key press
@@ -198,11 +199,17 @@ export function SettingsView({ store }) {
   const [confirmReset, setConfirmReset] = useState(false);
   const toggle = (id) => actions.setApps(state.settings.apps.includes(id) ? state.settings.apps.filter((a) => a !== id) : [...state.settings.apps, id]);
 
-  const exportData = () => {
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const exportData = async () => {
+    const name = `flightroom-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    const text = JSON.stringify(state, null, 2);
+    if (app) {
+      const res = await app.saveTextFile(name, text);
+      if (res) setMsg(res.error ? `Couldn't save the backup: ${res.error}` : 'Backup saved.');
+      return;
+    }
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `gearcheck-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+    a.download = name;
     a.click();
     URL.revokeObjectURL(a.href);
   };
@@ -215,7 +222,7 @@ export function SettingsView({ store }) {
       actions.importData(data);
       setMsg('Backup restored.');
     } catch {
-      setMsg('That file is not a GearCheck backup.');
+      setMsg('That file is not a Flightroom or GearCheck backup.');
     }
     e.target.value = '';
   };
@@ -227,7 +234,7 @@ export function SettingsView({ store }) {
       <section className="card">
         <h3 className="section-title">Start page</h3>
         <div className="update-row">
-          <p className="muted grow start-page-text">The page GearCheck opens on.</p>
+          <p className="muted grow start-page-text">The page Flightroom opens on.</p>
           <select value={state.settings.startPage || 'home'} onChange={(e) => actions.setSettings({ startPage: e.target.value })}>
             {START_PAGES.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
             <optgroup label="Groups">

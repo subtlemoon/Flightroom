@@ -5,14 +5,19 @@
 // thread (createImageBitmap), already shrunk to screen size, and the neighbours of
 // the current photo are decoded ahead of time so the next arrow press is instant.
 
-export const imgUrl = (kind, id) => `gcimg://photo/${kind}?p=${encodeURIComponent(id)}`;
+import { bridge, fileUrl } from '../bridge.js';
+import { ROTATION } from './rotation.js';
+
+export const imgUrl = (kind, id) => fileUrl(`photo/${kind}`, { p: id });
 
 // Long edge for "fit to screen" bitmaps: the screen size, so resizing the window
 // doesn't need new ones. Capped to keep memory around 40 MB per photo.
 export const fitEdge = () => Math.min(4096, Math.round(Math.max(screen.width, screen.height) * (window.devicePixelRatio || 1)));
 
 const cache = new Map(); // key -> Promise<ImageBitmap>; Map order = least recently used first
-const LIMITS = { thumb: 80, fit: 10, full: 2 };
+// A fit bitmap is up to ~45 MB and a full-size one ~180 MB, so few are kept:
+// the current photo and the neighbours decoded ahead (AHEAD in cull.jsx).
+const LIMITS = { thumb: 80, fit: 7, full: 1 };
 
 function cached(key, load) {
   if (cache.has(key)) {
@@ -69,7 +74,7 @@ function makeThumb(photo) {
         const canvas = new OffscreenCanvas(bmp.width, bmp.height);
         canvas.getContext('2d').drawImage(bmp, 0, 0);
         const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 });
-        window.gearcheck?.cull.saveThumb(photo.id, await blob.arrayBuffer());
+        bridge?.cull.saveThumb(photo.id, await blob.arrayBuffer());
         resolve({ bmp, blob });
       } catch (err) { reject(err); }
     });
@@ -110,9 +115,15 @@ export async function thumbFallbackUrl(photo) {
   return madeUrls.get(photo.id);
 }
 
-// EXIF orientation -> clockwise rotation in degrees (mirrored values are rare in
-// camera files and are shown unmirrored).
-export const ROTATION = { 1: 0, 2: 0, 3: 180, 4: 180, 5: 90, 6: 90, 7: 270, 8: 270 };
+// Frees every cached bitmap and thumbnail URL (leaving the Culling tab).
+export function clearPreviews() {
+  for (const p of cache.values()) p.then((b) => b.close(), () => {});
+  cache.clear();
+  for (const u of madeUrls.values()) u.then((url) => URL.revokeObjectURL(url), () => {});
+  madeUrls.clear();
+}
+
+export { ROTATION } from './rotation.js';
 
 // Draws `bmp` into a canvas of W x H device pixels. When zoomed, view.scale is
 // photo pixels per screen pixel (1 = 100%), centred on (view.cx, view.cy) in

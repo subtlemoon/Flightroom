@@ -1,23 +1,26 @@
 name: Build and release
 
-# Every push to main runs the tests. When the "version" in package.json has no
-# GitHub release yet, it also builds the Windows installer and publishes it as
-# release v<version>; installed copies of GearCheck pick it up on next launch.
+# Every push builds and tests the Windows app. On main, when the "version" in
+# package.json has no GitHub release yet, the installer is published as release
+# v<version>; installed copies pick it up on their next update check.
 #
-# Versions follow major.minor.patch: a new feature or tab bumps minor (1.2.0),
-# a fix bumps patch (1.2.1), a big overhaul bumps major (2.0.0). Pushes that
+# Each release carries two update manifests:
+#   latest.json  read by Flightroom (src-tauri/src/updater.rs)
+#   latest.yml   read by GearCheck 1.x, so old installs update into Flightroom
+#
+# Versions follow major.minor.patch: a new feature or tab bumps minor (2.1.0),
+# a fix bumps patch (2.0.1), a big overhaul bumps major (3.0.0). Pushes that
 # don't change the version (gear catalog or news updates) publish nothing.
 
 on:
   push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  release:
+  build:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,24 +28,79 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
       - run: npm ci
       - run: npm test
-      - name: Check whether this version is already released
-        id: version
+      - run: npm run build
+      - name: Desktop side tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Build installer
+        run: npx tauri build
+      - name: Name installer and write update manifests
+        id: out
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          mkdir -p out
+          cp src-tauri/target/release/bundle/nsis/*-setup.exe "out/Flightroom-Setup-$version.exe"
+          node scripts/release-manifests.mjs "out/Flightroom-Setup-$version.exe" "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          ls -l out
+
+      # An old GearCheck install updating into Flightroom, the way GearCheck's
+      # updater does it: run the installer with --updated /S --force-run.
+      - name: Install GearCheck 1.5.0 and let it save its data
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/subtlemoon/gearcheck/releases/download/v1.5.0/GearCheck-Setup-1.5.0.exe -OutFile gc.exe
+          Start-Process .\gc.exe -ArgumentList '/S' -Wait
+          $exe = "$env:LOCALAPPDATA\Programs\gearcheck\GearCheck.exe"
+          if (!(Test-Path $exe)) { throw "GearCheck did not install" }
+          Start-Process $exe
+          Start-Sleep 25
+          Stop-Process -Name GearCheck -Force -ErrorAction SilentlyContinue
+          Start-Sleep 3
+          Get-ChildItem "$env:APPDATA\GearCheck\Local Storage\leveldb" -ErrorAction SilentlyContinue | Format-Table Name, Length
+      - name: Flightroom reads GearCheck's saved data
+        shell: pwsh
+        run: |
+          $env:FLIGHTROOM_LEVELDB = "$env:APPDATA\GearCheck\Local Storage\leveldb"
+          cargo test --manifest-path src-tauri/Cargo.toml reads_a_real_chromium_database -- --ignored --nocapture
+      - name: Update GearCheck into Flightroom
+        shell: pwsh
+        run: |
+          $setup = "out\Flightroom-Setup-${{ steps.out.outputs.version }}.exe"
+          Start-Process $setup -ArgumentList '--updated', '/S', '--force-run' -Wait
+          Start-Sleep 10
+          $failed = @()
+          if (Test-Path "$env:LOCALAPPDATA\Programs\gearcheck") { $failed += 'old GearCheck folder still there' }
+          if (!(Test-Path "$env:LOCALAPPDATA\Flightroom\flightroom.exe")) { $failed += 'Flightroom not installed' }
+          if (!(Get-Process flightroom -ErrorAction SilentlyContinue)) { $failed += 'Flightroom did not start' }
+          if (!(Test-Path "$env:APPDATA\GearCheck")) { $failed += 'GearCheck data folder was deleted' }
+          Get-ChildItem "$env:USERPROFILE\Desktop", "$env:APPDATA\Microsoft\Windows\Start Menu\Programs" -Filter *.lnk | Format-Table FullName
+          if (Test-Path "$env:USERPROFILE\Desktop\GearCheck.lnk") { $failed += 'old desktop shortcut still there' }
+          if ($failed) { throw ($failed -join '; ') }
+          Stop-Process -Name flightroom -Force
+          Write-Host 'GearCheck updated into Flightroom'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flightroom-${{ steps.out.outputs.version }}
+          path: out/*
+      - name: Publish release
+        if: github.ref == 'refs/heads/main'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          version=$(node -p "require('./package.json').version")
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          if gh api "repos/${{ github.repository }}/releases/tags/v$version" > /dev/null 2>&1; then
-            echo "v$version is already released; nothing to publish."
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "publish=true" >> "$GITHUB_OUTPUT"
+          v=${{ steps.out.outputs.version }}
+          if gh api "repos/${{ github.repository }}/releases/tags/v$v" > /dev/null 2>&1; then
+            echo "v$v is already released; nothing to publish."
+            exit 0
           fi
-      - name: Build and publish installer
-        if: steps.version.outputs.publish == 'true'
-        run: npm run release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Upload as a draft first so updaters never see a release without its files.
+          gh release create "v$v" out/* --draft --title "$v" --notes "Flightroom $v" --target "${{ github.sha }}"
+          gh release edit "v$v" --draft=false --latest

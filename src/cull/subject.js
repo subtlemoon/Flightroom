@@ -3,7 +3,8 @@
 // Auto-rating then judges sharpness on the subject instead of the whole frame.
 import { ObjectDetector } from '@mediapipe/tasks-vision';
 
-const BASE = 'gcimg://app/vision/';
+// The model and its runtime ship with the app, in dist/vision.
+const BASE = `${self.location.origin}/vision/`;
 
 // Things a photographer points the camera at. Furniture, cups, phones and so on
 // are ignored even when the model sees them.

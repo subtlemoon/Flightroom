@@ -1,6 +1,7 @@
+import { bridge as app, FILES } from '../bridge.js';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Icon, Modal } from './ui.jsx';
-import { decodeThumb, drawPhoto, geometry, imgUrl, loadFit, loadFull, loadThumb, prune, ROTATION, thumbFallbackUrl } from '../cull/previews.js';
+import { clearPreviews, decodeThumb, drawPhoto, geometry, imgUrl, loadFit, loadFull, loadThumb, prune, ROTATION, thumbFallbackUrl } from '../cull/previews.js';
 import { loadAnalysis, measure, saveAnalysis, suggest, upright } from '../cull/analyze.js';
 import { measurePool } from '../cull/measure-pool.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
@@ -19,8 +20,8 @@ const AHEAD = [1, 2, -1, 3, -2]; // neighbours decoded in advance, in this order
 const META_WINDOW = 20; // only files near the current one are opened, so a OneDrive
                         // folder isn't downloaded all at once just by opening it
 
-export function CullView({ store }) {
-  const bridge = window.gearcheck?.cull;
+export function CullView({ store, onDevelop }) {
+  const bridge = app?.cull;
   const { state, actions } = store;
   const keys = ratingKeys(state.settings);
   const advance = !!state.settings.cullAdvance;
@@ -96,14 +97,17 @@ export function CullView({ store }) {
     }
   };
 
-  // Remember where you were in each folder.
+  // Remember where you were in each folder (Develop opens the same photo).
+  const lastPos = useRef(null);
   useEffect(() => {
     const pos = allPhotos.findIndex((p) => p.id === photo?.id);
     if (list?.folder && pos >= 0) {
+      lastPos.current = [list.folder, pos];
       const t = setTimeout(() => actions.setCullPosition(list.folder, pos), 400);
       return () => clearTimeout(t);
     }
   }, [photo?.id, list?.folder]);
+  useEffect(() => () => { if (lastPos.current) actions.setCullPosition(...lastPos.current); clearPreviews(); }, []);
 
   // Photo and rated counts for the folder list.
   const ratedCount = allPhotos.filter(isRated).length;
@@ -165,30 +169,33 @@ export function CullView({ store }) {
     setAutoRun({ kind: 'analyze', done: 0, total: todo.length });
     const started = performance.now();
     const pool = measurePool();
-    // Photos stream through the workers a few at a time; metadata is read in batches.
-    const BATCH = pool.size * 6;
-    for (let i = 0; i < todo.length && !autoCancel.current; i += BATCH) {
-      const batch = todo.slice(i, i + BATCH);
-      const m = await bridge.meta(batch.map((p) => p.id));
-      if (!m.error) setMeta((old) => ({ ...old, ...m }));
-      await Promise.all(batch.map(async (p) => {
-        const orientation = m[p.id]?.orientation;
-        try {
-          measured[p.id] = { ...(await pool.measure(await decodeThumb(p), orientation)), takenAt: m[p.id]?.takenAt };
-        } catch {
-          // The worker couldn't do it: measure here, on the whole frame.
+    try {
+      // Photos stream through the workers a few at a time; metadata is read in batches.
+      const BATCH = pool.size * 6;
+      for (let i = 0; i < todo.length && !autoCancel.current; i += BATCH) {
+        const batch = todo.slice(i, i + BATCH);
+        const m = await bridge.meta(batch.map((p) => p.id));
+        if (!m.error) setMeta((old) => ({ ...old, ...m }));
+        await Promise.all(batch.map(async (p) => {
+          const orientation = m[p.id]?.orientation;
           try {
-            const raw = await decodeThumb(p);
-            const bmp = upright(raw, orientation);
-            measured[p.id] = { ...measure(bmp), takenAt: m[p.id]?.takenAt };
-            if (bmp !== raw) bmp.close();
-            raw.close();
-          } catch {}
-        }
-      }));
-      setAutoRun((r) => r && { ...r, done: Math.min(todo.length, i + batch.length) });
+            measured[p.id] = { ...(await pool.measure(await decodeThumb(p), orientation)), takenAt: m[p.id]?.takenAt };
+          } catch {
+            // The worker couldn't do it: measure here, on the whole frame.
+            try {
+              const raw = await decodeThumb(p);
+              const bmp = upright(raw, orientation);
+              measured[p.id] = { ...measure(bmp), takenAt: m[p.id]?.takenAt };
+              if (bmp !== raw) bmp.close();
+              raw.close();
+            } catch {}
+          }
+        }));
+        setAutoRun((r) => r && { ...r, done: Math.min(todo.length, i + batch.length) });
+      }
+    } finally {
+      pool.close(); // each worker holds its own detector, so they never outlive a run
     }
-    pool.close();
     console.log(`[auto-rate] measured ${todo.length} photos in ${Math.round(performance.now() - started)} ms`);
     setAuto((a) => { const next = { ...a, measured }; saveAnalysis(dir, next); return next; });
     setAutoRun(null);
@@ -249,6 +256,7 @@ export function CullView({ store }) {
         }
         return;
       }
+      if (e.key.toLowerCase() === 'd' && onDevelop && photo) { e.preventDefault(); onDevelop(); return; }
       const moves = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
       if (moves[e.key]) { e.preventDefault(); go(index + moves[e.key]); }
       else if (e.key === 'Home') { e.preventDefault(); go(0); }
@@ -260,7 +268,7 @@ export function CullView({ store }) {
   }, [photos, photo, index, keys, zKey, advance, filter, go, rate, autoOpen, suggestions, auto]);
 
   if (!bridge) {
-    return <div className="view"><div className="hero-empty"><div className="hero-icon"><Icon name="photo" size={40} /></div><h2>Culling runs in the desktop app</h2><p className="muted">Open GearCheck on your PC to link a photo folder.</p></div></div>;
+    return <div className="view"><div className="hero-empty"><div className="hero-icon"><Icon name="photo" size={40} /></div><h2>Culling runs in the desktop app</h2><p className="muted">Open Flightroom on your PC to link a photo folder.</p></div></div>;
   }
 
   if (!folder || list?.error) {
@@ -304,6 +312,7 @@ export function CullView({ store }) {
           <input type="checkbox" checked={advance} onChange={() => actions.setCullSettings({ cullAdvance: !advance })} />Auto-advance
         </label>
         <button className="btn btn-sm" onClick={() => open(folder)} title="Look for new files"><Icon name="refresh" size={14} />Reload</button>
+        {onDevelop && <button className="btn btn-sm" onClick={onDevelop} disabled={!photo} title="Edit this photo (D)"><Icon name="develop" size={14} />Develop</button>}
         <button className={`btn btn-sm${measuredCount ? '' : ' btn-primary'}`} onClick={() => setAutoOpen(true)} disabled={!allPhotos.length}>
           <Icon name="spark" size={14} />
           {autoRun ? `${autoRun.kind === 'apply' ? 'Rating' : 'Analyzing'} ${autoRun.done}/${autoRun.total}` : 'Auto-rate'}
@@ -332,7 +341,7 @@ export function CullView({ store }) {
           <h2>{list?.loading ? 'Reading folder…' : allPhotos.length ? `No ${filterName(filter)} photos` : 'No photos in this folder'}</h2>
           {!list?.loading && (allPhotos.length
             ? <button className="btn" onClick={() => setFilter('all')}>Show all {allPhotos.length} photos</button>
-            : <p className="muted">GearCheck shows NEF, other RAW files and JPEGs. Pick another folder to start culling.</p>)}
+            : <p className="muted">Flightroom shows NEF, other RAW files and JPEGs. Pick another folder to start culling.</p>)}
         </div>
       )}
       {toast && <div className="cull-toast">{toast}</div>}
@@ -487,7 +496,7 @@ function AutoRatePanel({ photos, measuredCount, suggestions, run, applicable, ha
         </div>
       ) : measuredCount === 0 ? (
         <>
-          <p>GearCheck looks at each photo's built-in preview and suggests stars:</p>
+          <p>Flightroom looks at each photo's built-in preview and suggests stars:</p>
           <ul className="auto-list">
             <li><b>Subject:</b> a small AI model finds what the photo is of (a kart, car, bike, person, animal) and focus is judged on that. Hover a suggestion to see what it picked.</li>
             <li><b>Sharpness:</b> missed focus and motion blur on the subject. A blurred background is fine. Without a clear subject, the sharpest part of the frame counts.</li>
@@ -665,7 +674,7 @@ function SubjectBox({ box, g, W, H, dpr }) {
 // folder of thousands of photos scrolls as smoothly as a folder of ten.
 const CELL = 96;
 
-function Filmstrip({ photos, index, meta, suggestions, onSelect, requestMeta }) {
+export function Filmstrip({ photos, index, meta, suggestions, onSelect, requestMeta }) {
   const ref = useRef();
   const [scroll, setScroll] = useState({ left: 0, width: 0 });
 
@@ -709,7 +718,7 @@ function Thumb({ photo, meta, suggested, active, left, onClick }) {
   const [src, setSrc] = useState(() => imgUrl('thumb', photo.id));
   const rating = photoRating(photo, meta);
   const rot = ROTATION[meta?.orientation] || 0;
-  const onError = () => { if (src.startsWith('gcimg:')) thumbFallbackUrl(photo).then(setSrc, () => {}); };
+  const onError = () => { if (src.startsWith(FILES)) thumbFallbackUrl(photo).then(setSrc, () => {}); };
   return (
     <button className={`thumb${active ? ' active' : ''}`} style={{ left }} onClick={onClick} onMouseDown={(e) => e.preventDefault()} title={photo.name}>
       <img src={src} alt="" decoding="async" draggable={false} onError={onError} style={rot ? { transform: `rotate(${rot}deg)` } : undefined} />

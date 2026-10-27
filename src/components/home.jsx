@@ -4,6 +4,7 @@ import { Icon } from './ui.jsx';
 export const START_PAGES = [
   { id: 'home', label: 'Home' },
   { id: 'cull', label: 'Culling' },
+  { id: 'develop', label: 'Develop' },
   { id: 'mygear', label: 'My Gear' },
   { id: 'catalog', label: 'Catalog' },
   { id: 'news', label: 'News' },
@@ -107,7 +108,7 @@ export function HomeView({ store, go, onOpenFolder }) {
           </div>
         </section>
       </div>
-      <p className="muted small home-foot">You can choose which page GearCheck opens on in Settings.</p>
+      <p className="muted small home-foot">You can choose which page Flightroom opens on in Settings.</p>
     </div>
   );
 }

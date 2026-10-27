@@ -10,7 +10,7 @@
 //   look        a tiny fingerprint of the picture, to find bursts and near-duplicates
 // and then, across the folder: groups of similar shots taken within seconds of
 // each other, where only the best one keeps a good rating.
-import { ROTATION } from './previews.js';
+import { ROTATION } from './rotation.js';
 
 export const VERSION = 2; // bump when measurements change, so old ones are redone
 const MAX_W = 640; // the embedded preview's size: enough for focus, and fast

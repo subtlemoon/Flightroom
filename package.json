@@ -1,68 +1,33 @@
 {
-  "name": "gearcheck",
-  "version": "1.5.0",
-  "description": "Camera gear compatibility planner",
-  "main": "electron/main.cjs",
+  "name": "flightroom",
+  "version": "2.0.0",
+  "description": "Photo culling, RAW developing and camera gear planner",
+  "private": true,
+  "type": "module",
+  "author": "Jaewon",
+  "repository": "https://github.com/subtlemoon/gearcheck",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "test": "vitest run",
-    "start": "vite build && electron .",
-    "dist": "vite build && electron-builder --win nsis portable --x64",
-    "release": "vite build && electron-builder --win nsis --x64 --publish always",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "tauri": "tauri",
+    "start": "tauri dev",
+    "dist": "tauri build",
     "catalog": "node scripts/build-catalog.mjs"
   },
-  "author": "Jaewon",
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.4",
+    "@tauri-apps/plugin-dialog": "^2.8.3",
+    "@tauri-apps/plugin-opener": "^2.7.2"
+  },
   "devDependencies": {
     "@mediapipe/tasks-vision": "1.1.1",
+    "@tauri-apps/cli": "^2.12.4",
     "@vitejs/plugin-react": "^4.7.0",
-    "electron": "^33.4.11",
-    "electron-builder": "^25.1.8",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "vite": "^5.4.21",
     "vitest": "^2.1.9"
-  },
-  "productName": "GearCheck",
-  "private": true,
-  "build": {
-    "appId": "com.jaewon.gearcheck",
-    "productName": "GearCheck",
-    "directories": {
-      "output": "release",
-      "buildResources": "build"
-    },
-    "files": [
-      "dist/**/*",
-      "electron/**/*",
-      "!electron/**/*.test.js",
-      "build/icon.png",
-      "package.json"
-    ],
-    "win": {
-      "icon": "build/icon.png",
-      "artifactName": "GearCheck-${version}-${arch}-${target}.${ext}"
-    },
-    "nsis": {
-      "oneClick": true,
-      "perMachine": false,
-      "createDesktopShortcut": true,
-      "runAfterFinish": true,
-      "artifactName": "GearCheck-Setup-${version}.${ext}"
-    },
-    "portable": {
-      "artifactName": "GearCheck-Portable-${version}.${ext}"
-    },
-    "publish": {
-      "provider": "github",
-      "owner": "subtlemoon",
-      "repo": "gearcheck",
-      "releaseType": "release"
-    }
-  },
-  "dependencies": {
-    "electron-updater": "^6.8.11"
-  },
-  "repository": "https://github.com/subtlemoon/gearcheck",
-  "type": "module"
+  }
 }
