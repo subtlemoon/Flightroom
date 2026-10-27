@@ -86,6 +86,7 @@ export const LENSES = [
   lens({ id: 'nikon-z70200s', brand: 'Nikon', model: 'NIKKOR Z 70-200mm f/2.8 VR S', mount: 'Nikon Z', coverage: 'Full Frame', focal: '70-200mm', aperture: 'f/2.8', stabilized: true, filterThread: 77, weight: 1440 }),
   lens({ id: 'nikon-z180600', brand: 'Nikon', model: 'NIKKOR Z 180-600mm f/5.6-6.3 VR', mount: 'Nikon Z', coverage: 'Full Frame', focal: '180-600mm', aperture: 'f/5.6-6.3', stabilized: true, filterThread: 95, weight: 1955 }),
   lens({ id: 'nikon-z50s', brand: 'Nikon', model: 'NIKKOR Z 50mm f/1.8 S', mount: 'Nikon Z', coverage: 'Full Frame', focal: '50mm', aperture: 'f/1.8', stabilized: false, filterThread: 62, weight: 415 }),
+  lens({ id: 'nikon-z2470f4', brand: 'Nikon', model: 'NIKKOR Z 24-70mm f/4 S', mount: 'Nikon Z', coverage: 'Full Frame', focal: '24-70mm', aperture: 'f/4', stabilized: false, filterThread: 72, weight: 500 }),
   lens({ id: 'nikon-z1430s', brand: 'Nikon', model: 'NIKKOR Z 14-30mm f/4 S', mount: 'Nikon Z', coverage: 'Full Frame', focal: '14-30mm', aperture: 'f/4', stabilized: false, filterThread: 82, weight: 485 }),
   lens({ id: 'nikon-zdx1650', brand: 'Nikon', model: 'NIKKOR Z DX 16-50mm f/3.5-6.3 VR', mount: 'Nikon Z', coverage: 'APS-C', focal: '16-50mm', aperture: 'f/3.5-6.3', stabilized: true, filterThread: 46, weight: 135 }),
   // Nikon F
@@ -93,6 +94,11 @@ export const LENSES = [
   lens({ id: 'nikon-f70300p', brand: 'Nikon', model: 'AF-P 70-300mm f/4.5-5.6E ED VR', mount: 'Nikon F', fType: 'AF-P', coverage: 'Full Frame', focal: '70-300mm', aperture: 'f/4.5-5.6', stabilized: true, filterThread: 67, weight: 680 }),
   lens({ id: 'nikon-f50d', brand: 'Nikon', model: 'AF 50mm f/1.8D', mount: 'Nikon F', fType: 'AF-D', coverage: 'Full Frame', focal: '50mm', aperture: 'f/1.8', stabilized: false, filterThread: 52, weight: 155 }),
   lens({ id: 'nikon-f50ais', brand: 'Nikon', model: 'Ai-S 50mm f/1.4', mount: 'Nikon F', fType: 'AI-S', coverage: 'Full Frame', focal: '50mm', aperture: 'f/1.4', stabilized: false, filterThread: 52, weight: 250 }),
+  lens({ id: 'nikon-f2870d', brand: 'Nikon', model: 'AF-S 28-70mm f/2.8D IF-ED', mount: 'Nikon F', fType: 'AF-S', coverage: 'Full Frame', focal: '28-70mm', aperture: 'f/2.8', stabilized: false, filterThread: 77, weight: 935 }),
+  lens({ id: 'tamron-70210-f', brand: 'Tamron', model: 'SP 70-210mm F/4 Di VC USD (A034, F mount)', mount: 'Nikon F', fType: 'AF-S', coverage: 'Full Frame', focal: '70-210mm', aperture: 'f/4', stabilized: true, filterThread: 67, weight: 860,
+    notes: 'Built-in USD focus motor, so it can autofocus through the FTZ. Lens firmware is updated with the Tamron TAP-in Console.' }),
+  lens({ id: 'sigma-70200sports-f', brand: 'Sigma', model: '70-200mm F2.8 DG OS HSM | Sports (F mount)', mount: 'Nikon F', fType: 'AF-S', coverage: 'Full Frame', focal: '70-200mm', aperture: 'f/2.8', stabilized: true, filterThread: 82, weight: 1805,
+    notes: 'Built-in HSM focus motor, so it can autofocus through the FTZ. Lens firmware is updated with the Sigma USB Dock UD-01.' }),
   // Fujifilm X
   lens({ id: 'fuji-1655', brand: 'Fujifilm', model: 'XF 16-55mm F2.8 R LM WR', mount: 'Fujifilm X', coverage: 'APS-C', focal: '16-55mm', aperture: 'f/2.8', stabilized: false, filterThread: 77, weight: 655 }),
   lens({ id: 'fuji-100400', brand: 'Fujifilm', model: 'XF 100-400mm F4.5-5.6 R LM OIS WR', mount: 'Fujifilm X', coverage: 'APS-C', focal: '100-400mm', aperture: 'f/4.5-5.6', stabilized: true, filterThread: 77, weight: 1375 }),
@@ -111,10 +117,10 @@ export const LENSES = [
 //   none    does not work
 export const ACCESSORIES = [
   // Adapters
-  acc({ id: 'nikon-ftz2', category: 'Adapter', brand: 'Nikon', model: 'Mount Adapter FTZ II', fromMount: 'Nikon F', toMount: 'Nikon Z', weight: 135,
+  acc({ id: 'nikon-ftz2', thirdParty: 'good', category: 'Adapter', brand: 'Nikon', model: 'Mount Adapter FTZ II', fromMount: 'Nikon F', toMount: 'Nikon Z', weight: 135,
     afByFType: { 'AF-S': 'full', 'AF-P': 'full', 'AF-I': 'full', 'AF-D': 'mf', AF: 'mf', 'AI-S': 'mf', AI: 'mf' },
     notes: 'AF-S, AF-P and AF-I lenses autofocus. Screw-drive AF/AF-D lenses are manual focus only. Ai/Ai-S lenses need non-CPU lens data set in the camera.' }),
-  acc({ id: 'nikon-ftz', category: 'Adapter', brand: 'Nikon', model: 'Mount Adapter FTZ', fromMount: 'Nikon F', toMount: 'Nikon Z', weight: 135,
+  acc({ id: 'nikon-ftz', thirdParty: 'good', category: 'Adapter', brand: 'Nikon', model: 'Mount Adapter FTZ', fromMount: 'Nikon F', toMount: 'Nikon Z', weight: 135,
     afByFType: { 'AF-S': 'full', 'AF-P': 'full', 'AF-I': 'full', 'AF-D': 'mf', AF: 'mf', 'AI-S': 'mf', AI: 'mf' },
     notes: 'Same lens support as the FTZ II, with a built-in tripod foot.' }),
   acc({ id: 'canon-efeosr', category: 'Adapter', brand: 'Canon', model: 'Mount Adapter EF-EOS R', fromMount: 'Canon EF', toMount: 'Canon RF', weight: 110, af: 'full',

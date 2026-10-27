@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { CATALOG } from '../data/gear.js';
 import { SEED_GROUPS } from '../data/presets.js';
+import { MY_GEAR } from '../data/mygear.js';
 import { checkPreset, lensOnBody, cardOnBody, compareVersions } from './compat.js';
 
 const byId = Object.fromEntries(CATALOG.map((g) => [g.id, g]));
@@ -11,6 +12,9 @@ const find = (r, re) => r.checks.find((c) => re.test(c.title));
 describe('catalog', () => {
   it('has unique ids', () => {
     expect(new Set(CATALOG.map((g) => g.id)).size).toBe(CATALOG.length);
+  });
+  it('my gear references real gear', () => {
+    for (const id of MY_GEAR) expect(byId[id], id).toBeTruthy();
   });
   it('seed presets reference real gear', () => {
     for (const g of SEED_GROUPS) for (const p of g.presets) {
@@ -48,6 +52,20 @@ describe('lens mount', () => {
   it('MC-11 is full AF for Sigma, limited for Canon lenses', () => {
     expect(lensOnBody(byId['sony-a7iv'], byId['sigma-1835-ef'], [byId['sigma-mc11']]).label).toBe('Full autofocus');
     expect(lensOnBody(byId['sony-a7iv'], byId['canon-ef70200iii'], [byId['sigma-mc11']]).level).toBe('warn');
+  });
+});
+
+describe('third-party lenses on FTZ', () => {
+  it('Tamron and Sigma F lenses autofocus with a firmware note', () => {
+    for (const id of ['tamron-70210-f', 'sigma-70200sports-f']) {
+      const r = lensOnBody(byId['nikon-z7ii'], byId[id], [byId['nikon-ftz2']]);
+      expect(r.level).toBe('ok');
+      expect(r.label).toBe('Autofocus works');
+      expect(r.notes.join(' ')).toMatch(/firmware/);
+    }
+  });
+  it('Nikon AF-S 28-70 gets full AF', () => {
+    expect(lensOnBody(byId['nikon-z7ii'], byId['nikon-f2870d'], [byId['nikon-ftz2']]).label).toBe('Full autofocus');
   });
 });
 

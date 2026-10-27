@@ -25,7 +25,11 @@ const AF_TEXT = {
 };
 
 export function adapterAf(adapter, lens) {
-  if (adapter.afByFType && lens.fType) return adapter.afByFType[lens.fType] || 'mf';
+  if (adapter.afByFType && lens.fType) {
+    const af = adapter.afByFType[lens.fType] || 'mf';
+    // Third-party lenses usually work but aren't guaranteed by the adapter maker.
+    return af === 'full' && adapter.thirdParty && lens.brand !== adapter.brand ? adapter.thirdParty : af;
+  }
   return adapter.afByBrand?.[lens.brand] || adapter.af || 'limited';
 }
 
@@ -53,6 +57,7 @@ export function lensOnBody(body, lens, kitAdapters, catalogAdapters = []) {
     const level = worst([AF_LEVEL[af], cov.level]);
     const notes = [`Via ${adapter.brand} ${adapter.model}: ${AF_TEXT[af].toLowerCase()}.`];
     if (lens.fType) notes.push(`${lens.fType} lens.`);
+    if (adapter.thirdParty && lens.brand !== adapter.brand) notes.push(`${adapter.brand} doesn't officially guarantee ${lens.brand} lenses. Keep the lens firmware up to date.`);
     if (cov.note) notes.push(cov.note);
     return { level, label: AF_TEXT[af], adapterId: adapter.id, notes };
   }
