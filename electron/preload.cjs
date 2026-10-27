@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('gearcheck', {
   getVersion: () => ipcRenderer.invoke('app:version'),
   getUpdateStatus: () => ipcRenderer.invoke('update:status'),
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
   onUpdateStatus: (fn) => {
     const listener = (_e, status) => fn(status);
     ipcRenderer.on('update:status', listener);

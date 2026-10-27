@@ -57,6 +57,10 @@ function setupUpdates() {
   ipcMain.handle('app:version', () => app.getVersion());
   ipcMain.handle('update:status', () => updateStatus);
   ipcMain.handle('update:check', () => checkForUpdates());
+  // "Restart now": closes, installs silently, and opens the new version.
+  ipcMain.handle('update:install', () => {
+    if (updateStatus.state === 'ready') setImmediate(() => autoUpdater.quitAndInstall(true, true));
+  });
   checkForUpdates();
   setInterval(checkForUpdates, 60 * 60 * 1000);
 }

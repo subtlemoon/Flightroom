@@ -66,6 +66,7 @@ export default function App() {
           ))}
         </div>
         <div className="sidebar-foot">
+          <UpdateReady />
           <RefreshButton status={store.catalogStatus} onRefresh={store.refreshCatalog} count={store.gear.length} />
           {navBtn('settings', 'Settings', 'settings')}
         </div>
@@ -112,6 +113,24 @@ function RefreshButton({ status, onRefresh, count }) {
       <Icon name="refresh" />
       <span className="grow"><span className="block">Refresh gear list</span><span className={`nav-sub${status.status === 'error' ? ' err' : ''}`}>{sub}</span></span>
     </button>
+  );
+}
+
+// Shown once a new version has downloaded, so it doesn't wait for the app to be closed.
+function UpdateReady() {
+  const bridge = window.gearcheck;
+  const [status, setStatus] = useState(null);
+  useEffect(() => {
+    if (!bridge) return;
+    bridge.getUpdateStatus().then(setStatus);
+    return bridge.onUpdateStatus(setStatus);
+  }, [bridge]);
+  if (status?.state !== 'ready') return null;
+  return (
+    <div className="update-ready">
+      <div className="grow"><div className="update-ready-title">Update ready</div><div className="nav-sub">{status.message.replace(' will install when you close GearCheck', '')}</div></div>
+      <button className="btn btn-sm btn-primary" onClick={() => bridge.installUpdate()}>Restart</button>
+    </div>
   );
 }
 
