@@ -24,7 +24,8 @@ export function CullView({ store }) {
   const folder = state.cull?.folder;
 
   const [list, setList] = useState(null); // { folder, photos } | { error }
-  const [index, setIndex] = useState(0);
+  const [currentId, setCurrentId] = useState(null);
+  const [filter, setFilter] = useState('all'); // 'all' | 'rated' | 'unrated'
   const [meta, setMeta] = useState({});
   const [zoom, setZoom] = useState(null); // null | { cx, cy }
   const [toast, setToast] = useState('');
@@ -32,8 +33,21 @@ export function CullView({ store }) {
   const positions = useRef();
   positions.current = state.cull?.positions || {};
 
-  const photos = list?.photos || [];
+  const allPhotos = list?.photos || [];
+  const isRated = (p) => photoRating(p, meta[p.id]) > 0;
+  const photos = useMemo(
+    () => (filter === 'all' ? allPhotos : allPhotos.filter((p) => isRated(p) === (filter === 'rated'))),
+    [allPhotos, meta, filter],
+  );
+  // The current photo is tracked by id so it stays put when the filter changes.
+  // If it drops out of the filter (say, rated while showing Unrated), the photo
+  // that slid into its place becomes current.
+  const lastIndex = useRef(0);
+  let index = photos.findIndex((p) => p.id === currentId);
+  if (index < 0) index = Math.min(lastIndex.current, photos.length - 1);
+  if (index >= 0) lastIndex.current = index;
   const photo = photos[index];
+  useEffect(() => { if (photo && photo.id !== currentId) setCurrentId(photo.id); }, [photo?.id]);
 
   const open = useCallback(async (dir) => {
     if (!bridge || !dir) return;
@@ -42,7 +56,10 @@ export function CullView({ store }) {
     if (res.error) { setList({ error: res.error, folder: dir }); return; }
     setMeta({});
     pendingMeta.current = new Set();
-    setIndex(Math.min(positions.current[res.folder] || 0, Math.max(0, res.photos.length - 1)));
+    const pos = Math.min(positions.current[res.folder] || 0, Math.max(0, res.photos.length - 1));
+    lastIndex.current = pos;
+    setCurrentId(res.photos[pos]?.id ?? null);
+    setFilter('all');
     setList(res);
   }, [bridge]);
 
@@ -58,11 +75,20 @@ export function CullView({ store }) {
 
   // Remember where you were in each folder.
   useEffect(() => {
-    if (list?.folder && photos.length) {
-      const t = setTimeout(() => actions.setCullPosition(list.folder, index), 400);
+    const pos = allPhotos.findIndex((p) => p.id === photo?.id);
+    if (list?.folder && pos >= 0) {
+      const t = setTimeout(() => actions.setCullPosition(list.folder, pos), 400);
       return () => clearTimeout(t);
     }
-  }, [index, list?.folder]);
+  }, [photo?.id, list?.folder]);
+
+  // Photo and rated counts for the folder list.
+  const ratedCount = allPhotos.filter(isRated).length;
+  useEffect(() => {
+    if (!list?.folder || list.loading) return;
+    const t = setTimeout(() => actions.setCullStats(list.folder, { photos: allPhotos.length, rated: ratedCount }), 600);
+    return () => clearTimeout(t);
+  }, [list, ratedCount]);
 
   const requestMeta = useCallback((ids) => {
     const want = ids.filter((id) => id && !pendingMeta.current.has(id));
@@ -72,15 +98,17 @@ export function CullView({ store }) {
   }, [bridge]);
 
   useEffect(() => {
-    if (!photos.length) return;
+    if (!photo) return;
     const lo = Math.max(0, index - 3), hi = Math.min(photos.length, index + META_WINDOW);
     requestMeta([photo.id, ...photos.slice(lo, hi).map((p) => p.id)]);
-  }, [index, photos, requestMeta]);
+  }, [photo?.id, photos, requestMeta]);
 
   const go = useCallback((i) => {
     if (!photos.length) return;
-    setIndex(Math.max(0, Math.min(photos.length - 1, i)));
-  }, [photos.length]);
+    const n = Math.max(0, Math.min(photos.length - 1, i));
+    lastIndex.current = n;
+    setCurrentId(photos[n].id);
+  }, [photos]);
 
   const rate = useCallback(async (p, rating) => {
     if (!p) return;
@@ -111,9 +139,11 @@ export function CullView({ store }) {
       const r = ratingForKey(keys, e.key);
       if (r !== undefined && !RESERVED_KEYS.includes(e.key)) {
         e.preventDefault();
-        if (!e.repeat) {
+        if (!e.repeat && photo) {
           rate(photo, r);
-          if (advance) go(index + 1);
+          // A photo that leaves the current filter is replaced by the next one anyway.
+          const stays = filter === 'all' || (r > 0) === (filter === 'rated');
+          if (advance && stays) go(index + 1);
         }
         return;
       }
@@ -125,30 +155,16 @@ export function CullView({ store }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [photos, photo, index, keys, zKey, advance, go, rate]);
+  }, [photos, photo, index, keys, zKey, advance, filter, go, rate]);
 
   if (!bridge) {
     return <div className="view"><div className="hero-empty"><div className="hero-icon"><Icon name="photo" size={40} /></div><h2>Culling runs in the desktop app</h2><p className="muted">Open GearCheck on your PC to link a photo folder.</p></div></div>;
   }
 
   if (!folder || list?.error) {
-    return (
-      <div className="view">
-        <div className="hero-empty">
-          <div className="hero-icon"><Icon name="photo" size={40} /></div>
-          <h2>{list?.error ? 'That folder is not available' : 'Cull a shoot'}</h2>
-          <p className="muted">{list?.error
-            ? `${folder} could not be opened. It may have been moved, renamed, or be on a drive that is not plugged in.`
-            : 'Link a folder of NEF or JPEG files. Arrow keys move between photos, number keys set stars, and the stars are saved next to each photo where Lightroom can read them.'}</p>
-          <button className="btn btn-primary" onClick={pick}><Icon name="folder" size={16} />Link a folder</button>
-          <p className="muted small">Tip: for a OneDrive folder, right-click it and choose "Always keep on this device" first. Otherwise each photo downloads the first time you view it.</p>
-          <RecentFolders state={state} current={folder} onOpen={actions.setCullFolder} />
-        </div>
-      </div>
-    );
+    return <FolderHome state={state} actions={actions} bridge={bridge} onPick={pick} error={list?.error && folder} />;
   }
 
-  const ratedCount = photos.filter((p) => photoRating(p, meta[p.id]) > 0).length;
   const curMeta = photo && meta[photo.id];
   const curRating = photo ? photoRating(photo, curMeta) : 0;
 
@@ -159,14 +175,21 @@ export function CullView({ store }) {
           <div className="eyebrow">Culling</div>
           <div className="cull-folder" title={list?.folder || folder}>{(list?.folder || folder).split(/[\\/]/).pop()}</div>
         </div>
+        <button className="btn btn-sm btn-ghost" onClick={() => actions.setCullFolder(null)} title="Back to your folders"><Icon name="back" size={14} />Folders</button>
+        <div className="seg small cull-filter">
+          {[['all', 'All', allPhotos.length], ['rated', '★ Rated', ratedCount], ['unrated', 'Unrated', allPhotos.length - ratedCount]].map(([k, label, n]) => (
+            <button key={k} className={filter === k ? 'on' : ''} onClick={() => setFilter(k)} onMouseDown={(e) => e.preventDefault()}>
+              {label} <span className="seg-count">{n}</span>
+            </button>
+          ))}
+        </div>
         <div className="cull-stats muted">
-          {list?.loading ? 'Reading folder…' : `${photos.length ? index + 1 : 0} of ${photos.length} · ${ratedCount} rated`}
+          {list?.loading ? 'Reading folder…' : `${photos.length ? index + 1 : 0} of ${photos.length}`}
         </div>
         <label className="toggle-row cull-advance" title="Go to the next photo after rating">
           <input type="checkbox" checked={advance} onChange={() => actions.setCullSettings({ cullAdvance: !advance })} />Auto-advance
         </label>
         <button className="btn btn-sm" onClick={() => open(folder)} title="Look for new files"><Icon name="refresh" size={14} />Reload</button>
-        <button className="btn btn-sm" onClick={pick}><Icon name="folder" size={14} />Change folder</button>
       </header>
 
       {photo ? (
@@ -185,8 +208,10 @@ export function CullView({ store }) {
         </>
       ) : (
         <div className="hero-empty">
-          <h2>{list?.loading ? 'Reading folder…' : 'No photos in this folder'}</h2>
-          {!list?.loading && <p className="muted">GearCheck shows NEF, other RAW files and JPEGs. Pick another folder to start culling.</p>}
+          <h2>{list?.loading ? 'Reading folder…' : allPhotos.length ? `No ${filter} photos` : 'No photos in this folder'}</h2>
+          {!list?.loading && (allPhotos.length
+            ? <button className="btn" onClick={() => setFilter('all')}>Show all {allPhotos.length} photos</button>
+            : <p className="muted">GearCheck shows NEF, other RAW files and JPEGs. Pick another folder to start culling.</p>)}
         </div>
       )}
       {toast && <div className="cull-toast">{toast}</div>}
@@ -194,14 +219,95 @@ export function CullView({ store }) {
   );
 }
 
-function RecentFolders({ state, current, onOpen }) {
-  const recent = (state.cull?.recent || []).filter((f) => f !== current);
-  if (!recent.length) return null;
+const splitPath = (p) => {
+  const i = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/'));
+  return i < 0 ? { parent: '', name: p } : { parent: p.slice(0, i) || p.slice(0, 1), name: p.slice(i + 1) };
+};
+
+const ago = (at) => {
+  if (!at) return '';
+  const d = Math.round((Date.now() - at) / 86400000);
+  return d < 1 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`;
+};
+
+// Culling home: every folder you've opened, grouped under its parent folder like
+// a tree. The parent's other subfolders are listed too, dimmed, one click to open.
+function FolderHome({ state, actions, bridge, onPick, error }) {
+  const opened = state.cull?.recent || [];
+  const stats = state.cull?.stats || {};
+  const parents = [];
+  for (const f of opened) {
+    const { parent } = splitPath(f);
+    if (!parents.includes(parent)) parents.push(parent);
+  }
   return (
-    <div className="recent-folders">
-      <div className="section-title">Recent folders</div>
-      {recent.map((f) => <button key={f} className="btn btn-ghost btn-sm recent-folder" onClick={() => onOpen(f)} title={f}><Icon name="folder" size={14} />{f.split(/[\\/]/).pop()}</button>)}
+    <div className="view narrow folder-home">
+      <header className="view-head">
+        <div className="grow">
+          <div className="eyebrow">Culling</div>
+          <h1>Your folders</h1>
+          <p className="muted">Arrow keys move between photos and number keys set stars. Stars are saved next to each photo where Lightroom can read them.</p>
+        </div>
+        <button className="btn btn-primary" onClick={onPick}><Icon name="folder" size={16} />Open a folder</button>
+      </header>
+      {error && <div className="note-box warn-box">{error} could not be opened. It may have been moved, renamed, or be on a drive that is not plugged in.</div>}
+      {parents.length === 0 ? (
+        <div className="hero-empty">
+          <div className="hero-icon"><Icon name="photo" size={40} /></div>
+          <h2>Cull a shoot</h2>
+          <p className="muted">Open a folder of NEF or JPEG files. It will be listed here next time, together with the folders next to it.</p>
+        </div>
+      ) : parents.map((parent) => (
+        <FolderTree key={parent} parent={parent} opened={opened.filter((f) => splitPath(f).parent === parent)}
+          stats={stats} bridge={bridge} onOpen={actions.setCullFolder} onForget={actions.forgetCullFolder} />
+      ))}
+      <p className="muted small">Tip: for a OneDrive folder, right-click it and choose "Always keep on this device" first. Otherwise each photo downloads the first time you view it.</p>
     </div>
+  );
+}
+
+function FolderTree({ parent, opened, stats, bridge, onOpen, onForget }) {
+  const [siblings, setSiblings] = useState(null);
+  useEffect(() => { bridge.listDirs(parent).then((r) => setSiblings(r.error ? [] : r.names)); }, [parent]);
+  const openedNames = opened.map((f) => splitPath(f).name);
+  const sep = parent.includes('\\') ? '\\' : '/';
+  const join = (name) => (parent.endsWith(sep) ? parent + name : parent + sep + name);
+  // Opened folders that no longer exist on disk still show, so they can be forgotten.
+  const names = [...new Set([...(siblings || []), ...openedNames])]
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+  return (
+    <section className="tree">
+      <div className="tree-parent" title={parent}>
+        <Icon name="folder" size={16} /><span className="tree-parent-name">{splitPath(parent).name || parent}</span>
+        <span className="tree-parent-path">{splitPath(parent).parent}</span>
+      </div>
+      <div className="tree-children">
+        {names.map((name) => {
+          const full = join(name);
+          const isOpened = openedNames.includes(name);
+          const missing = siblings && !siblings.includes(name);
+          const st = stats[opened.find((f) => splitPath(f).name === name)];
+          return isOpened ? (
+            <div key={name} className={`tree-item opened${missing ? ' missing' : ''}`}>
+              <button className="tree-open" onClick={() => onOpen(opened.find((f) => splitPath(f).name === name))} disabled={missing}>
+                <Icon name="photo" size={16} />
+                <span className="grow">
+                  <span className="tree-name">{name}</span>
+                  <span className="tree-sub">{missing ? 'Folder not found' : st ? `${st.photos} photos · ${st.rated} rated · ${ago(st.at)}` : 'Opened before'}</span>
+                </span>
+                {st?.photos > 0 && <span className="tree-progress" title={`${Math.round((st.rated / st.photos) * 100)}% rated`}><span style={{ width: `${(st.rated / st.photos) * 100}%` }} /></span>}
+              </button>
+              <button className="icon-btn tiny tree-forget" title="Remove from this list" onClick={() => onForget(opened.find((f) => splitPath(f).name === name))}><Icon name="x" size={12} /></button>
+            </div>
+          ) : (
+            <div key={name} className="tree-item other">
+              <button className="tree-open" onClick={() => onOpen(full)}><span className="tree-name">{name}</span></button>
+            </div>
+          );
+        })}
+        {!siblings && <div className="tree-item other"><span className="tree-sub">Loading…</span></div>}
+      </div>
+    </section>
   );
 }
 

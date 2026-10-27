@@ -143,9 +143,22 @@ export function useStore() {
       const p = g.presets.find((x) => x.id === presetId);
       if (p) g.presets.push({ ...structuredClone(p), id: uid('p'), name: `${p.name} (copy)` });
     })),
+    // Opens a folder (or goes back to the folder list with null). Opened folders
+    // are remembered, most recent first, for the list on the Culling home page.
     setCullFolder: (folder) => update((s) => {
+      if (!folder) { s.cull = { ...s.cull, folder: null }; return s; }
       const recent = (s.cull?.recent || []).filter((f) => f !== folder);
-      s.cull = { ...s.cull, folder, recent: [folder, ...recent].slice(0, 8) };
+      s.cull = { ...s.cull, folder, recent: [folder, ...recent].slice(0, 50) };
+      return s;
+    }),
+    forgetCullFolder: (folder) => update((s) => {
+      const { [folder]: _, ...stats } = s.cull?.stats || {};
+      s.cull = { ...s.cull, recent: (s.cull?.recent || []).filter((f) => f !== folder), stats };
+      return s;
+    }),
+    // Photo and rated counts shown in the folder list: { photos, rated, at }.
+    setCullStats: (folder, stats) => update((s) => {
+      s.cull = { ...s.cull, stats: { ...s.cull?.stats, [folder]: { ...stats, at: Date.now() } } };
       return s;
     }),
     setCullPosition: (folder, index) => update((s) => {
