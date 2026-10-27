@@ -34,7 +34,7 @@ const FIELDS = {
   ],
   accessory: [
     ['category', 'Type'], ['fromMount', 'Lens side'], ['toMount', 'Camera side'], ['batteryModel', 'Battery model'], ['cardType', 'Card type'],
-    ['threadSize', 'Thread size', (v) => `${v} mm`], ['shoe', 'Shoe system'], ['connection', 'Connection'], ['maxPayload', 'Max payload', (v) => `${(v / 1000).toFixed(1)} kg`],
+    ['speedNote', 'Speed'], ['threadSize', 'Thread size', (v) => `${v} mm`], ['shoe', 'Shoe system'], ['connection', 'Connection'], ['maxPayload', 'Max payload', (v) => `${(v / 1000).toFixed(1)} kg`],
     ['weight', 'Weight', (v) => `${v} g`],
   ],
 };

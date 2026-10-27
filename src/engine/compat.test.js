@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { CATALOG } from '../data/gear.js';
 import { SEED_GROUPS } from '../data/presets.js';
-import { MY_GEAR } from '../data/mygear.js';
+import { MY_GEAR, MY_GROUPS } from '../data/mygear.js';
 import { checkPreset, lensOnBody, cardOnBody, compareVersions } from './compat.js';
 
 const byId = Object.fromEntries(CATALOG.map((g) => [g.id, g]));
@@ -15,6 +15,9 @@ describe('catalog', () => {
   });
   it('my gear references real gear', () => {
     for (const id of MY_GEAR) expect(byId[id], id).toBeTruthy();
+    for (const g of MY_GROUPS) for (const p of g.presets) {
+      for (const id of [...p.bodyIds, ...p.lensIds, ...p.accessoryIds]) expect(byId[id], id).toBeTruthy();
+    }
   });
   it('seed presets reference real gear', () => {
     for (const g of SEED_GROUPS) for (const p of g.presets) {
@@ -93,16 +96,29 @@ describe('firmware', () => {
 });
 
 describe('accessories', () => {
+  it('microSD needs an adapter in an SD slot', () => {
+    const r = cardOnBody(byId['nikon-z7ii'], byId['card-amzn-microsd512']);
+    expect(r.level).toBe('warn');
+    expect(r.note).toMatch(/adapter/);
+  });
   it('flags wrong battery', () => {
     expect(find(run(['sony-a7iv'], [], ['bat-lpe6nh']), /fits no body/).level).toBe('bad');
   });
   it('LP-E6NH in R5 Mark II works with limits', () => {
     expect(find(run(['canon-r5ii'], [], ['bat-lpe6nh']), /LP-E6NH fits/).level).toBe('warn');
   });
-  it('filter step-up and too-small', () => {
+  it('filter needs a step-up ring when no lens matches', () => {
     const r = run(['nikon-z6'], ['nikon-f50d', 'nikon-z2470s'], ['filter-uv58', 'nikon-ftz']);
     expect(find(r, /step-up/).level).toBe('warn');
-    expect(find(r, /too small/).level).toBe('bad');
+  });
+  it('filter that fits one lens is fine, others are notes', () => {
+    const r = run(['nikon-z7ii'], ['nikon-f2870d', 'sigma-70200sports-f', 'nikon-z2470f4'], ['filter-bw-007-77', 'nikon-ftz2']);
+    expect(find(r, /fits AF-S 28-70/).level).toBe('ok');
+    expect(find(r, /too small for some/).level).toBe('info');
+    expect(r.checks.filter((c) => c.category === 'Filters' && c.level === 'bad')).toHaveLength(0);
+  });
+  it('filter that fits nothing is a problem', () => {
+    expect(find(run(['nikon-z7ii'], ['sigma-70200sports-f'], ['filter-uv58']), /fits no lens/).level).toBe('bad');
   });
   it('gimbal payload', () => {
     expect(find(run(['sony-a7iv'], ['sony-200600g'], ['gimbal-rs3mini']), /overloaded/).level).toBe('bad');

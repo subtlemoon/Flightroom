@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CATALOG } from './data/gear.js';
 import { SEED_GROUPS } from './data/presets.js';
-import { MY_GEAR } from './data/mygear.js';
+import { MY_GEAR, MY_GROUPS } from './data/mygear.js';
 
 const KEY = 'gearcheck-v1';
 
@@ -25,7 +25,15 @@ function load() {
 function seedOwned(s) {
   const seeded = s.seededOwned || [];
   const fresh = MY_GEAR.filter((id) => !seeded.includes(id));
-  return { ...s, owned: [...new Set([...s.owned, ...fresh])], seededOwned: [...seeded, ...fresh] };
+  const seededGroups = s.seededGroups || [];
+  const newGroups = MY_GROUPS.filter((g) => !seededGroups.includes(g.id) && !s.groups.some((x) => x.id === g.id));
+  return {
+    ...s,
+    owned: [...new Set([...s.owned, ...fresh])],
+    seededOwned: [...seeded, ...fresh],
+    groups: [...structuredClone(newGroups), ...s.groups],
+    seededGroups: [...seededGroups, ...MY_GROUPS.map((g) => g.id)],
+  };
 }
 
 export const uid = (p) => `${p}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;

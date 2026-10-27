@@ -151,10 +151,15 @@ export const ACCESSORIES = [
   acc({ id: 'card-sd2', category: 'Memory card', brand: 'SanDisk', model: 'Extreme PRO SD UHS-II 128GB', cardType: 'SD' }),
   acc({ id: 'card-xqd', category: 'Memory card', brand: 'Sony', model: 'XQD G-series 120GB', cardType: 'XQD' }),
   acc({ id: 'card-cfast', category: 'Memory card', brand: 'Angelbird', model: 'AV PRO CFast 2.0 256GB', cardType: 'CFast 2.0' }),
+  acc({ id: 'card-sandisk-cfb128', category: 'Memory card', brand: 'SanDisk', model: 'Extreme PRO CFexpress Type B 128GB', cardType: 'CFexpress B' }),
+  acc({ id: 'card-amzn-microsd512', category: 'Memory card', brand: 'Amazon Basics', model: 'microSDXC 512GB UHS-I V30', cardType: 'microSD',
+    speedNote: 'V30 guarantees 30 MB/s writes: enough for 4K H.264, but bursts of RAW photos will fill the buffer sooner.' }),
   // Filters
   acc({ id: 'filter-vnd82', category: 'Filter', brand: 'PolarPro', model: 'Peter McKinnon VND 82mm', threadSize: 82, weight: 60 }),
   acc({ id: 'filter-cpl77', category: 'Filter', brand: 'B+W', model: 'Circular Polarizer 77mm', threadSize: 77, weight: 40 }),
   acc({ id: 'filter-cpl67', category: 'Filter', brand: 'B+W', model: 'Circular Polarizer 67mm', threadSize: 67, weight: 30 }),
+  acc({ id: 'filter-bw-007-77', category: 'Filter', brand: 'B+W', model: 'F-Pro 007 Clear MRC 77mm', threadSize: 77, weight: 30,
+    notes: 'Clear protection filter with multi-resist coating. Does not change exposure.' }),
   acc({ id: 'filter-uv58', category: 'Filter', brand: 'Hoya', model: 'HD UV 58mm', threadSize: 58, weight: 20 }),
   // Flashes
   acc({ id: 'flash-godox-v1s', category: 'Flash', brand: 'Godox', model: 'V1-S (Sony)', shoe: 'Sony MI', weight: 530 }),
@@ -170,6 +175,8 @@ export const ACCESSORIES = [
   acc({ id: 'gimbal-rs3mini', category: 'Gimbal', brand: 'DJI', model: 'RS 3 Mini', maxPayload: 2000, weight: 795 }),
   acc({ id: 'tripod-leofoto', category: 'Tripod', brand: 'Leofoto', model: 'LS-324C + LH-40', maxPayload: 15000, weight: 1750 }),
   acc({ id: 'tripod-travel', category: 'Tripod', brand: 'Peak Design', model: 'Travel Tripod (Carbon)', maxPayload: 9100, weight: 1270 }),
+  acc({ id: 'tripod-smallrig-ct20', category: 'Tripod', brand: 'SmallRig', model: 'CT-20 Carbon Fiber Tripod', maxPayload: 15000, weight: 1500,
+    notes: 'Payload and weight are approximate. Check the label on your tripod.' }),
 ];
 
 export const CATALOG = [...BODIES, ...LENSES, ...ACCESSORIES];

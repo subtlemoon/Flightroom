@@ -77,6 +77,9 @@ const slotAccepts = (slot, cardType) => slot.split(' / ').includes(cardType);
 // Card check for one body; firmware may unlock a card type.
 export function cardOnBody(body, card) {
   if (body.cardSlots.some((s) => slotAccepts(s, card.cardType))) return { level: 'ok', note: '' };
+  if (card.cardType === 'microSD' && body.cardSlots.some((s) => slotAccepts(s, 'SD'))) {
+    return { level: 'warn', note: 'Fits the SD slot with a microSD-to-SD adapter. microSD is usually slower than a full-size SD card.' };
+  }
   const feature = body.firmwareFeatures.find((f) => f.cards?.includes(card.cardType));
   if (feature) return firmwareGate(body, feature, 'bad');
   return { level: 'bad', note: `${body.model} has no ${card.cardType} slot.` };
@@ -150,21 +153,26 @@ export function checkPreset(preset, gearById, settings = {}, catalog = []) {
   // Memory cards
   for (const card of byCat('Memory card')) {
     const results = bodies.map((b) => ({ b, ...cardOnBody(b, card) }));
-    for (const r of results) add(r.level, 'Storage', `${card.model} in ${r.b.model}`, r.note);
+    for (const r of results) add(r.level, 'Storage', `${card.model} in ${r.b.model}`, [r.note, card.speedNote].filter(Boolean).join(' '));
   }
   for (const b of bodies) {
     const ok = byCat('Memory card').some((c) => cardOnBody(b, c).level !== 'bad');
     if (!ok) add('info', 'Storage', `No memory card for ${b.model}`, `Slots: ${b.cardSlots.join(', ')}.`);
   }
 
-  // Filters
+  // Filters: a filter only needs to fit the lenses it is meant for.
   for (const f of byCat('Filter')) {
-    for (const l of lenses) {
-      if (!l.filterThread) continue;
-      if (f.threadSize === l.filterThread) add('ok', 'Filters', `${f.model} fits ${l.model}`);
-      else if (f.threadSize > l.filterThread) add('warn', 'Filters', `${f.model} on ${l.model} needs a step-up ring`, `${l.filterThread}mm → ${f.threadSize}mm.`);
-      else add('bad', 'Filters', `${f.model} is too small for ${l.model}`, `Lens thread is ${l.filterThread}mm; a smaller filter will vignette.`);
-    }
+    const threaded = lenses.filter((l) => l.filterThread);
+    if (!threaded.length) continue;
+    const exact = threaded.filter((l) => l.filterThread === f.threadSize);
+    const stepUp = threaded.filter((l) => l.filterThread < f.threadSize);
+    const tooBig = threaded.filter((l) => l.filterThread > f.threadSize);
+    const names = (ls) => ls.map((l) => `${l.model} (${l.filterThread}mm)`).join(', ');
+    if (exact.length) add('ok', 'Filters', `${f.model} fits ${exact.map((l) => l.model).join(', ')}`);
+    else if (stepUp.length) add('warn', 'Filters', `${f.model} needs a step-up ring`, `No lens in this kit has a ${f.threadSize}mm thread. Step-up ring needed for ${names(stepUp)}.`);
+    else add('bad', 'Filters', `${f.model} fits no lens in this kit`, `It's ${f.threadSize}mm; every lens here is larger: ${names(tooBig)}.`);
+    if (exact.length && stepUp.length) add('info', 'Filters', `${f.model} on other lenses: step-up ring needed`, names(stepUp));
+    if (exact.length && tooBig.length) add('info', 'Filters', `${f.model} is too small for some lenses`, names(tooBig));
   }
 
   // Flash and audio on the hot shoe
