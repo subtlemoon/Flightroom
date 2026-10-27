@@ -103,8 +103,9 @@ export async function thumbFallbackUrl(photo) {
 // camera files and are shown unmirrored).
 export const ROTATION = { 1: 0, 2: 0, 3: 180, 4: 180, 5: 90, 6: 90, 7: 270, 8: 270 };
 
-// Draws `bmp` into a canvas of W x H device pixels. view.zoom shows 1 image pixel
-// per screen pixel centred on (view.cx, view.cy), in rotated-image pixels.
+// Draws `bmp` into a canvas of W x H device pixels. When zoomed, view.scale is
+// photo pixels per screen pixel (1 = 100%), centred on (view.cx, view.cy) in
+// rotated-photo pixels.
 export function drawPhoto(ctx, W, H, bmp, meta, view) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, W, H);
@@ -127,7 +128,7 @@ export function geometry(W, H, bmp, meta, view) {
   const ow = rot % 180 ? ih : iw;
   const oh = rot % 180 ? iw : ih;
   const fit = Math.min(W / ow, H / oh, 1);
-  const s = view?.zoom ? 1 : fit;
+  const s = view?.zoom ? view.scale || 1 : fit;
   const clamp = (c, size, screen) => (size * s <= screen ? size / 2 : Math.min(size - screen / (2 * s), Math.max(screen / (2 * s), c)));
   const cx = view?.zoom ? clamp(view.cx, ow, W) : ow / 2;
   const cy = view?.zoom ? clamp(view.cy, oh, H) : oh / 2;

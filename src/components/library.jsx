@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { GearCard, useGearFilter } from './gear.jsx';
 import { Icon, Modal } from './ui.jsx';
 import { EDITING_APPS } from '../data/software.js';
-import { DEFAULT_RATING_KEYS, RESERVED_KEYS, assignKey, keyLabel, normKey, ratingKeys } from '../cull/keys.js';
+import { DEFAULT_RATING_KEYS, DEFAULT_ZOOM_KEY, RESERVED_KEYS, ZOOM_LEVELS, assignKey, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zoomLevel } from '../cull/keys.js';
 
 export function MyGearView({ store, onOpenGear, onBrowse, onCustom }) {
   const { gear, state } = store;
@@ -101,7 +101,8 @@ function CullingCard({ store }) {
   const { state, actions } = store;
   const bridge = window.gearcheck?.cull;
   const keys = ratingKeys(state.settings);
-  const [listening, setListening] = useState(null); // rating waiting for a key press
+  const zKey = zoomKey(state.settings);
+  const [listening, setListening] = useState(null); // rating (or 'zoom') waiting for a key press
   const [note, setNote] = useState('');
   const [cache, setCache] = useState(null);
 
@@ -118,16 +119,23 @@ function CullingCard({ store }) {
         setNote(`${keyLabel(e.key)} is used for moving around or zooming. Pick another key.`);
         return;
       }
-      actions.setCullSettings({ cullKeys: assignKey(keys, listening, e.key) });
+      if (listening === 'zoom') {
+        const used = ratingForKey(keys, e.key);
+        if (used !== undefined) { setNote(`${keyLabel(e.key)} already sets ${used ? `${used} star${used > 1 ? 's' : ''}` : 'no rating'}. Pick another key.`); return; }
+        actions.setCullSettings({ cullZoomKey: normKey(e.key) });
+      } else {
+        if (normKey(e.key) === zKey) { setNote(`${keyLabel(e.key)} is the zoom key. Pick another key.`); return; }
+        actions.setCullSettings({ cullKeys: assignKey(keys, listening, e.key) });
+      }
       setNote('');
       setListening(null);
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [listening, keys]);
+  }, [listening, keys, zKey]);
 
   const rows = [1, 2, 3, 4, 5, 0];
-  const isDefault = rows.every((r) => keys[r] === DEFAULT_RATING_KEYS[r]);
+  const isDefault = rows.every((r) => keys[r] === DEFAULT_RATING_KEYS[r]) && zKey === DEFAULT_ZOOM_KEY;
   return (
     <section className="card">
       <h3 className="section-title">Culling</h3>
@@ -141,16 +149,31 @@ function CullingCard({ store }) {
             </button>
           </div>
         ))}
+        <div className="key-row">
+          <span className="key-name">Zoom in / out</span>
+          <button className={`keycap${listening === 'zoom' ? ' listening' : ''}`} onClick={() => { setListening(listening === 'zoom' ? null : 'zoom'); setNote(''); }}>
+            {listening === 'zoom' ? 'Press a key…' : keyLabel(zKey)}
+          </button>
+        </div>
       </div>
       {note && <p className="small warn-text">{note}</p>}
       <div className="row cull-settings-row">
-        <button className="btn btn-sm" disabled={isDefault} onClick={() => actions.setCullSettings({ cullKeys: { ...DEFAULT_RATING_KEYS } })}>Reset to 1–5</button>
+        <button className="btn btn-sm" disabled={isDefault} onClick={() => actions.setCullSettings({ cullKeys: { ...DEFAULT_RATING_KEYS }, cullZoomKey: DEFAULT_ZOOM_KEY })}>Reset keys</button>
       </div>
+      <div className="zoom-setting">
+        <span>Zoom amount</span>
+        <div className="seg small">
+          {ZOOM_LEVELS.map((z) => (
+            <button key={z} className={zoomLevel(state.settings) === z ? 'on' : ''} onClick={() => actions.setCullSettings({ cullZoom: z })}>{z}%</button>
+          ))}
+        </div>
+      </div>
+      <p className="muted small">100% shows every pixel of the photo, which is best for checking focus. 200% and up magnify further.</p>
       <label className="toggle-row big">
         <input type="checkbox" checked={!!state.settings.cullAdvance} onChange={() => actions.setCullSettings({ cullAdvance: !state.settings.cullAdvance })} />
         <span>Go to the next photo after rating</span>
       </label>
-      <p className="muted small">Other keys: ← → move between photos, Home / End jump to the first or last, Z or a click zooms to 100%, Esc zooms back out.</p>
+      <p className="muted small">Other keys: ← → move between photos, Home / End jump to the first or last, Esc zooms back out. Clicking the photo zooms in on the spot you clicked, and dragging moves around.</p>
       <p className="muted small">Stars are written to an .xmp file next to each RAW photo (for example JWL_5769.xmp), the standard Lightroom, Bridge and Capture One read. The RAW file itself is never changed. JPEGs without a RAW keep their stars inside the file.</p>
       {bridge && (
         <div className="update-row cull-cache">

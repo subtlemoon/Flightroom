@@ -367,3 +367,5 @@ a.btn { text-decoration: none; color: inherit; }
 .warn-text { color: var(--warn); margin-bottom: 8px; }
 .cull-settings-row { margin-bottom: 12px; }
 .card .cull-cache { margin: 12px 0 0; padding-top: 12px; border-top: 1px solid var(--line); }
+.zoom-setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 4px 0 6px; flex-wrap: wrap; }
+.card .zoom-setting + .muted { margin-bottom: 12px; }

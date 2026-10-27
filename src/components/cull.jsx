@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './ui.jsx';
 import { drawPhoto, geometry, imgUrl, loadFit, loadFull, loadThumb, prune, ROTATION, thumbFallbackUrl } from '../cull/previews.js';
-import { RESERVED_KEYS, keyLabel, ratingForKey, ratingKeys } from '../cull/keys.js';
+import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zoomLevel } from '../cull/keys.js';
 
 // A photo in the culling view, as listed by the desktop side:
 //   { id, name, raw, jpeg, sidecar, ratingIn: 'sidecar' | 'file', rating }
@@ -19,6 +19,8 @@ export function CullView({ store }) {
   const { state, actions } = store;
   const keys = ratingKeys(state.settings);
   const advance = !!state.settings.cullAdvance;
+  const zKey = zoomKey(state.settings);
+  const zoomPct = zoomLevel(state.settings);
   const folder = state.cull?.folder;
 
   const [list, setList] = useState(null); // { folder, photos } | { error }
@@ -96,11 +98,16 @@ export function CullView({ store }) {
 
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(''), 2200); return () => clearTimeout(t); }, [toast]);
 
-  // Keyboard: arrows move, Home/End jump, Z zooms to 100%, rating keys from Settings.
+  // Keyboard: arrows move, Home/End jump; rating and zoom keys come from Settings.
   useEffect(() => {
     const onKey = (e) => {
       if (e.target.closest?.('input, textarea, select, [contenteditable]') || e.ctrlKey || e.altKey || e.metaKey) return;
       if (!photos.length) return;
+      if (normKey(e.key) === zKey) {
+        e.preventDefault(); // also stops Space from pressing a focused button
+        if (!e.repeat) setZoom((z) => (z ? null : { center: true }));
+        return;
+      }
       const r = ratingForKey(keys, e.key);
       if (r !== undefined && !RESERVED_KEYS.includes(e.key)) {
         e.preventDefault();
@@ -114,12 +121,11 @@ export function CullView({ store }) {
       if (moves[e.key]) { e.preventDefault(); go(index + moves[e.key]); }
       else if (e.key === 'Home') { e.preventDefault(); go(0); }
       else if (e.key === 'End') { e.preventDefault(); go(photos.length - 1); }
-      else if (e.key.toLowerCase() === 'z' && !e.repeat) setZoom((z) => (z ? null : { center: true }));
       else if (e.key === 'Escape') setZoom(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [photos, photo, index, keys, advance, go, rate]);
+  }, [photos, photo, index, keys, zKey, advance, go, rate]);
 
   if (!bridge) {
     return <div className="view"><div className="hero-empty"><div className="hero-icon"><Icon name="photo" size={40} /></div><h2>Culling runs in the desktop app</h2><p className="muted">Open GearCheck on your PC to link a photo folder.</p></div></div>;
@@ -165,11 +171,11 @@ export function CullView({ store }) {
 
       {photo ? (
         <>
-          <Stage photo={photo} meta={curMeta} photos={photos} index={index} metaById={meta} zoom={zoom} setZoom={setZoom}>
+          <Stage photo={photo} meta={curMeta} photos={photos} index={index} metaById={meta} zoom={zoom} setZoom={setZoom} scale={zoomPct / 100}>
             <div className="stage-top">
               <span className="stage-name">{photo.name}{photo.raw && photo.jpeg && <span className="pill-mini">RAW+JPEG</span>}</span>
               <ShotInfo meta={curMeta} />
-              {zoom && <span className="pill-mini zoom">100%</span>}
+              {zoom && <span className="pill-mini zoom">{zoomPct}%</span>}
             </div>
             <div className="stage-bottom">
               <Stars value={curRating} onRate={(r) => rate(photo, r)} keys={keys} />
@@ -220,7 +226,7 @@ function Stars({ value, onRate, keys }) {
   return (
     <div className="stars" onMouseLeave={() => setHover(0)}>
       {[1, 2, 3, 4, 5].map((n) => (
-        <button key={n} className={`star${n <= shown ? ' on' : ''}`} onMouseEnter={() => setHover(n)}
+        <button key={n} className={`star${n <= shown ? ' on' : ''}`} onMouseDown={(e) => e.preventDefault()} onMouseEnter={() => setHover(n)}
           onClick={() => onRate(n === value ? 0 : n)} title={`${n} star${n > 1 ? 's' : ''} (key ${keyLabel(keys[n])})`}>★</button>
       ))}
       <span className="stars-hint">{value ? `${value} of 5` : `Press ${keyLabel(keys[1])}–${keyLabel(keys[5])} to rate`}</span>
@@ -229,8 +235,8 @@ function Stars({ value, onRate, keys }) {
 }
 
 // The big photo. Shows the small preview instantly, swaps in the sharp one as soon
-// as it's decoded, and loads the full-resolution preview only when zoomed to 100%.
-function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, children }) {
+// as it's decoded, and loads the full-resolution preview only when zoomed in.
+function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, scale, children }) {
   const wrapRef = useRef();
   const canvasRef = useRef();
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -280,10 +286,10 @@ function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, children }
     if (!zoom) return null;
     if (zoom.center) {
       const g = geometry(W, H, bmp, meta, null);
-      return { zoom: true, cx: g.ow / 2, cy: g.oh / 2 };
+      return { zoom: true, scale, cx: g.ow / 2, cy: g.oh / 2 };
     }
-    return { zoom: true, ...zoom };
-  }, [zoom, W, H, meta, !!bmp]);
+    return { zoom: true, scale, cx: zoom.cx, cy: zoom.cy };
+  }, [zoom, scale, W, H, meta, !!bmp]);
 
   useEffect(() => {
     const c = canvasRef.current;
@@ -293,10 +299,15 @@ function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, children }
     drawPhoto(c.getContext('2d'), W, H, bmp, meta, view);
   }, [bmp, W, H, meta, view]);
 
-  const toImage = (e) => {
+  // Zoom so the spot under the pointer stays under the pointer.
+  const zoomAt = (e) => {
     const r = canvasRef.current.getBoundingClientRect();
-    const g = geometry(W, H, bmp, meta, view);
-    return { x: ((e.clientX - r.left) * dpr - W / 2) / g.s + g.cx, y: ((e.clientY - r.top) * dpr - H / 2) / g.s + g.cy };
+    const px = (e.clientX - r.left) * dpr - W / 2;
+    const py = (e.clientY - r.top) * dpr - H / 2;
+    const g = geometry(W, H, bmp, meta, null);
+    const x = px / g.s + g.cx;
+    const y = py / g.s + g.cy;
+    return { cx: x - px / scale, cy: y - py / scale };
   };
 
   const onPointerDown = (e) => {
@@ -319,7 +330,7 @@ function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, children }
     drag.current = null;
     if (!d || d.moved) return;
     if (zoom) setZoom(null);
-    else setZoom(toImage(e));
+    else setZoom(zoomAt(e));
   };
 
   return (
@@ -382,7 +393,7 @@ function Thumb({ photo, meta, active, left, onClick }) {
   const rot = ROTATION[meta?.orientation] || 0;
   const onError = () => { if (src.startsWith('gcimg:')) thumbFallbackUrl(photo).then(setSrc, () => {}); };
   return (
-    <button className={`thumb${active ? ' active' : ''}`} style={{ left }} onClick={onClick} title={photo.name}>
+    <button className={`thumb${active ? ' active' : ''}`} style={{ left }} onClick={onClick} onMouseDown={(e) => e.preventDefault()} title={photo.name}>
       <img src={src} alt="" decoding="async" draggable={false} onError={onError} style={rot ? { transform: `rotate(${rot}deg)` } : undefined} />
       {rating > 0 && <span className="thumb-stars">{'★'.repeat(rating)}</span>}
     </button>
