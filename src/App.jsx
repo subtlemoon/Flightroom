@@ -6,11 +6,12 @@ import { GroupForm, GroupView, PresetView } from './components/groups.jsx';
 import { CatalogView, MyGearView, SettingsView } from './components/library.jsx';
 import { NewsView } from './components/news.jsx';
 import { CullView } from './components/cull.jsx';
+import { HomeView, startView } from './components/home.jsx';
 
 export default function App() {
   const store = useStore();
   const { state, gear, gearById, actions } = store;
-  const [view, setView] = useState({ name: 'group', groupId: state.groups[0]?.id });
+  const [view, setView] = useState(() => startView(state));
   const [detailId, setDetailId] = useState(null);
   const [form, setForm] = useState(null); // { initial } while the gear form is open
   const [newGroup, setNewGroup] = useState(false);
@@ -28,7 +29,11 @@ export default function App() {
     .map((p) => `${g.icon} ${g.name} › ${p.name}`));
 
   let main;
-  if (view.name === 'mygear') main = <MyGearView store={store} onOpenGear={openGear} onBrowse={() => setView({ name: 'catalog' })} onCustom={() => setForm({})} />;
+  if (view.name === 'home') {
+    main = <HomeView store={store}
+      go={(v, folderList) => { if (folderList) actions.setCullFolder(null); setView(v); }}
+      onOpenFolder={(f) => { actions.setCullFolder(f); setView({ name: 'cull' }); }} />;
+  } else if (view.name === 'mygear') main = <MyGearView store={store} onOpenGear={openGear} onBrowse={() => setView({ name: 'catalog' })} onCustom={() => setForm({})} />;
   else if (view.name === 'catalog') main = <CatalogView store={store} onOpenGear={openGear} onCustom={() => setForm({})} />;
   else if (view.name === 'settings') main = <SettingsView store={store} />;
   else if (view.name === 'cull') main = <CullView store={store} />;
@@ -50,6 +55,7 @@ export default function App() {
           <div className="logo-mark"><Icon name="lens" size={20} /></div>
           <div><div className="logo-name">GearCheck</div><div className="logo-sub">Camera kit planner</div></div>
         </div>
+        {navBtn('home', 'Home', 'home')}
         <div className="nav-label">Library</div>
         {navBtn('mygear', 'My Gear', 'bag', <span className="nav-count">{state.owned.length}</span>)}
         {navBtn('catalog', 'Catalog', 'grid')}

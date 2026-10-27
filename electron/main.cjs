@@ -3,6 +3,7 @@ const { autoUpdater } = require('electron-updater');
 const fs = require('fs');
 const path = require('path');
 const { setupPhotos } = require('./photos.cjs');
+const guard = require('./update-guard.cjs');
 
 let win;
 
@@ -31,6 +32,7 @@ function createWindow() {
 // download silently in the background and install silently when the app closes.
 // Status is shown in Settings and written to update.log in the app data folder.
 let updateStatus = { state: 'idle', message: 'Not checked yet' };
+let readyVersion = null;
 
 function setStatus(state, message) {
   updateStatus = { state, message, at: Date.now() };
@@ -52,20 +54,41 @@ function setupUpdates() {
   autoUpdater.on('update-not-available', () => setStatus('current', 'Up to date'));
   autoUpdater.on('update-available', (info) => setStatus('downloading', `Downloading version ${info.version}…`));
   autoUpdater.on('download-progress', (p) => setStatus('downloading', `Downloading update… ${Math.round(p.percent)}%`));
-  autoUpdater.on('update-downloaded', (info) => setStatus('ready', `Version ${info.version} will install when you close GearCheck`));
-  autoUpdater.on('error', (err) => setStatus('error', `Update failed: ${err.message.split('\n')[0]}`));
+  autoUpdater.on('update-downloaded', (info) => {
+    readyVersion = info.version;
+    setStatus('ready', `Version ${info.version} will install when you close GearCheck`);
+  });
+  autoUpdater.on('error', (err) => {
+    // A failed later check (say, offline) doesn't undo an update that's already downloaded.
+    if (!readyVersion) setStatus('error', `Update failed: ${err.message.split('\n')[0]}`);
+  });
   ipcMain.handle('app:version', () => app.getVersion());
   ipcMain.handle('update:status', () => updateStatus);
   ipcMain.handle('update:check', () => checkForUpdates());
   // "Restart now": closes, installs silently, and opens the new version.
   ipcMain.handle('update:install', () => {
-    if (updateStatus.state === 'ready') setImmediate(() => autoUpdater.quitAndInstall(true, true));
+    if (readyVersion) setImmediate(() => autoUpdater.quitAndInstall(true, true));
   });
   checkForUpdates();
   setInterval(checkForUpdates, 60 * 60 * 1000);
 }
 
-app.whenReady().then(() => {
+// One GearCheck at a time: opening it again brings the open window forward.
+if (!app.requestSingleInstanceLock()) app.quit();
+app.on('second-instance', () => {
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.focus();
+});
+
+// The downloaded update installs as the app quits; note it so a launch during
+// the install shows "updating" instead of opening the old version.
+app.on('before-quit', () => {
+  if (readyVersion) guard.markInstalling(readyVersion);
+});
+
+app.whenReady().then(async () => {
+  if (await guard.updateInProgress()) return guard.showUpdatingAndQuit();
   createWindow();
   setupPhotos(() => win);
   setupUpdates();

@@ -165,6 +165,7 @@ export function useStore() {
       s.cull = { ...s.cull, positions: { ...s.cull?.positions, [folder]: index } };
       return s;
     }),
+    setSettings: (patch) => update((s) => { s.settings = { ...s.settings, ...patch }; return s; }),
     setCullSettings: (patch) => update((s) => { s.settings = { ...s.settings, ...patch }; return s; }),
     setApps: (apps) => update((s) => { s.settings.apps = apps; return s; }),
     markNewsSeen: (monthId) => update((s) => { s.newsSeen = monthId; return s; }),
