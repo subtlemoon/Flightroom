@@ -143,6 +143,16 @@ export function useStore() {
       const p = g.presets.find((x) => x.id === presetId);
       if (p) g.presets.push({ ...structuredClone(p), id: uid('p'), name: `${p.name} (copy)` });
     })),
+    setCullFolder: (folder) => update((s) => {
+      const recent = (s.cull?.recent || []).filter((f) => f !== folder);
+      s.cull = { ...s.cull, folder, recent: [folder, ...recent].slice(0, 8) };
+      return s;
+    }),
+    setCullPosition: (folder, index) => update((s) => {
+      s.cull = { ...s.cull, positions: { ...s.cull?.positions, [folder]: index } };
+      return s;
+    }),
+    setCullSettings: (patch) => update((s) => { s.settings = { ...s.settings, ...patch }; return s; }),
     setApps: (apps) => update((s) => { s.settings.apps = apps; return s; }),
     markNewsSeen: (monthId) => update((s) => { s.newsSeen = monthId; return s; }),
     importData: (data) => setState({ ...initial(), ...data }),

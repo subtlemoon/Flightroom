@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const fs = require('fs');
 const path = require('path');
+const { setupPhotos } = require('./photos.cjs');
 
 let win;
 
@@ -62,6 +63,7 @@ function setupUpdates() {
 
 app.whenReady().then(() => {
   createWindow();
+  setupPhotos(() => win);
   setupUpdates();
 });
 app.on('window-all-closed', () => app.quit());
