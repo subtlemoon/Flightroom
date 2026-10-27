@@ -42,9 +42,10 @@
       "artifactName": "GearCheck-${version}-${arch}-${target}.${ext}"
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
+      "oneClick": true,
+      "perMachine": false,
       "createDesktopShortcut": true,
+      "runAfterFinish": true,
       "artifactName": "GearCheck-Setup-${version}.${ext}"
     },
     "portable": {

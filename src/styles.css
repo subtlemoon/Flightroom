@@ -292,3 +292,11 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .resolve-btn { flex-shrink: 0; align-self: center; }
 .check.resolved { opacity: .6; }
 .check.resolved .check-title { text-decoration: line-through; text-decoration-color: rgba(255,255,255,.35); }
+
+/* Updates card */
+.update-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.update-version { font-weight: 600; font-size: 15px; margin-bottom: 2px; }
+.card .update-row .muted { margin-bottom: 0; }
+.update-current { color: var(--ok) !important; }
+.update-ready { color: var(--info) !important; }
+.update-error { color: var(--warn) !important; }

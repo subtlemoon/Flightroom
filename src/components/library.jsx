@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { GearCard, useGearFilter } from './gear.jsx';
 import { Icon, Modal } from './ui.jsx';
 import { EDITING_APPS } from '../data/software.js';
@@ -65,6 +65,34 @@ export function CatalogView({ store, onOpenGear, onCustom }) {
   );
 }
 
+// Version and background update status, from the desktop app (absent in a browser).
+function UpdatesCard() {
+  const bridge = window.gearcheck;
+  const [version, setVersion] = useState('');
+  const [status, setStatus] = useState(null);
+  useEffect(() => {
+    if (!bridge) return;
+    bridge.getVersion().then(setVersion);
+    bridge.getUpdateStatus().then(setStatus);
+    return bridge.onUpdateStatus(setStatus);
+  }, [bridge]);
+  if (!bridge) return null;
+  const busy = status?.state === 'checking' || status?.state === 'downloading';
+  return (
+    <section className="card">
+      <h3 className="section-title">App updates</h3>
+      <div className="update-row">
+        <div className="grow">
+          <div className="update-version">GearCheck {version}</div>
+          <div className={`muted small update-${status?.state || 'idle'}`}>{status?.message || 'Not checked yet'}</div>
+        </div>
+        <button className="btn" disabled={busy} onClick={() => bridge.checkForUpdates()}><Icon name="refresh" size={16} />Check now</button>
+      </div>
+      <p className="muted small">Updates download in the background and install when you close the app.</p>
+    </section>
+  );
+}
+
 export function SettingsView({ store }) {
   const { state, actions } = store;
   const fileRef = useRef();
@@ -97,6 +125,7 @@ export function SettingsView({ store }) {
   return (
     <div className="view narrow">
       <header className="view-head"><div className="grow"><div className="eyebrow">App</div><h1>Settings</h1></div></header>
+      <UpdatesCard />
       <section className="card">
         <h3 className="section-title">Editing apps you use</h3>
         <p className="muted">Presets check whether these apps can open each camera's photos and video.</p>
