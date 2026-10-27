@@ -90,6 +90,8 @@ export const BODIES = [
   body({ id: 'pana-s5iix', brand: 'Panasonic', model: 'Lumix S5IIX', mount: 'L-Mount', sensor: 'Full Frame', megapixels: 24, ibis: true, maxVideo: '6K 30p', rawFormat: 'RW2', videoFormats: ['ProRes 422 HQ', 'H.265 (HEVC)', 'H.264'], cardSlots: ['SD', 'SD'], battery: 'DMW-BLK22', shoe: 'Panasonic TTL', weight: 740, year: 2023 }),
   body({ id: 'pana-gh7', brand: 'Panasonic', model: 'Lumix GH7', mount: 'Micro Four Thirds', sensor: 'Micro Four Thirds', megapixels: 25, ibis: true, maxVideo: '5.7K 30p RAW', rawFormat: 'RW2', videoFormats: ['ProRes RAW', 'ProRes 422 HQ', 'H.265 (HEVC)', 'H.264'], cardSlots: ['CFexpress B', 'SD'], battery: 'DMW-BLK22', shoe: 'Panasonic TTL', weight: 805, year: 2024 }),
   body({ id: 'pana-g9ii', brand: 'Panasonic', model: 'Lumix G9II', mount: 'Micro Four Thirds', sensor: 'Micro Four Thirds', megapixels: 25, ibis: true, maxVideo: '5.7K 30p', rawFormat: 'RW2', videoFormats: ['ProRes 422 HQ', 'H.265 (HEVC)', 'H.264'], cardSlots: ['SD', 'SD'], battery: 'DMW-BLK22', shoe: 'Panasonic TTL', weight: 658, year: 2023 }),
+  // September 2026
+  body({ id: 'canon-r8ii', brand: 'Canon', model: 'EOS R8 Mark II', mount: 'Canon RF', sensor: 'Full Frame', megapixels: 24.2, ibis: true, maxVideo: '4K 60p (6K oversampled)', rawFormat: 'CR3', videoFormats: ['H.265 (HEVC)', 'H.264'], cardSlots: ['SD'], battery: 'LP-E17', shoe: 'Canon Multi-function', weight: 546, year: 2026 }),
 ];
 
 // fType applies to Nikon F lenses: how they focus, which decides adapter support.
@@ -194,6 +196,15 @@ export const LENSES = [
   lens({ id: 'pana-1260leica', brand: 'Panasonic', model: 'Leica DG 12-60mm F2.8-4.0', mount: 'Micro Four Thirds', coverage: 'Micro Four Thirds', focal: '12-60mm', aperture: 'f/2.8-4', stabilized: true, filterThread: 62, weight: 320 }),
   lens({ id: 'pana-100400ii', brand: 'Panasonic', model: 'Leica DG 100-400mm F4.0-6.3 II', mount: 'Micro Four Thirds', coverage: 'Micro Four Thirds', focal: '100-400mm', aperture: 'f/4-6.3', stabilized: true, filterThread: 72, weight: 985 }),
   lens({ id: 'om-1240ii', brand: 'OM System', model: 'M.Zuiko 12-40mm F2.8 PRO II', mount: 'Micro Four Thirds', coverage: 'Micro Four Thirds', focal: '12-40mm', aperture: 'f/2.8', stabilized: false, filterThread: 62, weight: 382 }),
+  // September 2026
+  lens({ id: 'sony-400f45gm', brand: 'Sony', model: 'FE 400mm F4.5 GM OSS', mount: 'Sony E', coverage: 'Full Frame', focal: '400mm', aperture: 'f/4.5', stabilized: true, filterThread: 95, weight: 994 }),
+  lens({ id: 'sony-600f63gm', brand: 'Sony', model: 'FE 600mm F6.3 GM OSS', mount: 'Sony E', coverage: 'Full Frame', focal: '600mm', aperture: 'f/6.3', stabilized: true, filterThread: 95, weight: 995 }),
+  lens({ id: 'sony-814fisheye', brand: 'Sony', model: 'FE 8-14mm F3.5 Fisheye G', mount: 'Sony E', coverage: 'Full Frame', focal: '8-14mm fisheye', aperture: 'f/3.5', stabilized: false, weight: 314, notes: 'No front filter thread.' }),
+  lens({ id: 'fuji-400f45', brand: 'Fujifilm', model: 'XF 400mm F4.5 R LM OIS WR', mount: 'Fujifilm X', coverage: 'APS-C', focal: '400mm', aperture: 'f/4.5', stabilized: true, weight: 1245 }),
+  lens({ id: 'sigma-85f12-e', brand: 'Sigma', model: '85mm F1.2 DG | Art (E)', mount: 'Sony E', coverage: 'Full Frame', focal: '85mm', aperture: 'f/1.2', stabilized: false, filterThread: 82, weight: 905 }),
+  lens({ id: 'sigma-85f12-l', brand: 'Sigma', model: '85mm F1.2 DG | Art (L)', mount: 'L-Mount', coverage: 'Full Frame', focal: '85mm', aperture: 'f/1.2', stabilized: false, filterThread: 82, weight: 905 }),
+  lens({ id: 'sigma-2060-e', brand: 'Sigma', model: '20-60mm F2.8-4 DG | Contemporary (E)', mount: 'Sony E', coverage: 'Full Frame', focal: '20-60mm', aperture: 'f/2.8-4', stabilized: false, weight: 385 }),
+  lens({ id: 'sigma-2060-l', brand: 'Sigma', model: '20-60mm F2.8-4 DG | Contemporary (L)', mount: 'L-Mount', coverage: 'Full Frame', focal: '20-60mm', aperture: 'f/2.8-4', stabilized: false, weight: 385 }),
 ];
 
 // Adapter AF support levels:

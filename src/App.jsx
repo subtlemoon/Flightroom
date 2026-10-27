@@ -4,6 +4,7 @@ import { Icon } from './components/ui.jsx';
 import { GearDetail, GearForm } from './components/gear.jsx';
 import { GroupForm, GroupView, PresetView } from './components/groups.jsx';
 import { CatalogView, MyGearView, SettingsView } from './components/library.jsx';
+import { NewsView } from './components/news.jsx';
 
 export default function App() {
   const store = useStore();
@@ -18,6 +19,9 @@ export default function App() {
   const detail = detailId && gearById[detailId];
   const openGear = (g) => setDetailId(g.id);
 
+  const latestNews = store.news.months.map((m) => m.id).sort().at(-1);
+  const hasNewNews = latestNews && state.newsSeen !== latestNews && view.name !== 'news';
+
   const usedIn = (id) => state.groups.flatMap((g) => g.presets
     .filter((p) => [...p.bodyIds, ...p.lensIds, ...p.accessoryIds].includes(id))
     .map((p) => `${g.icon} ${g.name} › ${p.name}`));
@@ -26,6 +30,7 @@ export default function App() {
   if (view.name === 'mygear') main = <MyGearView store={store} onOpenGear={openGear} onBrowse={() => setView({ name: 'catalog' })} onCustom={() => setForm({})} />;
   else if (view.name === 'catalog') main = <CatalogView store={store} onOpenGear={openGear} onCustom={() => setForm({})} />;
   else if (view.name === 'settings') main = <SettingsView store={store} />;
+  else if (view.name === 'news') main = <NewsView store={store} onOpenGear={openGear} />;
   else if (group && preset) main = <PresetView key={preset.id} group={group} preset={preset} store={store} onOpenGear={openGear} onBack={() => setView({ name: 'group', groupId: group.id })} />;
   else if (group) main = <GroupView group={group} store={store} onOpenPreset={(presetId) => setView({ name: 'group', groupId: group.id, presetId })} />;
   else main = <div className="view"><div className="hero-empty"><h2>No groups yet</h2><button className="btn btn-primary" onClick={() => setNewGroup(true)}>Create a group</button></div></div>;
@@ -46,6 +51,7 @@ export default function App() {
         <div className="nav-label">Library</div>
         {navBtn('mygear', 'My Gear', 'bag', <span className="nav-count">{state.owned.length}</span>)}
         {navBtn('catalog', 'Catalog', 'grid')}
+        {navBtn('news', 'News', 'news', hasNewNews && <span className="nav-new">New</span>)}
         <div className="nav-label">Groups<button className="icon-btn tiny" onClick={() => setNewGroup(true)} aria-label="New group"><Icon name="plus" size={14} /></button></div>
         <div className="group-list">
           {state.groups.map((g) => (

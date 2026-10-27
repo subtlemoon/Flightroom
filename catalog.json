@@ -1401,6 +1401,31 @@
       "year": 2023
     },
     {
+      "type": "body",
+      "firmware": "",
+      "firmwareFeatures": [],
+      "id": "canon-r8ii",
+      "brand": "Canon",
+      "model": "EOS R8 Mark II",
+      "mount": "Canon RF",
+      "sensor": "Full Frame",
+      "megapixels": 24.2,
+      "ibis": true,
+      "maxVideo": "4K 60p (6K oversampled)",
+      "rawFormat": "CR3",
+      "videoFormats": [
+        "H.265 (HEVC)",
+        "H.264"
+      ],
+      "cardSlots": [
+        "SD"
+      ],
+      "battery": "LP-E17",
+      "shoe": "Canon Multi-function",
+      "weight": 546,
+      "year": 2026
+    },
+    {
       "type": "lens",
       "id": "sony-2470gm2",
       "brand": "Sony",
@@ -2579,6 +2604,107 @@
       "stabilized": false,
       "filterThread": 62,
       "weight": 382
+    },
+    {
+      "type": "lens",
+      "id": "sony-400f45gm",
+      "brand": "Sony",
+      "model": "FE 400mm F4.5 GM OSS",
+      "mount": "Sony E",
+      "coverage": "Full Frame",
+      "focal": "400mm",
+      "aperture": "f/4.5",
+      "stabilized": true,
+      "filterThread": 95,
+      "weight": 994
+    },
+    {
+      "type": "lens",
+      "id": "sony-600f63gm",
+      "brand": "Sony",
+      "model": "FE 600mm F6.3 GM OSS",
+      "mount": "Sony E",
+      "coverage": "Full Frame",
+      "focal": "600mm",
+      "aperture": "f/6.3",
+      "stabilized": true,
+      "filterThread": 95,
+      "weight": 995
+    },
+    {
+      "type": "lens",
+      "id": "sony-814fisheye",
+      "brand": "Sony",
+      "model": "FE 8-14mm F3.5 Fisheye G",
+      "mount": "Sony E",
+      "coverage": "Full Frame",
+      "focal": "8-14mm fisheye",
+      "aperture": "f/3.5",
+      "stabilized": false,
+      "weight": 314,
+      "notes": "No front filter thread."
+    },
+    {
+      "type": "lens",
+      "id": "fuji-400f45",
+      "brand": "Fujifilm",
+      "model": "XF 400mm F4.5 R LM OIS WR",
+      "mount": "Fujifilm X",
+      "coverage": "APS-C",
+      "focal": "400mm",
+      "aperture": "f/4.5",
+      "stabilized": true,
+      "weight": 1245
+    },
+    {
+      "type": "lens",
+      "id": "sigma-85f12-e",
+      "brand": "Sigma",
+      "model": "85mm F1.2 DG | Art (E)",
+      "mount": "Sony E",
+      "coverage": "Full Frame",
+      "focal": "85mm",
+      "aperture": "f/1.2",
+      "stabilized": false,
+      "filterThread": 82,
+      "weight": 905
+    },
+    {
+      "type": "lens",
+      "id": "sigma-85f12-l",
+      "brand": "Sigma",
+      "model": "85mm F1.2 DG | Art (L)",
+      "mount": "L-Mount",
+      "coverage": "Full Frame",
+      "focal": "85mm",
+      "aperture": "f/1.2",
+      "stabilized": false,
+      "filterThread": 82,
+      "weight": 905
+    },
+    {
+      "type": "lens",
+      "id": "sigma-2060-e",
+      "brand": "Sigma",
+      "model": "20-60mm F2.8-4 DG | Contemporary (E)",
+      "mount": "Sony E",
+      "coverage": "Full Frame",
+      "focal": "20-60mm",
+      "aperture": "f/2.8-4",
+      "stabilized": false,
+      "weight": 385
+    },
+    {
+      "type": "lens",
+      "id": "sigma-2060-l",
+      "brand": "Sigma",
+      "model": "20-60mm F2.8-4 DG | Contemporary (L)",
+      "mount": "L-Mount",
+      "coverage": "Full Frame",
+      "focal": "20-60mm",
+      "aperture": "f/2.8-4",
+      "stabilized": false,
+      "weight": 385
     },
     {
       "type": "accessory",

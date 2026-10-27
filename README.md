@@ -37,3 +37,10 @@ app from GitHub on launch and every 30 minutes, so gear and "my gear" changes
 reach the app as soon as they are pushed, without an app update. The last
 fetched copy is cached for offline use, and the built-in list is the fallback.
 A test fails if `catalog.json` is out of date.
+
+## Monthly news
+
+`news.json` holds one entry per month (summary, a "for your kit" line, and
+announced items linked to catalog ids). The app's News tab loads it live from
+GitHub like the catalog; the bundled copy is the offline fallback. A monthly
+routine adds the previous month's entry and new catalog items.

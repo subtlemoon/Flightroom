@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { CATALOG } from './data/gear.js';
 import { SEED_GROUPS } from './data/presets.js';
 import { MY_GEAR, MY_GROUPS } from './data/mygear.js';
-import { cachedCatalog, fetchCatalog, watchCatalog } from './remote.js';
+import { cachedCatalog, cachedNews, fetchCatalog, fetchNews, watchCatalog } from './remote.js';
+import BUNDLED_NEWS from '../news.json';
 
 const KEY = 'gearcheck-v1';
 
@@ -55,6 +56,7 @@ export const uid = (p) => `${p}-${Date.now().toString(36)}${Math.random().toStri
 
 export function useStore() {
   const [catalog, setCatalog] = useState(startCatalog);
+  const [news, setNews] = useState(() => cachedNews() || BUNDLED_NEWS);
   const [state, setState] = useState(() => load(catalog));
 
   // status: 'loading' | 'ok' | 'error'; at: time of the last successful fetch.
@@ -64,11 +66,16 @@ export function useStore() {
     setState((s) => seedOwned(s, c));
     setCatalogStatus({ status: 'ok', at: Date.now() });
   };
-  useEffect(() => watchCatalog(applyCatalog, () => setCatalogStatus((st) => ({ ...st, status: 'error' }))), []);
+  useEffect(() => watchCatalog((c) => {
+    applyCatalog(c);
+    fetchNews().then(setNews).catch(() => {});
+  }, () => setCatalogStatus((st) => ({ ...st, status: 'error' }))), []);
   const refreshCatalog = async () => {
     setCatalogStatus((st) => ({ ...st, status: 'loading' }));
     try {
-      applyCatalog(await fetchCatalog());
+      const [c, n] = await Promise.all([fetchCatalog(), fetchNews().catch(() => null)]);
+      applyCatalog(c);
+      if (n) setNews(n);
     } catch {
       setCatalogStatus((st) => ({ ...st, status: 'error' }));
     }
@@ -137,11 +144,12 @@ export function useStore() {
       if (p) g.presets.push({ ...structuredClone(p), id: uid('p'), name: `${p.name} (copy)` });
     })),
     setApps: (apps) => update((s) => { s.settings.apps = apps; return s; }),
+    markNewsSeen: (monthId) => update((s) => { s.newsSeen = monthId; return s; }),
     importData: (data) => setState({ ...initial(), ...data }),
     resetAll: () => setState(seedOwned(initial(), catalog)),
   };
 
-  return { state, gear, gearById, actions, catalogStatus, refreshCatalog };
+  return { state, gear, gearById, actions, catalogStatus, refreshCatalog, news };
 }
 
 export const listKey = (item) => (item.type === 'body' ? 'bodyIds' : item.type === 'lens' ? 'lensIds' : 'accessoryIds');

@@ -3,7 +3,7 @@ import { CATALOG } from '../data/gear.js';
 import { SEED_GROUPS } from '../data/presets.js';
 import { MY_GEAR, MY_GROUPS } from '../data/mygear.js';
 import { buildCatalog } from '../data/catalog.js';
-import { isValidCatalog } from '../remote.js';
+import { isValidCatalog, isValidNews } from '../remote.js';
 import { readFileSync } from 'node:fs';
 import { checkPreset, lensOnBody, cardOnBody, compareVersions, applyResolved, checkKey } from './compat.js';
 
@@ -198,5 +198,23 @@ describe('resolved issues', () => {
   it('stale resolved keys are ignored', () => {
     const r = run(['nikon-z7ii'], [], ['card-amzn-microsd512']);
     expect(applyResolved(r, ['Storage|something else']).overall).toBe('warn');
+  });
+});
+
+describe('news', () => {
+  const news = JSON.parse(readFileSync(new URL('../../news.json', import.meta.url), 'utf8'));
+  it('news.json is valid', () => {
+    expect(isValidNews(news)).toBe(true);
+    for (const m of news.months) {
+      expect(m.id).toMatch(/^\d{4}-\d{2}$/);
+      expect(m.summary.length).toBeGreaterThan(0);
+      for (const i of m.items) {
+        expect(i.date.startsWith(m.id), `${i.name} date`).toBe(true);
+        expect(i.highlights.length, i.name).toBeGreaterThan(0);
+      }
+    }
+  });
+  it('news items link to real catalog gear', () => {
+    for (const m of news.months) for (const i of m.items) if (i.catalogId) expect(byId[i.catalogId], i.catalogId).toBeTruthy();
   });
 });

@@ -36,3 +36,30 @@ export function watchCatalog(onCatalog, onError = () => {}) {
   const timer = setInterval(run, REFRESH_MS);
   return () => clearInterval(timer);
 }
+
+// Monthly news (news.json in the repo), loaded the same way as the catalog.
+export const NEWS_URL = 'https://raw.githubusercontent.com/subtlemoon/gearcheck/main/news.json';
+const NEWS_CACHE_KEY = 'gearcheck-news';
+
+export function isValidNews(n) {
+  return !!n && Array.isArray(n.months)
+    && n.months.every((m) => m && typeof m.id === 'string' && typeof m.title === 'string' && Array.isArray(m.items));
+}
+
+export function cachedNews() {
+  try {
+    const n = JSON.parse(localStorage.getItem(NEWS_CACHE_KEY));
+    return isValidNews(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchNews() {
+  const res = await fetch(`${NEWS_URL}?t=${Date.now()}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`news fetch failed: ${res.status}`);
+  const n = await res.json();
+  if (!isValidNews(n)) throw new Error('news is malformed');
+  try { localStorage.setItem(NEWS_CACHE_KEY, JSON.stringify(n)); } catch {}
+  return n;
+}

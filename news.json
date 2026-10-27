@@ -1,0 +1,175 @@
+{
+  "version": 1,
+  "months": [
+    {
+      "id": "2026-09",
+      "title": "September 2026",
+      "summary": "A big month for telephoto lenses and a quiet one for Nikon. Sony shrank the super-telephoto with a sub-1 kg 400mm f/4.5 and 600mm f/6.3, and added its first full-frame fisheye zoom. Canon finally put IBIS in its cheapest full-frame body with the EOS R8 Mark II. Fujifilm gave X shooters a 400mm f/4.5 prime, and Sigma filled out its E and L lineups with an 85mm f/1.2 and a wide 20-60mm walkaround zoom. OM System revived the PEN name. Nikon only announced products in development: nine cinema lenses built with RED, and firmware 2.0 for the ZR.",
+      "forYou": "Nothing new for your Z7 II this month. Nikon's announcements are development notices only, and the new Sigma lenses are E and L mount.",
+      "items": [
+        {
+          "date": "2026-09-15",
+          "brand": "Canon",
+          "kind": "Camera",
+          "name": "EOS R8 Mark II",
+          "catalogId": "canon-r8ii",
+          "highlights": [
+            "24.2MP full-frame, now with 5-axis IBIS (up to 7.5 stops)",
+            "Uncropped 4K 60p oversampled from 6K, 10-bit Canon Log 3",
+            "Single UHS-II SD slot, LP-E17 battery, about 546 g"
+          ],
+          "price": "$1,899 body, $2,099 with RF 24-50mm",
+          "availability": "Late October 2026",
+          "source": "https://www.photoworkout.com/?p=223520"
+        },
+        {
+          "date": "2026-09-15",
+          "brand": "Sony",
+          "kind": "Lens",
+          "name": "FE 400mm F4.5 GM OSS",
+          "catalogId": "sony-400f45gm",
+          "highlights": [
+            "994 g without the tripod foot: lightest lens of its kind",
+            "95mm front filters, optical stabilization"
+          ],
+          "price": "$2,699",
+          "availability": "Shipping October 2026",
+          "source": "https://petapixel.com/2026/09/15/the-sony-fe-400mm-f-4-5-gm-oss-is-the-lightest-and-most-affordable-of-its-kind/"
+        },
+        {
+          "date": "2026-09-15",
+          "brand": "Sony",
+          "kind": "Lens",
+          "name": "FE 600mm F6.3 GM OSS",
+          "catalogId": "sony-600f63gm",
+          "highlights": [
+            "Nearly identical in size to the 400mm f/4.5, about 995 g",
+            "2.5 m minimum focus, 0.25x magnification, 95mm filters"
+          ],
+          "price": "About $3,698 (retailer preorder)",
+          "availability": "Preorder",
+          "source": "https://www.uniquephoto.com/photoinsider/sony-fe-600mm-f63-gm-oss-lens-specs-and-price"
+        },
+        {
+          "date": "2026-09-08",
+          "brand": "Sony",
+          "kind": "Lens",
+          "name": "FE 8-14mm F3.5 Fisheye G",
+          "catalogId": "sony-814fisheye",
+          "highlights": [
+            "Sony's first full-frame fisheye zoom",
+            "About 314 g, fluorine-coated front element"
+          ],
+          "price": "€1,700 / £1,500",
+          "availability": "End of September 2026",
+          "source": "https://www.sony.eu/presscentre/sony-introduces-its-first-fisheye-zoom-g-lens"
+        },
+        {
+          "date": "2026-09-04",
+          "brand": "Fujifilm",
+          "kind": "Lens",
+          "name": "XF 400mm F4.5 R LM OIS WR",
+          "catalogId": "fuji-400f45",
+          "highlights": [
+            "609mm-equivalent prime for X-mount, about 1,245 g",
+            "Up to 5.5 stops of optical stabilization, weather resistant"
+          ],
+          "price": "$3,199.95",
+          "availability": "Mid-September 2026",
+          "source": "https://newsroom-us.fujifilm.com/press-releases/press-release-details/2026/Fujifilm-Introduces-FUJINON-XF400mmF4-5-R-LM-OIS-WR-Lens/default.aspx"
+        },
+        {
+          "date": "2026-09-08",
+          "brand": "Sigma",
+          "kind": "Lens",
+          "name": "85mm F1.2 DG | Art",
+          "catalogId": "sigma-85f12-e",
+          "highlights": [
+            "Sony E and L-Mount, 905 g, 82mm filters",
+            "Lightest fast 85mm, at roughly half the price of Canon's"
+          ],
+          "price": "$1,599",
+          "availability": "From September 30 (EU) / October 6 (US)",
+          "source": "https://camerajabber.com/photography-news/sigmas-85mm-f1-2-dg-art-is-the-lightest-fast-85mm-at-half-canons-price/"
+        },
+        {
+          "date": "2026-09-08",
+          "brand": "Sigma",
+          "kind": "Lens",
+          "name": "20-60mm F2.8-4 DG | Contemporary",
+          "catalogId": "sigma-2060-e",
+          "highlights": [
+            "Wider-than-usual standard zoom for Sony E and L-Mount",
+            "About 385 g, aimed at hybrid photo and video shooters"
+          ],
+          "price": "$849",
+          "availability": "October 6, 2026 (US)",
+          "source": "https://press.sigmaphoto.com/product/09/sigma-announces-20-60mm-f2-8-4-dg-contemporary/"
+        },
+        {
+          "date": "2026-09-08",
+          "brand": "OM System",
+          "kind": "Camera",
+          "name": "OM System PEN",
+          "highlights": [
+            "20.4MP Micro Four Thirds with 5.5-stop IBIS",
+            "Cinema 4K 24p and 4K 30p, BLS-7 battery"
+          ],
+          "price": "$999.99 body, $1,099.99 with 14-42mm",
+          "availability": "Late October 2026",
+          "source": "https://petapixel.com/2026/09/08/om-system-revives-and-reimagines-the-legendary-pen/",
+          "note": "Not in the catalog yet: card slot not confirmed."
+        },
+        {
+          "date": "2026-09-08",
+          "brand": "Nikon",
+          "kind": "In development",
+          "name": "NIKKOR Z CINEMA T1.9 VV lenses",
+          "highlights": [
+            "Nine cinema primes made with RED, starting with a 50mm T1.9",
+            "Image circle covers sensors larger than full frame, with autofocus"
+          ],
+          "price": "Not announced",
+          "availability": "No release date yet",
+          "source": "https://nikonrumors.com/2026/09/08/nikon-announces-the-development-of-nine-new-nikkor-z-cinema-t1-9-vv-lenses.aspx/"
+        },
+        {
+          "date": "2026-09-08",
+          "brand": "Nikon",
+          "kind": "In development",
+          "name": "Nikon ZR firmware 2.00",
+          "highlights": [
+            "Announced in development, with Open Gate recording coming in 2027"
+          ],
+          "price": "Free",
+          "availability": "2027",
+          "source": "https://nikonrumors.com/2026/09/08/nikon-announces-the-development-of-nine-new-nikkor-z-cinema-t1-9-vv-lenses.aspx/"
+        },
+        {
+          "date": "2026-09-01",
+          "brand": "Sigma",
+          "kind": "Cinema",
+          "name": "Aizu Prime Line 21mm, 100mm and 125mm T1.3 LF",
+          "highlights": [
+            "Large-format cinema primes in PL and Sony E mount"
+          ],
+          "price": "¥1,980,000 each",
+          "availability": "November 2026",
+          "source": "https://www.minnacamera.com/mags/6364"
+        },
+        {
+          "date": "2026-09-04",
+          "brand": "Leica",
+          "kind": "Lens",
+          "name": "Summicron-M 66mm f/2 (limited edition)",
+          "highlights": [
+            "Modern take on the 1960s Elcan 66mm f/2, 660 units worldwide"
+          ],
+          "price": "Not stated",
+          "availability": "On sale from September 4 (Japan)",
+          "source": "https://www.minnacamera.com/mags/6364"
+        }
+      ]
+    }
+  ]
+}
