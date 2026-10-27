@@ -2,38 +2,59 @@
 // suggests star ratings. Everything runs on this PC; nothing is uploaded.
 //
 // What it looks at, per photo:
-//   sharpness   how crisp the sharpest part of the frame is (the subject, usually),
-//               so a soft background behind a sharp subject doesn't count against it
+//   subject     what the photo is of (a person, car, animal...), found by a small
+//               detection model (subject.js), so focus is judged where it matters
+//   sharpness   how crisp the subject is; without a subject, the sharpest part of
+//               the frame, so a soft background never counts against a photo
 //   exposure    share of blown-out highlights and crushed shadows, overall brightness
 //   look        a tiny fingerprint of the picture, to find bursts and near-duplicates
 // and then, across the folder: groups of similar shots taken within seconds of
 // each other, where only the best one keeps a good rating.
+import { ROTATION } from './previews.js';
 
-const W = 320; // analysis width: plenty for blur and exposure, and fast
+export const VERSION = 2; // bump when measurements change, so old ones are redone
+const MAX_W = 640; // the embedded preview's size: enough for focus, and fast
 
-// Grayscale (0-255) pixels of a bitmap, scaled to W wide.
-export function grayscale(bmp) {
-  const h = Math.max(1, Math.round((bmp.height / bmp.width) * W));
-  const canvas = new OffscreenCanvas(W, h);
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(bmp, 0, 0, W, h);
-  const rgba = ctx.getImageData(0, 0, W, h).data;
-  const gray = new Uint8ClampedArray(W * h);
-  for (let i = 0, j = 0; j < gray.length; i += 4, j++) gray[j] = (rgba[i] * 77 + rgba[i + 1] * 150 + rgba[i + 2] * 29) >> 8;
-  return { gray, w: W, h };
+// The bitmap turned the right way up (the previews are stored as the sensor saw them).
+export function upright(bmp, orientation) {
+  const rot = ROTATION[orientation] || 0;
+  if (!rot) return bmp;
+  const w = rot % 180 ? bmp.height : bmp.width, h = rot % 180 ? bmp.width : bmp.height;
+  const canvas = new OffscreenCanvas(w, h);
+  const ctx = canvas.getContext('2d');
+  ctx.translate(w / 2, h / 2);
+  ctx.rotate((rot * Math.PI) / 180);
+  ctx.drawImage(bmp, -bmp.width / 2, -bmp.height / 2);
+  return canvas.transferToImageBitmap();
 }
 
-// Sharpness: variance of the Laplacian (edge strength) in an 8x6 grid of tiles,
-// averaged over the 3 sharpest tiles.
-export function sharpness(gray, w, h, cols = 8, rows = 6) {
+// Grayscale (0-255) pixels of a bitmap, at most MAX_W wide.
+export function grayscale(bmp) {
+  const w = Math.min(MAX_W, bmp.width);
+  const h = Math.max(1, Math.round((bmp.height / bmp.width) * w));
+  const canvas = new OffscreenCanvas(w, h);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bmp, 0, 0, w, h);
+  const rgba = ctx.getImageData(0, 0, w, h).data;
+  const gray = new Uint8ClampedArray(w * h);
+  for (let i = 0, j = 0; j < gray.length; i += 4, j++) gray[j] = (rgba[i] * 77 + rgba[i + 1] * 150 + rgba[i + 2] * 29) >> 8;
+  return { gray, w, h };
+}
+
+// Sharpness: variance of the Laplacian (edge strength) in a grid of tiles over
+// `area` (fractions of the frame; the whole frame by default), averaged over the
+// 3 sharpest tiles.
+export function sharpness(gray, w, h, cols = 8, rows = 6, area = { x: 0, y: 0, w: 1, h: 1 }) {
+  const x0 = Math.max(1, Math.floor(area.x * w)), x1 = Math.min(w - 1, Math.ceil((area.x + area.w) * w));
+  const y0 = Math.max(1, Math.floor(area.y * h)), y1 = Math.min(h - 1, Math.ceil((area.y + area.h) * h));
   const n = cols * rows;
   const sum = new Float64Array(n), sq = new Float64Array(n), cnt = new Float64Array(n);
-  for (let y = 1; y < h - 1; y++) {
-    const ty = Math.min(rows - 1, Math.floor((y * rows) / h));
-    for (let x = 1; x < w - 1; x++) {
+  for (let y = y0; y < y1; y++) {
+    const ty = Math.min(rows - 1, Math.floor(((y - y0) * rows) / (y1 - y0)));
+    for (let x = x0; x < x1; x++) {
       const i = y * w + x;
       const lap = 4 * gray[i] - gray[i - 1] - gray[i + 1] - gray[i - w] - gray[i + w];
-      const t = ty * cols + Math.min(cols - 1, Math.floor((x * cols) / w));
+      const t = ty * cols + Math.min(cols - 1, Math.floor(((x - x0) * cols) / (x1 - x0)));
       sum[t] += lap; sq[t] += lap * lap; cnt[t]++;
     }
   }
@@ -66,10 +87,17 @@ export function fingerprint(gray, w, h) {
 
 export const distance = (a, b) => { let d = 0; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++; return d; };
 
-// Measurements for one photo from its preview bitmap.
-export function measure(bmp) {
+// Measurements for one photo from its upright preview bitmap and the subject
+// found in it (or null). `sharp` is the subject's sharpness when there is one.
+export function measure(bmp, subject = null) {
   const { gray, w, h } = grayscale(bmp);
-  return { sharp: Math.round(sharpness(gray, w, h)), ...exposure(gray), hash: fingerprint(gray, w, h) };
+  const frameSharp = Math.round(sharpness(gray, w, h));
+  // Up to 4x4 tiles on the subject, each at least 16 pixels across.
+  const tiles = (frac, size) => Math.max(1, Math.min(4, Math.floor((frac * size) / 16)));
+  const subjectSharp = subject ? Math.round(sharpness(gray, w, h, tiles(subject.box.w, w), tiles(subject.box.h, h), subject.box)) : null;
+  return {
+    v: VERSION, sharp: subjectSharp ?? frameSharp, frameSharp, subject, ...exposure(gray), hash: fingerprint(gray, w, h),
+  };
 }
 
 // "2026:10:17 13:05:45" -> seconds
@@ -98,7 +126,8 @@ export function suggest(items) {
     const reasons = [];
     let quality = pct(m.sharp);
     const soft = m.sharp < median * 0.35;
-    if (soft) reasons.push('Soft or blurry');
+    if (soft && m.subject && m.frameSharp >= median * 0.7) reasons.push('Focus missed the subject');
+    else if (soft) reasons.push(m.subject ? 'Subject is soft or blurry' : 'Soft or blurry');
     if (m.clipHi > 0.08) { quality -= 0.25; reasons.push(`Blown highlights (${Math.round(m.clipHi * 100)}%)`); }
     if (m.clipLo > 0.25) { quality -= 0.2; reasons.push('Very dark shadows'); }
     if (m.mean < 35) { quality -= 0.2; reasons.push('Very dark'); } else if (m.mean > 225) { quality -= 0.2; reasons.push('Very bright'); }
@@ -139,7 +168,7 @@ export function suggest(items) {
   for (const it of done) {
     const s = out[it.id];
     if (s.stars == null) s.stars = 1;
-    if (!s.reasons.length) s.reasons.push(s.stars >= 3 ? 'Sharp and well exposed' : 'Fine, nothing stands out');
+    if (!s.reasons.length) s.reasons.push(s.stars >= 3 ? (it.m.subject ? 'Sharp subject, well exposed' : 'Sharp and well exposed') : 'Fine, nothing stands out');
     delete s.quality;
   }
   return out;
@@ -150,7 +179,12 @@ export function suggest(items) {
 // stars auto-rating wrote, so a later run can tell them apart from your own.
 const KEY = 'gearcheck-autocull';
 const readAll = () => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; } };
-export const loadAnalysis = (folder) => readAll()[folder] || { measured: {}, applied: {} };
+export function loadAnalysis(folder) {
+  const saved = readAll()[folder] || {};
+  // Measurements from an older version are dropped, so they're redone the new way.
+  const measured = Object.fromEntries(Object.entries(saved.measured || {}).filter(([, m]) => m.v === VERSION));
+  return { measured, applied: saved.applied || {} };
+}
 export function saveAnalysis(folder, data) {
   try { localStorage.setItem(KEY, JSON.stringify({ ...readAll(), [folder]: data })); } catch {}
 }
