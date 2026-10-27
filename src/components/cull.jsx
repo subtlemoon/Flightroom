@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Icon, Modal } from './ui.jsx';
 import { decodeThumb, drawPhoto, geometry, imgUrl, loadFit, loadFull, loadThumb, prune, ROTATION, thumbFallbackUrl } from '../cull/previews.js';
-import { loadAnalysis, measure, saveAnalysis, suggest } from '../cull/analyze.js';
+import { loadAnalysis, measure, saveAnalysis, suggest, upright } from '../cull/analyze.js';
+import { measurePool } from '../cull/measure-pool.js';
+import { inFilter, STAR_FILTERS } from '../cull/filter.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zoomLevel } from '../cull/keys.js';
 
 // A photo in the culling view, as listed by the desktop side:
@@ -10,6 +12,8 @@ import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zo
 // inside the file arrives later with the photo's meta. Later features (exported,
 // sent to client) add fields to this record rather than a new list.
 export const photoRating = (p, meta) => p.rating ?? meta?.fileRating ?? 0;
+
+const filterName = (f) => ({ all: '', rated: 'rated', unrated: 'unrated', rejects: 'likely reject' })[f] ?? STAR_FILTERS.find(([k]) => k === f)?.[1].replace('Only ', '');
 
 const AHEAD = [1, 2, -1, 3, -2]; // neighbours decoded in advance, in this order
 const META_WINDOW = 20; // only files near the current one are opened, so a OneDrive
@@ -26,7 +30,7 @@ export function CullView({ store }) {
 
   const [list, setList] = useState(null); // { folder, photos } | { error }
   const [currentId, setCurrentId] = useState(null);
-  const [filter, setFilter] = useState('all'); // 'all' | 'rated' | 'unrated'
+  const [filter, setFilter] = useState('all'); // see inFilter
   const [meta, setMeta] = useState({});
   const [zoom, setZoom] = useState(null); // null | { cx, cy }
   const [toast, setToast] = useState('');
@@ -35,6 +39,7 @@ export function CullView({ store }) {
   const [auto, setAuto] = useState({ measured: {}, applied: {} });
   const [autoRun, setAutoRun] = useState(null); // { kind: 'analyze' | 'apply', done, total }
   const [autoOpen, setAutoOpen] = useState(false);
+  const [showSubject, setShowSubject] = useState(false); // while the pointer is on the suggestion
   const autoCancel = useRef(false);
   const pendingMeta = useRef(new Set());
   const positions = useRef();
@@ -54,7 +59,7 @@ export function CullView({ store }) {
   const photos = useMemo(() => {
     if (filter === 'all') return allPhotos;
     if (filter === 'rejects') return allPhotos.filter((p) => suggestions[p.id]?.stars === 1);
-    return allPhotos.filter((p) => isRated(p) === (filter === 'rated'));
+    return allPhotos.filter((p) => inFilter(filter, photoRating(p, meta[p.id])));
   }, [allPhotos, meta, filter, suggestions]);
   // The current photo is tracked by id so it stays put when the filter changes.
   // If it drops out of the filter (say, rated while showing Unrated), the photo
@@ -159,19 +164,31 @@ export function CullView({ store }) {
     autoCancel.current = false;
     setAutoRun({ kind: 'analyze', done: 0, total: todo.length });
     const started = performance.now();
-    for (let i = 0; i < todo.length && !autoCancel.current; i += 12) {
-      const batch = todo.slice(i, i + 12);
+    const pool = measurePool();
+    // Photos stream through the workers a few at a time; metadata is read in batches.
+    const BATCH = pool.size * 6;
+    for (let i = 0; i < todo.length && !autoCancel.current; i += BATCH) {
+      const batch = todo.slice(i, i + BATCH);
       const m = await bridge.meta(batch.map((p) => p.id));
       if (!m.error) setMeta((old) => ({ ...old, ...m }));
       await Promise.all(batch.map(async (p) => {
+        const orientation = m[p.id]?.orientation;
         try {
-          const bmp = await decodeThumb(p);
-          measured[p.id] = { ...measure(bmp), takenAt: m[p.id]?.takenAt };
-          bmp.close();
-        } catch {}
+          measured[p.id] = { ...(await pool.measure(await decodeThumb(p), orientation)), takenAt: m[p.id]?.takenAt };
+        } catch {
+          // The worker couldn't do it: measure here, on the whole frame.
+          try {
+            const raw = await decodeThumb(p);
+            const bmp = upright(raw, orientation);
+            measured[p.id] = { ...measure(bmp), takenAt: m[p.id]?.takenAt };
+            if (bmp !== raw) bmp.close();
+            raw.close();
+          } catch {}
+        }
       }));
       setAutoRun((r) => r && { ...r, done: Math.min(todo.length, i + batch.length) });
     }
+    pool.close();
     console.log(`[auto-rate] measured ${todo.length} photos in ${Math.round(performance.now() - started)} ms`);
     setAuto((a) => { const next = { ...a, measured }; saveAnalysis(dir, next); return next; });
     setAutoRun(null);
@@ -211,7 +228,7 @@ export function CullView({ store }) {
         if (sug && autoMayRate(photo) && !e.repeat) {
           e.preventDefault();
           rate(photo, sug.stars, { byAuto: true });
-          const stays = filter === 'all' || filter === 'rejects' || (sug.stars > 0) === (filter === 'rated');
+          const stays = inFilter(filter, sug.stars);
           if (advance && stays) go(index + 1);
         }
         return;
@@ -227,7 +244,7 @@ export function CullView({ store }) {
         if (!e.repeat && photo) {
           rate(photo, r);
           // A photo that leaves the current filter is replaced by the next one anyway.
-          const stays = filter === 'all' || (r > 0) === (filter === 'rated');
+          const stays = inFilter(filter, r);
           if (advance && stays) go(index + 1);
         }
         return;
@@ -273,6 +290,13 @@ export function CullView({ store }) {
             </button>
           ))}
         </div>
+        <select className={`cull-stars${filter.startsWith('stars:') ? ' on' : ''}`} value={filter.startsWith('stars:') ? filter : ''}
+          onChange={(e) => setFilter(e.target.value || 'all')} title="Show photos by star rating">
+          <option value="">Stars…</option>
+          {STAR_FILTERS.map(([k, label]) => (
+            <option key={k} value={k}>{label} ({allPhotos.filter((p) => inFilter(k, photoRating(p, meta[p.id]))).length})</option>
+          ))}
+        </select>
         <div className="cull-stats muted">
           {list?.loading ? 'Reading folder…' : `${photos.length ? index + 1 : 0} of ${photos.length}`}
         </div>
@@ -288,14 +312,16 @@ export function CullView({ store }) {
 
       {photo ? (
         <>
-          <Stage photo={photo} meta={curMeta} photos={photos} index={index} metaById={meta} zoom={zoom} setZoom={setZoom} scale={zoomPct / 100}>
+          <Stage photo={photo} meta={curMeta} photos={photos} index={index} metaById={meta} zoom={zoom} setZoom={setZoom} scale={zoomPct / 100}
+            subject={showSubject ? auto.measured[photo.id]?.subject?.box : null}>
             <div className="stage-top">
               <span className="stage-name">{photo.name}{photo.raw && photo.jpeg && <span className="pill-mini">RAW+JPEG</span>}</span>
               <ShotInfo meta={curMeta} />
               {zoom && <span className="pill-mini zoom">{zoomPct}%</span>}
             </div>
             <div className="stage-bottom">
-              {curSug && <Suggestion sug={curSug} rating={curRating} applied={auto.applied[photo.id]} mayRate={autoMayRate(photo)} onAccept={() => rate(photo, curSug.stars, { byAuto: true })} />}
+              {curSug && <Suggestion sug={curSug} rating={curRating} applied={auto.applied[photo.id]} mayRate={autoMayRate(photo)} onAccept={() => rate(photo, curSug.stars, { byAuto: true })}
+                subject={!!auto.measured[photo.id]?.subject} onShowSubject={setShowSubject} />}
               <Stars value={curRating} onRate={(r) => rate(photo, r)} keys={keys} />
             </div>
           </Stage>
@@ -303,7 +329,7 @@ export function CullView({ store }) {
         </>
       ) : (
         <div className="hero-empty">
-          <h2>{list?.loading ? 'Reading folder…' : allPhotos.length ? `No ${filter} photos` : 'No photos in this folder'}</h2>
+          <h2>{list?.loading ? 'Reading folder…' : allPhotos.length ? `No ${filterName(filter)} photos` : 'No photos in this folder'}</h2>
           {!list?.loading && (allPhotos.length
             ? <button className="btn" onClick={() => setFilter('all')}>Show all {allPhotos.length} photos</button>
             : <p className="muted">GearCheck shows NEF, other RAW files and JPEGs. Pick another folder to start culling.</p>)}
@@ -416,7 +442,7 @@ function FolderTree({ parent, opened, stats, bridge, onOpen, onForget }) {
 }
 
 // The auto-rate suggestion for the photo on screen, above the stars.
-function Suggestion({ sug, rating, applied, mayRate, onAccept }) {
+function Suggestion({ sug, rating, applied, mayRate, onAccept, subject, onShowSubject }) {
   const stars = '★'.repeat(sug.stars);
   const reason = sug.reasons[0];
   let label, action = null;
@@ -428,8 +454,9 @@ function Suggestion({ sug, rating, applied, mayRate, onAccept }) {
     action = <button className="btn btn-sm" onClick={onAccept} onMouseDown={(e) => e.preventDefault()}>Accept <kbd>Enter</kbd></button>;
   }
   return (
-    <div className={`suggestion${sug.stars === 1 ? ' reject' : ''}`}>
+    <div className={`suggestion${sug.stars === 1 ? ' reject' : ''}`} onMouseEnter={() => onShowSubject(true)} onMouseLeave={() => onShowSubject(false)}>
       <span className="suggestion-text"><span>{label}</span><span className="suggestion-why">{reason}{sug.reasons.length > 1 ? ` · ${sug.reasons.slice(1).join(' · ')}` : ''}</span></span>
+      {subject && <span className="suggestion-subject" title="Focus was checked on this part of the photo">Subject</span>}
       {action}
     </div>
   );
@@ -462,7 +489,8 @@ function AutoRatePanel({ photos, measuredCount, suggestions, run, applicable, ha
         <>
           <p>GearCheck looks at each photo's built-in preview and suggests stars:</p>
           <ul className="auto-list">
-            <li><b>Sharpness:</b> soft focus and motion blur, judged on the sharpest part of the frame, so a blurred background is fine.</li>
+            <li><b>Subject:</b> a small AI model finds what the photo is of (a kart, car, bike, person, animal) and focus is judged on that. Hover a suggestion to see what it picked.</li>
+            <li><b>Sharpness:</b> missed focus and motion blur on the subject. A blurred background is fine. Without a clear subject, the sharpest part of the frame counts.</li>
             <li><b>Exposure:</b> blown highlights, crushed shadows, very dark or bright frames.</li>
             <li><b>Bursts:</b> similar shots taken seconds apart. The best one keeps its stars, and the rest are marked as likely rejects.</li>
           </ul>
@@ -518,7 +546,7 @@ function Stars({ value, onRate, keys }) {
 
 // The big photo. Shows the small preview instantly, swaps in the sharp one as soon
 // as it's decoded, and loads the full-resolution preview only when zoomed in.
-function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, scale, children }) {
+function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, scale, subject, children }) {
   const wrapRef = useRef();
   const canvasRef = useRef();
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -620,9 +648,17 @@ function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, scale, chi
       <canvas ref={canvasRef} style={{ width: size.w, height: size.h }}
         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} />
       {!bmp && <div className="stage-loading">Loading preview…</div>}
+      {subject && bmp && <SubjectBox box={subject} g={geometry(W, H, bmp, meta, view)} W={W} H={H} dpr={dpr} />}
       {children}
     </div>
   );
+}
+
+// Outline of the subject auto-rating found (box in fractions of the upright photo).
+function SubjectBox({ box, g, W, H, dpr }) {
+  const x = (W / 2 + (box.x * g.ow - g.cx) * g.s) / dpr;
+  const y = (H / 2 + (box.y * g.oh - g.cy) * g.s) / dpr;
+  return <div className="subject-box" style={{ left: x, top: y, width: (box.w * g.ow * g.s) / dpr, height: (box.h * g.oh * g.s) / dpr }} />;
 }
 
 // Strip of thumbnails along the bottom. Only the cells on screen exist, so a

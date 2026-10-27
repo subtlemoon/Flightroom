@@ -73,6 +73,7 @@ const jpegResponse = (buf) => new Response(buf, {
 //                                 none, and the window makes one and sends it back.
 async function handleImage(req) {
   const url = new URL(req.url);
+  if (url.host === 'app') return appFile(url.pathname);
   const p = url.searchParams.get('p');
   if (!inOpenFolder(p)) return new Response(null, { status: 403 });
   try {
@@ -88,6 +89,22 @@ async function handleImage(req) {
     const buf = lib.stripExif(await readJpeg(p, info.thumb));
     fsp.mkdir(thumbDir(), { recursive: true }).then(() => fsp.writeFile(cached, buf)).catch(() => {});
     return jpegResponse(buf);
+  } catch {
+    return new Response(null, { status: 404 });
+  }
+}
+
+// gcimg://app/vision/<file>  the subject detector (model + its WebAssembly runtime),
+// copied into dist/vision at build time. Served here because the window can't
+// fetch file:// URLs.
+const VISION_TYPES = { '.js': 'text/javascript', '.wasm': 'application/wasm', '.tflite': 'application/octet-stream' };
+async function appFile(pathname) {
+  const m = pathname.match(/^\/vision\/([\w.-]+)$/);
+  const type = m && VISION_TYPES[path.extname(m[1])];
+  if (!type) return new Response(null, { status: 404 });
+  try {
+    const buf = await fsp.readFile(path.join(__dirname, '../dist/vision', m[1]));
+    return new Response(buf, { headers: { 'content-type': type, 'access-control-allow-origin': '*', 'cache-control': 'max-age=31536000' } });
   } catch {
     return new Response(null, { status: 404 });
   }
