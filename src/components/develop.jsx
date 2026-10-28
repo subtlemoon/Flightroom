@@ -3,6 +3,7 @@ import { bridge as app } from '../bridge.js';
 import { Icon, Modal } from './ui.jsx';
 import { Filmstrip, photoRating } from './cull.jsx';
 import { imgUrl, ROTATION } from '../cull/previews.js';
+import { inFilter, STAR_FILTERS } from '../cull/filter.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey } from '../cull/keys.js';
 import { COLORS, COLOR_HUES, LINEAR_CURVE, SECTIONS, SLIDER, defaults, formatValue, fromXmp, isEdited, toXmp } from '../develop/params.js';
 import { asShotTempTint } from '../develop/color.js';
@@ -43,9 +44,16 @@ export function DevelopView({ store, onCull }) {
   const positions = useRef();
   positions.current = state.cull?.positions || {};
 
-  const photos = list?.photos || [];
+  const [filter, setFilter] = useState('all'); // see inFilter
+  const allPhotos = list?.photos || [];
+  const photos = useMemo(() => (filter === 'all' ? allPhotos : allPhotos.filter((p) => inFilter(filter, photoRating(p, meta[p.id])))),
+    [allPhotos, meta, filter]);
+  // The current photo is tracked by id. If it drops out of the star filter
+  // (rated lower), the one now in its place is shown.
+  const lastIndex = useRef(0);
   let index = photos.findIndex((p) => p.id === currentId);
-  if (index < 0) index = 0;
+  if (index < 0) index = Math.min(lastIndex.current, Math.max(0, photos.length - 1));
+  lastIndex.current = index;
   const photo = photos[index];
 
   // Same folder and position as the Culling tab.
@@ -64,9 +72,10 @@ export function DevelopView({ store, onCull }) {
 
   const lastPos = useRef(null);
   useEffect(() => {
-    if (list?.folder && index >= 0 && photo) {
-      lastPos.current = [list.folder, index];
-      const t = setTimeout(() => actions.setCullPosition(list.folder, index), 400);
+    const pos = photo ? allPhotos.findIndex((p) => p.id === photo.id) : -1;
+    if (list?.folder && pos >= 0) {
+      lastPos.current = [list.folder, pos];
+      const t = setTimeout(() => actions.setCullPosition(list.folder, pos), 400);
       return () => clearTimeout(t);
     }
   }, [photo?.id, list?.folder]);
@@ -228,6 +237,13 @@ export function DevelopView({ store, onCull }) {
           <div className="eyebrow">Develop</div>
           <div className="cull-folder" title={list?.folder || folder}>{photo ? photo.name : (list?.folder || folder).split(/[\\/]/).pop()}</div>
         </div>
+        <select className={`cull-stars${filter !== 'all' ? ' on' : ''}`} value={filter === 'all' ? '' : filter}
+          onChange={(e) => { setFilter(e.target.value || 'all'); e.target.blur(); }} title="Show photos by star rating">
+          <option value="">{filter === 'all' ? 'Stars…' : 'All photos'}</option>
+          {STAR_FILTERS.map(([k, label]) => (
+            <option key={k} value={k}>{label} ({allPhotos.filter((p) => inFilter(k, photoRating(p, meta[p.id]))).length})</option>
+          ))}
+        </select>
         <div className="cull-stats muted">{list?.loading ? 'Reading folder…' : `${photos.length ? index + 1 : 0} of ${photos.length}`}</div>
         <div className="dev-tools">
           {onCull && <button className="btn btn-sm btn-ghost" onClick={onCull} title="Back to Culling (G)"><Icon name="photo" size={14} />Culling</button>}
@@ -249,7 +265,7 @@ export function DevelopView({ store, onCull }) {
             <DevelopStage key={photo.id} photo={photo} meta={curMeta} info={info} s={shown} cropMode={crop} clip={clip}
               onCrop={(c) => update({ crop: c })} apiRef={stageApi} nextPhoto={photos[index + 1]} before={before} />
           ) : (
-            <div className="hero-empty dev-msg"><h2>{list?.loading ? 'Reading folder…' : 'No photos in this folder'}</h2></div>
+            <div className="hero-empty dev-msg"><h2>{list?.loading ? 'Reading folder…' : filter !== 'all' && allPhotos.length ? 'No photos with those stars' : 'No photos in this folder'}</h2></div>
           )}
           <Filmstrip photos={photos} index={index} meta={meta} suggestions={{}} onSelect={go} requestMeta={requestMeta} />
         </div>
@@ -264,7 +280,7 @@ export function DevelopView({ store, onCull }) {
         </aside>
       </div>
       {toast && <div className="cull-toast">{toast}</div>}
-      {exporting && <ExportModal photo={photo} photos={photos} folder={list?.folder} info={info} s={s} settingsCache={settingsCache.current}
+      {exporting && <ExportModal photo={photo} photos={allPhotos} folder={list?.folder} info={info} s={s} settingsCache={settingsCache.current}
         onClose={() => setExporting(null)} onDone={(msg) => { setExporting(null); setToast(msg); }} />}
     </div>
   );
@@ -339,9 +355,10 @@ function DevelopStage({ photo, meta, info, s, cropMode, clip, onCrop, apiRef, ne
   // Sharper pixels for the visible part when zoomed in.
   useEffect(() => {
     const r = rendererRef.current;
+    // A new id also cancels a fetch still on its way from before an unzoom.
+    const id = ++hiReq.current;
     if (!r || !ready || !geo || !frame) return;
     if (!view || cropMode) { r.clearHi(); return; }
-    const id = ++hiReq.current;
     const t = setTimeout(async () => {
       const toPhoto = (x, y) => {
         const o2f = outToFrame(W, H, frame, v);
@@ -369,7 +386,7 @@ function DevelopStage({ photo, meta, info, s, cropMode, clip, onCrop, apiRef, ne
         const rect = [x0 / geo.sw, y0 / geo.sh, (x1 - x0) / geo.sw, (y1 - y0) / geo.sh];
         const inset = [3 / geo.sw, 3 / geo.sh];
         rendererRef.current.setHi(f, rect, [rect[0] + inset[0], rect[1] + inset[1], rect[2] - 2 * inset[0], rect[3] - 2 * inset[1]]);
-        draw();
+        drawRef.current(); // the current view, not the one this fetch started from
       } catch {}
     }, 120);
     return () => clearTimeout(t);
@@ -383,6 +400,9 @@ function DevelopStage({ photo, meta, info, s, cropMode, clip, onCrop, apiRef, ne
     if (c.height !== H) c.height = H;
     r.render(info, s, geo, frame, outToFrame(W, H, frame, v), { showClip: clip });
   };
+
+  const drawRef = useRef(draw);
+  drawRef.current = draw;
 
   // Redraw on any change, at most once per frame.
   const raf = useRef(0);
