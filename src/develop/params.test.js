@@ -8,14 +8,16 @@ const asShot = { temp: 5450, tint: 15 };
 describe('develop settings in the sidecar', () => {
   it('round-trips every panel through Lightroom names', () => {
     const s = {
-      ...defaults(asShot), profile: 'camera', bw: true, wb: 'Tungsten', temp: 2850, tint: 0,
+      ...defaults(asShot), profile: 'camera', toneMap: 'sigmoid', sigmoidContrast: 1.85, sigmoidSkew: -0.24, bw: true, wb: 'Tungsten', temp: 2850, tint: 0,
       exposure: 0.35, gShadowHue: 220, gShadowSat: 40, gBalance: -20, perspVertical: 30, perspScale: 90,
       distortion: -12, removeCA: true, vignetteStyle: 3, grain: 25, redHue: 10, gray4: -60, refineSat: 40,
       curveR: [[0, 0], [128, 150], [255, 255]], constrainCrop: true, crop: { left: 0.1, top: 0.1, right: 0.9, bottom: 0.9, angle: 2 },
     };
-    const { set, seqs } = toXmp(s);
+    const { set, seqs, own } = toXmp(s);
+    expect(own).toMatchObject({ ToneMap: 'sigmoid', SigmoidContrast: '1.85', SigmoidSkew: '-0.24', AgxContrast: '' });
+    expect(set.SigmoidContrast).toBeUndefined();
     expect(set).toMatchObject({ CameraProfile: 'Camera Standard', ConvertToGrayscale: 'True', WhiteBalance: 'Tungsten', SplitToningShadowHue: '220', ColorGradeMidtoneHue: '0', PerspectiveVertical: '+30', PerspectiveScale: '90', AutoLateralCA: '1', PostCropVignetteStyle: '3', GrayMixerAqua: '-60', CropConstrainToWarp: '1' });
-    const back = fromXmp(set, seqs, asShot);
+    const back = fromXmp(set, seqs, asShot, own);
     for (const k of Object.keys(s)) {
       if (k === 'crop') expect(back.crop.left).toBeCloseTo(0.1);
       else expect(back[k]).toEqual(s[k]);

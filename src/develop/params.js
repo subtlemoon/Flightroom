@@ -2,7 +2,9 @@
 // stored in the .xmp sidecar using Lightroom's own names (the crs: namespace),
 // so Lightroom picks the edits up when it imports or re-reads the photo.
 import { masksFromJson, masksToCrs, masksToJson } from './masks.js';
+import { TONE_MAPPERS } from './tonemap.js';
 
+export { TONE_MAPPERS };
 export const COLORS = ['Red', 'Orange', 'Yellow', 'Green', 'Aqua', 'Blue', 'Purple', 'Magenta'];
 export const COLOR_HUES = [0, 30, 60, 120, 180, 240, 270, 300]; // band centres, degrees
 
@@ -13,7 +15,7 @@ const S = (key, label, crs, min, max, step = 1, def = 0, extra = {}) => ({ key, 
 // values drawn by their own controls (colour wheels, mixer); `keys` are the
 // other settings a section owns (for its reset button).
 export const SECTIONS = [
-  { id: 'basic', title: 'Basic', keys: ['wb', 'temp', 'tint', 'profile', 'bw'], groups: [
+  { id: 'basic', title: 'Basic', keys: ['wb', 'temp', 'tint', 'profile', 'bw', 'toneMap'], groups: [
     { title: 'White balance', sliders: [
       S('temp', 'Temp', 'Temperature', 2000, 50000, 50, null, { log: true, gradient: 'temp' }),
       S('tint', 'Tint', 'Tint', -150, 150, 1, null, { gradient: 'tint' }),
@@ -25,6 +27,18 @@ export const SECTIONS = [
       S('shadows', 'Shadows', 'Shadows2012', -100, 100),
       S('whites', 'Whites', 'Whites2012', -100, 100),
       S('blacks', 'Blacks', 'Blacks2012', -100, 100),
+    ] },
+    { title: 'Tone mapping', sliders: [
+      S('sigmoidContrast', 'Contrast', 'SigmoidContrast', 0.5, 3.5, 0.05, 1.5, { decimals: 2, tm: 'sigmoid' }),
+      S('sigmoidSkew', 'Skew', 'SigmoidSkew', -1, 1, 0.02, 0, { decimals: 2, tm: 'sigmoid' }),
+      S('sigmoidHue', 'Preserve Hue', 'SigmoidHuePreservation', 0, 100, 1, 0, { tm: 'sigmoid' }),
+      S('agxContrast', 'Contrast', 'AgxContrast', 0.5, 2, 0.05, 1, { decimals: 2, tm: 'agx' }),
+      S('agxSat', 'Saturation', 'AgxSaturation', 0.5, 2, 0.05, 1, { decimals: 2, tm: 'agx' }),
+      S('agxDesat', 'Highlight Roll-off', 'AgxHighlightRolloff', 0, 100, 1, 35, { tm: 'agx' }),
+      S('filmicWhiteEv', 'White EV', 'FilmicWhiteEV', 1, 10, 0.1, 4, { decimals: 1, tm: 'filmic' }),
+      S('filmicBlackEv', 'Black EV', 'FilmicBlackEV', -14, -2, 0.1, -8, { decimals: 1, tm: 'filmic' }),
+      S('filmicContrast', 'Contrast', 'FilmicContrast', 0.5, 2.5, 0.05, 1.3, { decimals: 2, tm: 'filmic' }),
+      S('filmicHue', 'Preserve Hue', 'FilmicHuePreservation', 0, 100, 1, 100, { tm: 'filmic' }),
     ] },
     { title: 'Presence', sliders: [
       S('texture', 'Texture', 'Texture', -100, 100),
@@ -166,7 +180,7 @@ export function defaults(asShot) {
   return { ...d };
 }
 function makeDefaults(asShot) {
-  const s = { wb: 'As Shot', profile: 'adobe', bw: false, removeCA: false, lensProfile: false, vignetteStyle: 1, constrainCrop: false, crop: null, masks: [], aiDenoise: 0 };
+  const s = { wb: 'As Shot', profile: 'adobe', toneMap: 'none', bw: false, removeCA: false, lensProfile: false, vignetteStyle: 1, constrainCrop: false, crop: null, masks: [], aiDenoise: 0 };
   for (const [k] of CURVE_CHANNELS) s[k] = LINEAR_CURVE;
   for (const sl of SLIDERS) s[sl.key] = sl.def;
   s.temp = asShot.temp;
@@ -198,12 +212,17 @@ export function fromXmp(crs, curves, asShot, own = {}) {
   const s = defaults(asShot);
   const num = (k) => (crs[k] != null && crs[k] !== '' && Number.isFinite(Number(crs[k])) ? Number(crs[k]) : null);
   for (const sl of SLIDERS) {
-    const v = num(sl.crs);
+    // Tone mapper sliders are Flightroom's own, kept out of Lightroom's settings.
+    const raw = sl.tm ? own[sl.crs] : crs[sl.crs];
+    const v = raw != null && raw !== '' && Number.isFinite(Number(raw)) ? Number(raw) : null;
     if (v != null) s[sl.key] = Math.min(sl.max, Math.max(sl.min, v));
   }
   if (/^Camera /i.test(crs.CameraProfile || '')) s.profile = 'camera';
   // AgX is Flightroom's own; Lightroom sees Adobe Color.
   if (own.Profile === 'agx') s.profile = 'agx';
+  const tm = own.ToneMap;
+  if (TONE_MAPPERS.some(([k]) => k === tm)) s.toneMap = tm;
+  else if (s.profile === 'agx') s.toneMap = 'agx';
   s.bw = crs.ConvertToGrayscale === 'True';
   s.removeCA = num('AutoLateralCA') === 1;
   s.lensProfile = num('LensProfileEnable') === 1;
@@ -246,9 +265,11 @@ export function toXmp(s) {
     LensProfileEnable: s.lensProfile ? '1' : '0',
     PostCropVignetteStyle: String(s.vignetteStyle || 1),
   };
+  const ownTm = {};
   for (const sl of SLIDERS) {
     const v = s[sl.key];
-    if (sl.key === 'temp') set[sl.crs] = String(Math.round(v));
+    if (sl.tm) ownTm[sl.crs] = s.toneMap === sl.tm ? Number(v).toFixed(sl.decimals || 0) : '';
+    else if (sl.key === 'temp') set[sl.crs] = String(Math.round(v));
     else if (sl.key === 'sharpenRadius') set[sl.crs] = signed(v, 1);
     else set[sl.crs] = sl.min >= 0 ? String(Math.round(v)) : signed(v, sl.decimals || 0);
   }
@@ -275,7 +296,18 @@ export function toXmp(s) {
   // Masks: Flightroom's own copy, plus Lightroom's mask records. Only written
   // once Flightroom has made masks for the photo, so Lightroom's own masks
   // stay untouched otherwise.
-  const out = { set, remove, seqs, own: { Masks: masksToJson(s.masks), Denoise: s.aiDenoise ? String(s.aiDenoise) : '', Profile: s.profile === 'agx' ? 'agx' : '' } };
+  const out = {
+    set,
+    remove,
+    seqs,
+    own: {
+      Masks: masksToJson(s.masks),
+      Denoise: s.aiDenoise ? String(s.aiDenoise) : '',
+      Profile: s.profile === 'agx' ? 'agx' : '',
+      ToneMap: s.toneMap && s.toneMap !== 'none' ? s.toneMap : '',
+      ...ownTm,
+    },
+  };
   if (s.masks?.length || s.masksOwned) out.xml = { ...masksToCrs(s.masks), ...(s.masks?.length ? { MaskGroupBasedCorrections: '' } : {}) };
   return out;
 }

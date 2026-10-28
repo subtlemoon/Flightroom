@@ -22,7 +22,7 @@ export const MASK_OPTIONS_DEFAULT = { resetAuto: true, open: { tone: true, color
 
 const hexRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
 /** What the renderer needs to show a mask on top of the photo. */
-export const maskView = (m, o) => (m ? { id: m.id, color: hexRgb(o.color), opacity: o.opacity / 100, style: o.style, line: o.line } : null);
+export const maskView = (m, o) => (m ? { id: m.id, color: hexRgb(o.color), opacity: o.opacity / 100, style: o.style, line: o.line, ai: m.parts.some((p) => p.type === 'ai') } : null);
 /** Brush radius, as a fraction of the photo's long edge. */
 export const brushRadius = (b) => Math.max(0.001, b.size * 0.0015);
 

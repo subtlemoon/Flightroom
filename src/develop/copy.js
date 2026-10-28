@@ -10,6 +10,7 @@ const sliders = (prefix) => Object.keys(SLIDER).filter((k) => k.startsWith(prefi
 export const COPY_GROUPS = [
   ['wb', 'White Balance', ['wb', 'temp', 'tint'], true],
   ['tone', 'Basic Tone', ['exposure', 'contrast', 'highlights', 'shadows', 'whites', 'blacks'], true],
+  ['tonemap', 'Tone Mapping', ['toneMap', ...sliders('sigmoid'), ...sliders('agx'), ...sliders('filmic')], true],
   ['presence', 'Presence', ['texture', 'clarity', 'dehaze', 'vibrance', 'saturation'], true],
   ['profile', 'Profile and Treatment', ['profile', 'bw'], true],
   ['curve', 'Tone Curve', keysOf('curve'), true],
