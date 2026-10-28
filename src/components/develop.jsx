@@ -537,7 +537,7 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
   useEffect(() => {
     if (!info) return;
     if (dn === null) { setDn(dnWant); return; }
-    const t = setTimeout(() => setDn(dnWant), 250);
+    const t = setTimeout(() => setDn(dnWant), 150);
     return () => clearTimeout(t);
   }, [!!info, dnWant]);
 
@@ -550,6 +550,7 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
       rendererRef.current.setSource(frame);
       grid.current = sampleGrid(frame);
       setReady(true);
+      drawRef.current(); // a new source (AI Denoise amount) with nothing else changed still shows now
       if (nextPhoto?.raw) fetch(app.develop.imageUrl(nextPhoto, fitEdge(), true)).catch(() => {});
     }, (err) => live && setError(String(err.message || err)));
     return () => { live = false; };
