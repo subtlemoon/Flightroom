@@ -9,7 +9,8 @@ import { LOCAL_GROUPS, MAX_MASKS, PART_LABEL, PART_TYPES, maskRaster, newId, new
 
 export const OVERLAY_STYLES = [['color', 'Color overlay'], ['both', 'Color and outline'], ['outline', 'Outline only'], ['matte', 'White on black'], ['image', 'Image on black']];
 const OVERLAY_COLORS = ['#ff3b5c', '#ff9f1a', '#ffe14d', '#3ddc84', '#3db8ff', '#8b7bff', '#ffffff'];
-export const OVERLAY_DEFAULT = { show: true, color: '#ff3b5c', opacity: 50, style: 'color', line: 2 };
+// The colour stays off the main photo unless turned on; the preview always shows it.
+export const OVERLAY_DEFAULT = { show: false, color: '#ff3b5c', opacity: 50, style: 'both', line: 2 };
 export const BRUSH_DEFAULT = { size: 20, feather: 50, flow: 100, erase: false };
 
 const hexRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
@@ -231,7 +232,7 @@ function OverlaySettings({ overlay, setOverlay }) {
   return (
     <div className="mask-overlay-set">
       <div className="dev-group-title">Overlay</div>
-      <label className="dev-check"><input type="checkbox" checked={overlay.show} onChange={(e) => setOverlay({ show: e.target.checked })} />Show on the photo (O)</label>
+      <label className="dev-check"><input type="checkbox" checked={overlay.show} onChange={(e) => setOverlay({ show: e.target.checked })} />Also show on the main photo (O)</label>
       <div className="dev-line dev-wb"><span className="muted">Style</span>
         <Dropdown value={overlay.style} options={OVERLAY_STYLES.map(([value, label]) => ({ value, label }))} onChange={(v) => setOverlay({ style: v })} />
       </div>

@@ -391,10 +391,16 @@ void main() {
   d = clamp(d, 0.0, 1.0);
   // The selected mask on top: a colour, its outline, or the mask itself.
   if (uMaskView >= 0.0) {
-    float edge = 1.0 - smoothstep(0.0, max(fwidth(shownW), 1e-4) * uMaskLine, abs(shownW - 0.5));
+    // The outline is the mask's halfway line; the fainter lines either side
+    // show where its feathering starts and ends.
+    float fw = max(fwidth(shownW), 1e-4) * uMaskLine;
+    float edge = 1.0 - smoothstep(0.0, fw, abs(shownW - 0.5));
+    float soft = max(1.0 - smoothstep(0.0, fw * 0.7, abs(shownW - 0.08)), 1.0 - smoothstep(0.0, fw * 0.7, abs(shownW - 0.92))) * 0.55;
+    soft *= step(0.002, fwidth(shownW)); // only where the mask actually fades
+    float lines = max(edge, soft);
     if (uMaskStyle < 0.5) d = mix(d, uMaskColor, shownW * uMaskOpacity);
-    else if (uMaskStyle < 1.5) d = mix(mix(d, uMaskColor, shownW * uMaskOpacity * 0.6), uMaskColor, edge);
-    else if (uMaskStyle < 2.5) d = mix(d, uMaskColor, edge * max(uMaskOpacity, 0.35));
+    else if (uMaskStyle < 1.5) d = mix(mix(d, uMaskColor, shownW * uMaskOpacity * 0.6), uMaskColor, lines);
+    else if (uMaskStyle < 2.5) d = mix(d, uMaskColor, lines * max(uMaskOpacity, 0.35));
     else if (uMaskStyle < 3.5) d = vec3(shownW);
     else d *= shownW;
   }

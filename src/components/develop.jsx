@@ -48,7 +48,7 @@ export function DevelopView({ store, onCull }) {
   const [clipboard, setClipboard] = useState(null);
   const [picking, setPicking] = useState(false); // white balance selector
   const [sel, setSelState] = useState(null); // selected mask and part: { mask, part }
-  const [overlay, setOverlay] = useStored('flightroom-mask-overlay', OVERLAY_DEFAULT);
+  const [overlay, setOverlay] = useStored('flightroom-mask-overlay-2', OVERLAY_DEFAULT);
   const [brush, setBrush] = useStored('flightroom-brush', BRUSH_DEFAULT);
   const pendingMeta = useRef(new Set());
   const settingsCache = useRef(new Map()); // id -> settings (this session)
@@ -261,7 +261,7 @@ export function DevelopView({ store, onCull }) {
       if (s && free && !before) {
         if (k === 'k') { acts.create('brush'); return; }
         if (k === 'm') { acts.create(e.shiftKey ? 'radial' : 'linear'); return; }
-        if (k === 'o' && selMask) { setOverlay({ show: !overlay.show }); return; }
+        if (k === 'o') { setOverlay({ show: !overlay.show }); return; }
         if ((e.key === '[' || e.key === ']') && selPart?.type === 'brush') {
           setBrush({ size: Math.min(100, Math.max(1, brush.size + (e.key === ']' ? 5 : -5))) });
           return;
@@ -318,6 +318,7 @@ export function DevelopView({ store, onCull }) {
           <button className="icon-btn" title="Undo (Ctrl+Z)" onClick={() => undo()} disabled={!s}><Icon name="undo" size={16} /></button>
           <button className="icon-btn" title="Redo (Ctrl+Y)" onClick={() => undo(true)} disabled={!s}><Icon name="redo" size={16} /></button>
           <button className={`btn btn-sm${before ? ' on' : ''}`} title="Before / after (\)" onClick={() => setBefore((b) => !b)} disabled={!s}><Icon name="compare" size={14} />{before ? 'Before' : 'After'}</button>
+          <button className={`btn btn-sm${overlay.show ? ' on' : ''}`} title="Show the selected mask on the main photo (O)" onClick={() => setOverlay({ show: !overlay.show })} disabled={!s}><Icon name="mask" size={14} />Overlay</button>
           <button className={`btn btn-sm${crop ? ' btn-primary' : ''}`} title="Crop and straighten (R)" onClick={() => setCrop((c) => !c)} disabled={!s}><Icon name="crop" size={14} />{crop ? 'Done' : 'Crop'}</button>
           <button className="btn btn-sm btn-primary" onClick={() => setExporting({})} disabled={!s}><Icon name="export" size={14} />Export</button>
         </div>
