@@ -12,6 +12,8 @@ const GUIDE_EDGE = 320;
 export const LOOKS = {
   adobe: { exposure: 1.05, contrast: 0.4, saturation: 0.9 },
   camera: { exposure: 0.95, contrast: 0.4, saturation: 1.25 },
+  // darktable's AgX: its film-like curve, with a little contrast and colour on top as darktable sets it.
+  agx: { exposure: 1.0, contrast: 0.3, saturation: 1.3, agx: true },
 };
 
 export function parseFrame(buf) {
@@ -516,6 +518,7 @@ export class Renderer {
       ...this.colorUniforms(info, s),
       uExposure: s.exposure + look.exposure,
       uContrast: look.contrast + (s.contrast / 100) * 0.75,
+      uAgx: look.agx ? 1 : 0,
       uHighlights: s.highlights / 100,
       uShadows: s.shadows / 100,
       uWhites: s.whites / 100,

@@ -434,7 +434,131 @@ fn subject(ai: &Ai, rgb: &Img) -> Result<Img, String> {
     let (_, y) = ai.infer("isnet.onnx", vec![1, 3, 1024, 1024], x)?;
     let (lo, hi) = y.iter().fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
     let v = y.iter().map(|&v| (v - lo) / (hi - lo).max(1e-6)).collect();
-    Ok(Img { w: 1024, h: 1024, c: 1, v })
+    Ok(main_subject(Img { w: 1024, h: 1024, c: 1, v }))
+}
+
+/// Connected regions of `on` cells (8-neighbours): a label per cell (0 = off) and each region's cells.
+fn regions(on: &[bool], w: usize, h: usize) -> (Vec<u32>, Vec<Vec<usize>>) {
+    let mut label = vec![0u32; w * h];
+    let mut out = Vec::new();
+    for start in 0..w * h {
+        if !on[start] || label[start] != 0 {
+            continue;
+        }
+        let id = out.len() as u32 + 1;
+        let mut cells = vec![start];
+        label[start] = id;
+        let mut i = 0;
+        while i < cells.len() {
+            let k = cells[i];
+            i += 1;
+            let (x, y) = ((k % w) as isize, (k / w) as isize);
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let (nx, ny) = (x + dx, y + dy);
+                    if nx < 0 || ny < 0 || nx >= w as isize || ny >= h as isize {
+                        continue;
+                    }
+                    let nk = ny as usize * w + nx as usize;
+                    if on[nk] && label[nk] == 0 {
+                        label[nk] = id;
+                        cells.push(nk);
+                    }
+                }
+            }
+        }
+        out.push(cells);
+    }
+    (label, out)
+}
+
+/// One subject: the salient object people mean, not every salient thing. The
+/// region that is biggest, surest and nearest the middle wins, along with any
+/// pieces of it inside its outline (a kart's frame comes out in parts). Other
+/// regions are dropped, and small holes in it are filled, so it has one outline.
+fn main_subject(mut m: Img) -> Img {
+    let (w, h) = (m.w, m.h);
+    let on: Vec<bool> = m.v.iter().map(|&v| v >= 0.5).collect();
+    let (label, parts) = regions(&on, w, h);
+    if parts.len() < 2 {
+        return m;
+    }
+    let bounds = |cells: &[usize]| {
+        cells.iter().fold((w, h, 0, 0), |(x0, y0, x1, y1), &k| (x0.min(k % w), y0.min(k / w), x1.max(k % w), y1.max(k / w)))
+    };
+    let score = |cells: &[usize]| {
+        let n = cells.len() as f32;
+        let (sx, sy, sp) = cells.iter().fold((0.0, 0.0, 0.0), |(a, b, c), &k| (a + (k % w) as f32, b + (k / w) as f32, c + m.v[k]));
+        let (dx, dy) = (sx / n / w as f32 - 0.5, sy / n / h as f32 - 0.5);
+        n * (sp / n) * (-(dx * dx + dy * dy) / (2.0 * 0.3 * 0.3)).exp()
+    };
+    let best = (0..parts.len()).max_by(|&a, &b| score(&parts[a]).total_cmp(&score(&parts[b]))).unwrap();
+    let (x0, y0, x1, y1) = bounds(&parts[best]);
+    let (mx, my) = ((x1 - x0) / 20 + 2, (y1 - y0) / 20 + 2);
+    let inside = |(a, b, c, d): (usize, usize, usize, usize)| a + mx >= x0 && b + my >= y0 && c <= x1 + mx && d <= y1 + my;
+    let keep: Vec<bool> = parts.iter().enumerate().map(|(i, r)| i == best || inside(bounds(r))).collect();
+    let kept: Vec<bool> = label.iter().map(|&l| l > 0 && keep[l as usize - 1]).collect();
+    // Soft edge values stay only next to what's kept.
+    let near = dilate(&kept, w, h, 6);
+    for (k, v) in m.v.iter_mut().enumerate() {
+        if !near[k] {
+            *v = 0.0;
+        } else if on[k] && !kept[k] {
+            *v = v.min(0.49);
+        }
+    }
+    // Holes: gaps the outline closes around, small next to the subject.
+    let size: usize = parts.iter().zip(&keep).filter(|(_, &k)| k).map(|(r, _)| r.len()).sum();
+    let off: Vec<bool> = kept.iter().map(|&k| !k).collect();
+    let (_, holes) = regions(&off, w, h);
+    for hole in holes {
+        let edge = hole.iter().any(|&k| k % w == 0 || k / w == 0 || k % w == w - 1 || k / w == h - 1);
+        if !edge && hole.len() * 50 < size {
+            for k in hole {
+                m.v[k] = 1.0;
+            }
+        }
+    }
+    m
+}
+
+/// `on` grown by r cells (a square).
+fn dilate(on: &[bool], w: usize, h: usize, r: usize) -> Vec<bool> {
+    let mut rows = vec![false; w * h];
+    for y in 0..h {
+        let mut last = None;
+        for x in 0..w {
+            if on[y * w + x] {
+                last = Some(x);
+            }
+            rows[y * w + x] = last.is_some_and(|l| x - l <= r);
+        }
+        let mut next = None;
+        for x in (0..w).rev() {
+            if on[y * w + x] {
+                next = Some(x);
+            }
+            rows[y * w + x] |= next.is_some_and(|n| n - x <= r);
+        }
+    }
+    let mut out = vec![false; w * h];
+    for x in 0..w {
+        let mut last = None;
+        for y in 0..h {
+            if rows[y * w + x] {
+                last = Some(y);
+            }
+            out[y * w + x] = last.is_some_and(|l| y - l <= r);
+        }
+        let mut next = None;
+        for y in (0..h).rev() {
+            if rows[y * w + x] {
+                next = Some(y);
+            }
+            out[y * w + x] |= next.is_some_and(|n| n - y <= r);
+        }
+    }
+    out
 }
 
 const ADE: usize = 513;

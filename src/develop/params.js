@@ -151,7 +151,7 @@ export const CURVE_CHANNELS = [['curve', '', 'RGB'], ['curveR', 'Red', 'Red'], [
 
 // The starting look, as Lightroom's profile list names them. Adobe Color is
 // Lightroom's default; Camera Standard matches the camera's own JPEG.
-export const PROFILES = [['adobe', 'Adobe Color'], ['camera', 'Camera Standard']];
+export const PROFILES = [['adobe', 'Adobe Color'], ['camera', 'Camera Standard'], ['agx', 'AgX (darktable)']];
 
 // White balance presets for RAW files, as in Lightroom: [name, temp, tint].
 export const WB_PRESETS = [['As Shot'], ['Auto'], ['Daylight', 5500, 10], ['Cloudy', 6500, 10], ['Shade', 7500, 10], ['Tungsten', 2850, 0], ['Fluorescent', 3800, 21], ['Flash', 5500, 0], ['Custom']];
@@ -202,6 +202,8 @@ export function fromXmp(crs, curves, asShot, own = {}) {
     if (v != null) s[sl.key] = Math.min(sl.max, Math.max(sl.min, v));
   }
   if (/^Camera /i.test(crs.CameraProfile || '')) s.profile = 'camera';
+  // AgX is Flightroom's own; Lightroom sees Adobe Color.
+  if (own.Profile === 'agx') s.profile = 'agx';
   s.bw = crs.ConvertToGrayscale === 'True';
   s.removeCA = num('AutoLateralCA') === 1;
   s.lensProfile = num('LensProfileEnable') === 1;
@@ -273,7 +275,7 @@ export function toXmp(s) {
   // Masks: Flightroom's own copy, plus Lightroom's mask records. Only written
   // once Flightroom has made masks for the photo, so Lightroom's own masks
   // stay untouched otherwise.
-  const out = { set, remove, seqs, own: { Masks: masksToJson(s.masks), Denoise: s.aiDenoise ? String(s.aiDenoise) : '' } };
+  const out = { set, remove, seqs, own: { Masks: masksToJson(s.masks), Denoise: s.aiDenoise ? String(s.aiDenoise) : '', Profile: s.profile === 'agx' ? 'agx' : '' } };
   if (s.masks?.length || s.masksOwned) out.xml = { ...masksToCrs(s.masks), ...(s.masks?.length ? { MaskGroupBasedCorrections: '' } : {}) };
   return out;
 }
