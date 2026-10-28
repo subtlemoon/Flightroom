@@ -88,6 +88,13 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }))
+        // The window comes back as it was left: size, place, maximized or full screen.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(tauri_plugin_window_state::StateFlags::all() - tauri_plugin_window_state::StateFlags::VISIBLE)
+                .with_denylist(&["updating"])
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .register_asynchronous_uri_scheme_protocol("gcimg", |ctx, req, responder| {
