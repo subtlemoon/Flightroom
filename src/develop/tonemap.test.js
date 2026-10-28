@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { defaults } from './params.js';
 import {
   AGX_INSET,
   AGX_OUTSET,
@@ -14,6 +15,7 @@ import {
   sigmoidCurve,
   tonemap,
   tonemapUniforms,
+  sigmoidParams,
 } from './tonemap.js';
 import { apply3 } from './color.js';
 
@@ -156,5 +158,12 @@ describe('scene-referred tone mapping (tonemap.js)', () => {
       expect(tonemap(rgb, { toneMap: 'sigmoid' })[0]).toBeCloseTo(MIDDLE_GRAY, 5);
       expect(tonemap(rgb, { toneMap: 'filmic' })[0]).toBeCloseTo(MIDDLE_GRAY, 5);
     });
+  });
+
+  it('reads only its own sliders, not Basic Contrast and Saturation', () => {
+    const s = { ...defaults({ temp: 5000, tint: 0 }), contrast: 0, saturation: 0 };
+    expect(tonemapUniforms({ ...s, toneMap: 'agx' }).uTmA.slice(0, 2)).toEqual([1, 1]);
+    expect(tonemapUniforms({ ...s, toneMap: 'sigmoid' }).uTmA[0]).toBeCloseTo(sigmoidParams({ contrast: 1.5 }).pf, 6);
+    expect(tonemapUniforms({ ...s, toneMap: 'filmic' }).uTmA[3]).toBeCloseTo(filmicSpline({ contrast: 1.3 }).slope, 6);
   });
 });

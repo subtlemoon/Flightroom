@@ -280,16 +280,18 @@ export function tonemap(rgb, s = {}) {
 
 export function tonemapUniforms(s = {}) {
   const mode = activeToneMap(s);
+  // Only the mapper's own sliders: the settings also hold Basic's Contrast and
+  // Saturation, which the short option names would otherwise pick up.
   if (mode === 'sigmoid') {
-    const { pf, pp, k, preserveHue } = sigmoidParams(s);
+    const { pf, pp, k, preserveHue } = sigmoidParams({ sigmoidContrast: s.sigmoidContrast, sigmoidSkew: s.sigmoidSkew, sigmoidHue: s.sigmoidHue });
     return { uToneMap: 1, uTmA: [pf, pp, k, preserveHue], uTmB: [0, 0, 0, 0], uTmHue: preserveHue };
   }
   if (mode === 'agx') {
-    const { contrast, saturation, desaturation } = agxParams(s);
+    const { contrast, saturation, desaturation } = agxParams({ agxContrast: s.agxContrast, agxSat: s.agxSat, agxDesat: s.agxDesat });
     return { uToneMap: 2, uTmA: [contrast, saturation, desaturation, 0], uTmB: [0, 0, 0, 0], uTmHue: 0 };
   }
   if (mode === 'filmic') {
-    const sp = filmicSpline(s);
+    const sp = filmicSpline({ filmicWhiteEv: s.filmicWhiteEv, filmicBlackEv: s.filmicBlackEv, filmicContrast: s.filmicContrast, filmicHue: s.filmicHue });
     return {
       uToneMap: 3,
       uTmA: [sp.blackEv, sp.invSpanEv, sp.t0, sp.slope],

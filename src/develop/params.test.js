@@ -14,7 +14,9 @@ describe('develop settings in the sidecar', () => {
       curveR: [[0, 0], [128, 150], [255, 255]], constrainCrop: true, crop: { left: 0.1, top: 0.1, right: 0.9, bottom: 0.9, angle: 2 },
     };
     const { set, seqs, own } = toXmp(s);
-    expect(set).toMatchObject({ CameraProfile: 'Camera Standard', ToneMap: 'sigmoid', SigmoidContrast: '1.85', SigmoidSkew: '-0.24', ConvertToGrayscale: 'True', WhiteBalance: 'Tungsten', SplitToningShadowHue: '220', ColorGradeMidtoneHue: '0', PerspectiveVertical: '+30', PerspectiveScale: '90', AutoLateralCA: '1', PostCropVignetteStyle: '3', GrayMixerAqua: '-60', CropConstrainToWarp: '1' });
+    expect(own).toMatchObject({ ToneMap: 'sigmoid', SigmoidContrast: '1.85', SigmoidSkew: '-0.24', AgxContrast: '' });
+    expect(set.SigmoidContrast).toBeUndefined();
+    expect(set).toMatchObject({ CameraProfile: 'Camera Standard', ConvertToGrayscale: 'True', WhiteBalance: 'Tungsten', SplitToningShadowHue: '220', ColorGradeMidtoneHue: '0', PerspectiveVertical: '+30', PerspectiveScale: '90', AutoLateralCA: '1', PostCropVignetteStyle: '3', GrayMixerAqua: '-60', CropConstrainToWarp: '1' });
     const back = fromXmp(set, seqs, asShot, own);
     for (const k of Object.keys(s)) {
       if (k === 'crop') expect(back.crop.left).toBeCloseTo(0.1);

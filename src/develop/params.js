@@ -212,13 +212,15 @@ export function fromXmp(crs, curves, asShot, own = {}) {
   const s = defaults(asShot);
   const num = (k) => (crs[k] != null && crs[k] !== '' && Number.isFinite(Number(crs[k])) ? Number(crs[k]) : null);
   for (const sl of SLIDERS) {
-    const v = num(sl.crs);
+    // Tone mapper sliders are Flightroom's own, kept out of Lightroom's settings.
+    const raw = sl.tm ? own[sl.crs] : crs[sl.crs];
+    const v = raw != null && raw !== '' && Number.isFinite(Number(raw)) ? Number(raw) : null;
     if (v != null) s[sl.key] = Math.min(sl.max, Math.max(sl.min, v));
   }
   if (/^Camera /i.test(crs.CameraProfile || '')) s.profile = 'camera';
   // AgX is Flightroom's own; Lightroom sees Adobe Color.
   if (own.Profile === 'agx') s.profile = 'agx';
-  const tm = own.ToneMap || crs.ToneMap;
+  const tm = own.ToneMap;
   if (TONE_MAPPERS.some(([k]) => k === tm)) s.toneMap = tm;
   else if (s.profile === 'agx') s.toneMap = 'agx';
   s.bw = crs.ConvertToGrayscale === 'True';
@@ -263,18 +265,18 @@ export function toXmp(s) {
     LensProfileEnable: s.lensProfile ? '1' : '0',
     PostCropVignetteStyle: String(s.vignetteStyle || 1),
   };
+  const ownTm = {};
   for (const sl of SLIDERS) {
     const v = s[sl.key];
-    if (sl.key === 'temp') set[sl.crs] = String(Math.round(v));
+    if (sl.tm) ownTm[sl.crs] = s.toneMap === sl.tm ? Number(v).toFixed(sl.decimals || 0) : '';
+    else if (sl.key === 'temp') set[sl.crs] = String(Math.round(v));
     else if (sl.key === 'sharpenRadius') set[sl.crs] = signed(v, 1);
-    else set[sl.crs] = sl.min >= 0 ? (sl.decimals ? Number(v).toFixed(sl.decimals) : String(Math.round(v))) : signed(v, sl.decimals || 0);
+    else set[sl.crs] = sl.min >= 0 ? String(Math.round(v)) : signed(v, sl.decimals || 0);
   }
   const remove = [];
   // No CameraProfile means Lightroom's default, Adobe Color.
   if (s.profile === 'camera') set.CameraProfile = 'Camera Standard';
   else remove.push('CameraProfile');
-  if (s.toneMap && s.toneMap !== 'none') set.ToneMap = s.toneMap;
-  else remove.push('ToneMap');
   // Lightroom picks the lens profile itself from the photo's lens details.
   if (s.lensProfile) set.LensProfileSetup = 'LensDefaults';
   if (s.crop) {
@@ -303,6 +305,7 @@ export function toXmp(s) {
       Denoise: s.aiDenoise ? String(s.aiDenoise) : '',
       Profile: s.profile === 'agx' ? 'agx' : '',
       ToneMap: s.toneMap && s.toneMap !== 'none' ? s.toneMap : '',
+      ...ownTm,
     },
   };
   if (s.masks?.length || s.masksOwned) out.xml = { ...masksToCrs(s.masks), ...(s.masks?.length ? { MaskGroupBasedCorrections: '' } : {}) };
