@@ -14,12 +14,13 @@ import { imgUrl, ROTATION } from '../cull/previews.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey } from '../cull/keys.js';
 import {
-  COLORS, COLOR_HUES, CURVE_PRESETS, PROFILES, SECTIONS, SLIDER, VIGNETTE_STYLES, WB_PRESETS,
+  COLORS, COLOR_HUES, CURVE_PRESETS, PROFILES, SECTIONS, SLIDER, SLIDERS, TONE_MAPPERS, VIGNETTE_STYLES, WB_PRESETS,
   curveName, defaults, fromXmp, isEdited, resetSection, sectionEdited, toXmp,
 } from '../develop/params.js';
 import { asShotTempTint, colorTransform, inv3, neutralToXy, xyToTempTint } from '../develop/color.js';
 import { Geometry, LOOKS, Renderer, ap, constrainedCrop, fitScale, mat, mm, outToFrame, parseFrame, sourceMap } from '../develop/renderer.js';
 import { exportPhoto, exportSize } from '../develop/export.js';
+import { activeToneMap } from '../develop/tonemap.js';
 
 // The Develop tab: the full RAW file with Lightroom-style controls. Edits are
 // never written into the photo: they're saved, as Lightroom's own settings,
@@ -981,7 +982,18 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
             <Dropdown value={s.wb} options={WB_PRESETS.map(([value]) => ({ value, label: value }))} onChange={pickWb} />
           </span>
         </div>
-        <Groups sec={SECTION.basic} s={s} asShot={asShot} set={set} untitled={['White balance']} extra={{ Tone: <button className="btn btn-sm btn-ghost" onClick={onAutoTone} title="Set the tone sliders for this photo">Auto</button> }} />
+        <Groups sec={SECTION.basic} s={s} asShot={asShot} set={set} untitled={['White balance']}
+          hide={SLIDERS.filter((sl) => sl.tm && sl.tm !== activeToneMap(s)).map((sl) => sl.key)}
+          before={{
+            'Tone mapping': (
+              <div className="dev-line dev-wb"><span className="muted">Mapper</span>
+                <Dropdown value={activeToneMap(s)} options={TONE_MAPPERS.map(([value, label]) => ({ value, label }))}
+                  onChange={(v) => update((old) => ({ ...old, toneMap: v, ...(v === 'none' && old.profile === 'agx' ? { profile: 'adobe' } : {}) }))}
+                  title="Scene-referred tone mapping (darktable style)" />
+              </div>
+            ),
+          }}
+          extra={{ Tone: <button className="btn btn-sm btn-ghost" onClick={onAutoTone} title="Set the tone sliders for this photo">Auto</button> }} />
       </>
     ),
     curve: () => <ToneCurve s={s} set={set} update={update} />,
@@ -1056,13 +1068,14 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
 const SECTION = Object.fromEntries(SECTIONS.map((sec) => [sec.id, sec]));
 
 // A section's plain sliders, in their groups. `extra` puts something beside a group's title.
-function Groups({ sec, s, asShot, set, only, hide = [], untitled = [], extra = {} }) {
+function Groups({ sec, s, asShot, set, only, hide = [], untitled = [], extra = {}, before = {} }) {
   const groups = only ? sec.groups.filter(only) : sec.groups;
   return groups.map((g) => (
     <div key={g.title} className="dev-group">
       {(sec.groups.length > 1 || g.title !== sec.title) && !untitled.includes(g.title) ? (
         <div className="dev-group-title dev-line">{g.title}{extra[g.title]}</div>
       ) : null}
+      {before[g.title]}
       {g.sliders.filter((sl) => !hide.includes(sl.key)).map((sl) => (
         <Slider key={sl.key} sl={sl} value={s[sl.key]} def={sl.key === 'temp' ? asShot.temp : sl.key === 'tint' ? asShot.tint : sl.def} onSet={set} />
       ))}
