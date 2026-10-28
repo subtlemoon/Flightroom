@@ -755,6 +755,8 @@ fn masks(ai: &Ai, task: &str, rgb: &Img) -> Result<Vec<(String, Img)>, String> {
 
 // --- AI Denoise ---------------------------------------------------------------
 
+// 256 x 256 tiles are the quickest per pixel: bigger ones run slower, not faster.
+const DN_MODEL: &str = "scunet.onnx";
 const DN_TILE: usize = 256;
 const DN_MARGIN: usize = 24;
 
@@ -784,7 +786,7 @@ pub fn denoise(
     cancel: &std::sync::atomic::AtomicBool,
     mut progress: impl FnMut(usize, usize),
 ) -> Result<Vec<u16>, String> {
-    ai.session("scunet.onnx")?; // loads it up front, so a failure shows before any work
+    ai.session(DN_MODEL)?; // loads it up front, so a failure shows before any work
     let gain = [wb[0] / wb[1], 1.0, wb[2] / wb[1]];
     let (xs, ys) = (tile_starts(w), tile_starts(h));
     let total = xs.len() * ys.len();
@@ -807,7 +809,7 @@ pub fn denoise(
                     }
                 }
             }
-            let (_, y) = ai.infer("scunet.onnx", vec![1, 3, DN_TILE as i64, DN_TILE as i64], x)?;
+            let (_, y) = ai.infer(DN_MODEL, vec![1, 3, DN_TILE as i64, DN_TILE as i64], x)?;
             let (wx0, wx1) = tile_span(x0, tw, w);
             let (wy0, wy1) = tile_span(y0, th, h);
             for py in wy0..wy1 {

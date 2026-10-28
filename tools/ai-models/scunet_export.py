@@ -10,6 +10,9 @@ WS, HEAD = 8, 32
 
 
 class WMSA(nn.Module):
+    """Window attention for one image (batch 1), kept to tensors of at most 4
+    dimensions so every ONNX runtime (DirectML included) can run it."""
+
     def __init__(self, dim, shifted, res):
         super().__init__()
         self.dim, self.shifted, self.heads = dim, shifted, dim // HEAD
@@ -17,40 +20,43 @@ class WMSA(nn.Module):
         self.linear = nn.Linear(dim, dim)
         self.relative_position_params = nn.Parameter(torch.zeros(self.heads, 2 * WS - 1, 2 * WS - 1))
         # Shifted windows mix pixels from opposite edges in the last row and column
-        # of windows; those pairs are masked out. Kept as a row part plus a column
-        # part so the graph stays small.
+        # of windows; those pairs are masked out. Kept as a per-window-row part plus
+        # a per-window-column part so the graph stays small.
         n = res // WS
         r = torch.zeros(n, WS, WS, WS, WS)
         if shifted:
             s = WS - WS // 2
             r[-1, :s, :, s:, :] = -1e4
             r[-1, s:, :, :s, :] = -1e4
-        self.register_buffer('brow', r.reshape(n, 1, WS * WS, WS * WS), persistent=False)
-        self.register_buffer('bcol', r.permute(0, 2, 1, 4, 3).reshape(1, n, WS * WS, WS * WS), persistent=False)
+        P = WS * WS
+        self.register_buffer('brow', r.reshape(1, n, 1, P * P), persistent=False)
+        self.register_buffer('bcol', r.permute(0, 2, 1, 4, 3).reshape(1, 1, n, P * P), persistent=False)
 
     def rel(self):
         c = torch.tensor([[i, j] for i in range(WS) for j in range(WS)])
         r = c[:, None, :] - c[None, :, :] + WS - 1
         return self.relative_position_params[:, r[..., 0], r[..., 1]]  # h p q
 
-    def forward(self, x):  # b h w c
-        b, H, W, C = x.shape
+    def forward(self, x):  # 1 h w c
+        _, H, W, C = x.shape
+        n1, n2, P, h = H // WS, W // WS, WS * WS, self.heads
+        x = x[0]
         if self.shifted:
-            x = torch.roll(x, (-(WS // 2), -(WS // 2)), (1, 2))
-        n1, n2 = H // WS, W // WS
-        x = x.reshape(b, n1, WS, n2, WS, C).permute(0, 1, 3, 2, 4, 5).reshape(b, n1 * n2, WS * WS, C)
-        qkv = self.embedding_layer(x).reshape(b, n1 * n2, WS * WS, 3 * self.heads, HEAD).permute(3, 0, 1, 2, 4)
-        q, k, v = qkv[:self.heads], qkv[self.heads:2 * self.heads], qkv[2 * self.heads:]
-        sim = q @ k.transpose(-1, -2) * HEAD ** -0.5  # h b w p q
-        sim = sim + self.rel()[:, None, None]
-        sim = (sim.reshape(self.heads, b, n1, n2, WS * WS, WS * WS) + self.brow + self.bcol).reshape(self.heads, b, n1 * n2, WS * WS, WS * WS)
-        out = sim.softmax(-1) @ v  # h b w p c
-        out = out.permute(1, 2, 3, 0, 4).reshape(b, n1 * n2, WS * WS, C)
+            x = torch.roll(x, (-(WS // 2), -(WS // 2)), (0, 1))
+        # Windows: (n1 n2) p c
+        x = x.reshape(n1, WS, n2, WS * C).permute(0, 2, 1, 3).reshape(n1 * n2, P, C)
+        qkv = self.embedding_layer(x).reshape(n1 * n2, P, 3 * h, HEAD).permute(2, 0, 1, 3)  # 3h w p d
+        q, k, v = qkv[:h], qkv[h:2 * h], qkv[2 * h:]
+        sim = q @ k.transpose(-1, -2) * HEAD ** -0.5 + self.rel()[:, None]  # h w p q
+        if self.shifted:
+            sim = (sim.reshape(h, n1, n2, P * P) + self.brow + self.bcol).reshape(h, n1 * n2, P, P)
+        out = sim.softmax(-1) @ v  # h w p d
+        out = out.permute(1, 2, 0, 3).reshape(n1 * n2, P, C)
         out = self.linear(out)
-        out = out.reshape(b, n1, n2, WS, WS, C).permute(0, 1, 3, 2, 4, 5).reshape(b, H, W, C)
+        out = out.reshape(n1, n2, WS, WS * C).permute(0, 2, 1, 3).reshape(H, W, C)
         if self.shifted:
-            out = torch.roll(out, (WS // 2, WS // 2), (1, 2))
-        return out
+            out = torch.roll(out, (WS // 2, WS // 2), (0, 1))
+        return out[None]
 
 
 class Block(nn.Module):
