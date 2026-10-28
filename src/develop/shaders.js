@@ -97,21 +97,21 @@ uniform vec2 uGradeShape; // blending, balance
 uniform float uGradeOn;
 uniform vec3 uGrain;      // amount, cell size (oriented px), roughness
 uniform float uShowClip;
-// Masks (masks.js): up to 8 greyscale images, one per channel of two
+// Masks (masks.js): up to 16 greyscale images, one per channel of four
 // textures, and each mask's local sliders.
 uniform vec2 uOriSize;
-uniform sampler2D uMask0, uMask1;
+uniform sampler2D uMask0, uMask1, uMask2, uMask3;
 uniform float uMaskN;
-uniform vec4 uMA[8]; // exposure, contrast, highlights, shadows
-uniform vec4 uMB[8]; // whites, blacks, texture, clarity
-uniform vec4 uMC[8]; // dehaze, saturation, temp, tint
-uniform vec4 uMD[8]; // hue, sharpness, noise, amount
-uniform vec4 uMR[8]; // luminance range: low, high, smoothness, flags (1 = range on, 2 = inverted)
-uniform vec4 uME[8]; // grain amount, size x amount, roughness x amount, moire
-uniform vec4 uMF[8]; // defringe, colour tint (rgb, no brightness)
-uniform vec4 uMP[8]; // point colour: hue (degrees), saturation, brightness, on
-uniform vec4 uMQ[8]; // point colour shifts: hue (degrees), saturation, luminance; range
-uniform vec4 uMS[8]; // point colour softness, own curve on, its refine saturation
+uniform vec4 uMA[16]; // exposure, contrast, highlights, shadows
+uniform vec4 uMB[16]; // whites, blacks, texture, clarity
+uniform vec4 uMC[16]; // dehaze, saturation, temp, tint
+uniform vec4 uMD[16]; // hue, sharpness, noise, amount
+uniform vec4 uMR[16]; // luminance range: low, high, smoothness, flags (1 = range on, 2 = inverted)
+uniform vec4 uME[16]; // grain amount, size x amount, roughness x amount, moire
+uniform vec4 uMF[16]; // defringe, colour tint (rgb, no brightness)
+uniform vec4 uMP[16]; // point colour: hue (degrees), saturation, brightness, on
+uniform vec4 uMQ[16]; // point colour shifts: hue (degrees), saturation, luminance; range
+uniform vec4 uMS[16]; // point colour softness, own curve on, its refine saturation
 uniform sampler2D uMaskCurve; // each mask's curve, a row each (as uCurve)
 uniform float uPointView; // the mask whose point colour range is shown (-1: none)
 uniform float uMaskView;   // the mask shown on top (-1: none)
@@ -278,16 +278,19 @@ void main() {
 
   // How much each mask covers this pixel, and their sliders added up.
   vec4 LA = vec4(0.0), LB = vec4(0.0), LC = vec4(0.0), LD = vec4(0.0), LE = vec4(0.0), LF = vec4(0.0);
-  float mw[8] = float[8](0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+  float mw[16];
+  for (int i = 0; i < 16; i++) mw[i] = 0.0;
   float shownW = 0.0;
   if (uMaskN > 0.0) {
     vec2 muv = ori / uOriSize;
     vec4 m0 = texture(uMask0, muv);
     vec4 m1 = uMaskN > 4.0 ? texture(uMask1, muv) : vec4(0.0);
+    vec4 m2 = uMaskN > 8.0 ? texture(uMask2, muv) : vec4(0.0);
+    vec4 m3 = uMaskN > 12.0 ? texture(uMask3, muv) : vec4(0.0);
     float yl = disp(dot(lin0, W709) * exp2(uExposure));
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 16; i++) {
       if (float(i) >= uMaskN) break;
-      float w = i < 4 ? m0[i] : m1[i - 4];
+      float w = i < 4 ? m0[i] : i < 8 ? m1[i - 4] : i < 12 ? m2[i - 8] : m3[i - 12];
       vec4 r = uMR[i];
       if (mod(r.w, 2.0) >= 1.0) {
         float sm = max(r.z * 0.5, 0.004);
@@ -425,10 +428,10 @@ void main() {
   d = vec3(texture(uCurve, vec2(d.r, 0.5)).g, texture(uCurve, vec2(d.g, 0.5)).b, texture(uCurve, vec2(d.b, 0.5)).a);
   // Masks' own curves, the same way, where each mask covers.
   if (uMaskN > 0.0) {
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 16; i++) {
       if (float(i) >= uMaskN) break;
       if (uMS[i].y < 0.5 || mw[i] <= 0.0) continue;
-      float row = (float(i) + 0.5) / 8.0;
+      float row = (float(i) + 0.5) / 16.0;
       vec3 c = vec3(texture(uMaskCurve, vec2(d.r, row)).r, texture(uMaskCurve, vec2(d.g, row)).r, texture(uMaskCurve, vec2(d.b, row)).r);
       float yc0 = dot(d, W709), yc = texture(uMaskCurve, vec2(yc0, row)).r;
       c = mix(yc + (d - yc0) * (yc / max(yc0, 1e-3)), c, uMS[i].z);
@@ -459,7 +462,7 @@ void main() {
   // saturation and luminance (range and softness set how near).
   float pointShow = -1.0;
   if (uMaskN > 0.0) {
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 16; i++) {
       if (float(i) >= uMaskN) break;
       if (uMP[i].w < 0.5) continue;
       vec3 hp = hsv(d);

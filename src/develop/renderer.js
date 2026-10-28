@@ -451,6 +451,8 @@ export class Renderer {
       uMaskN: masks.length,
       uMask0: masks.length ? tex[0].tex : this.blank,
       uMask1: masks.length > 4 ? tex[1].tex : this.blank,
+      uMask2: masks.length > 8 ? tex[2].tex : this.blank,
+      uMask3: masks.length > 12 ? tex[3].tex : this.blank,
       uMA: A, uMB: B, uMC: C, uMD: D, uMR: R,
       uMaskView: view?.noOverlay ? -1 : sel,
       uMaskColor: view?.color || [1, 0.2, 0.3],

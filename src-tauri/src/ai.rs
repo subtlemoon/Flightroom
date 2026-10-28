@@ -432,8 +432,8 @@ fn crisp(mut m: Img) -> Img {
 
 // --- the models -----------------------------------------------------------------
 
-/// Subject: IS-Net (general use), 1024 x 1024.
-fn subject(ai: &Ai, rgb: &Img) -> Result<Img, String> {
+/// IS-Net (general use) on a picture, at 1024 x 1024: how sure it is each spot is the subject.
+fn isnet(ai: &Ai, rgb: &Img) -> Result<Img, String> {
     let small = rgb.resize(1024, 1024);
     let mut x = vec![0.0f32; 3 * 1024 * 1024];
     for (k, px) in small.v.chunks_exact(3).enumerate() {
@@ -444,7 +444,35 @@ fn subject(ai: &Ai, rgb: &Img) -> Result<Img, String> {
     let (_, y) = ai.infer("isnet.onnx", vec![1, 3, 1024, 1024], x)?;
     let (lo, hi) = y.iter().fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
     let v = y.iter().map(|&v| (v - lo) / (hi - lo).max(1e-6)).collect();
-    Ok(main_subject(Img { w: 1024, h: 1024, c: 1, v }))
+    Ok(Img { w: 1024, h: 1024, c: 1, v })
+}
+
+/// Subject, at the picture's size. A subject that fills only part of the
+/// frame gets a second, closer look at just its square, so thin parts (a
+/// kart's cage) come out as themselves with the background between them.
+fn subject(ai: &Ai, rgb: &Img) -> Result<Img, String> {
+    let (w, h) = (rgb.w, rgb.h);
+    let m = main_subject(isnet(ai, rgb)?).resize(w, h);
+    let on: Vec<usize> = (0..w * h).filter(|&k| m.v[k] >= 0.5).collect();
+    let Some(&first) = on.first() else { return Ok(m) };
+    let (x0, y0, x1, y1) = on.iter().fold((first % w, first / w, first % w, first / w), |(a, b, c, d), &k| {
+        (a.min(k % w), b.min(k / w), c.max(k % w), d.max(k / w))
+    });
+    let side = (x1 - x0).max(y1 - y0) as f32 * 1.2;
+    let (cx, cy) = ((x0 + x1) as f32 / 2.0, (y0 + y1) as f32 / 2.0);
+    let (bx0, by0) = ((cx - side / 2.0).max(0.0) as usize, (cy - side / 2.0).max(0.0) as usize);
+    let (bx1, by1) = (((cx + side / 2.0) as usize + 1).min(w), ((cy + side / 2.0) as usize + 1).min(h));
+    let (cw, ch) = (bx1 - bx0, by1 - by0);
+    if cw * ch * 10 >= w * h * 6 || cw < 16 || ch < 16 {
+        return Ok(m);
+    }
+    let crop = rgb.crop_resize(bx0 as f32, by0 as f32, cw as f32, ch as f32, cw, ch);
+    let near = isnet(ai, &crop)?.resize(cw, ch);
+    let mut v = vec![0.0f32; w * h];
+    for y in 0..ch {
+        v[(by0 + y) * w + bx0..(by0 + y) * w + bx1].copy_from_slice(&near.v[y * cw..(y + 1) * cw]);
+    }
+    Ok(main_subject(Img { w, h, c: 1, v }))
 }
 
 /// Connected regions of `on` cells (8-neighbours): a label per cell (0 = off) and each region's cells.
@@ -485,7 +513,8 @@ fn regions(on: &[bool], w: usize, h: usize) -> (Vec<u32>, Vec<Vec<usize>>) {
 /// One subject: the salient object people mean, not every salient thing. The
 /// region that is biggest, surest and nearest the middle wins, along with any
 /// pieces of it inside its outline (a kart's frame comes out in parts). Other
-/// regions are dropped, and small holes in it are filled, so it has one outline.
+/// regions are dropped. Only pinholes in it are filled: bigger gaps (between an
+/// arm and a face, or the bars of a cage) are background seen through it.
 fn main_subject(mut m: Img) -> Img {
     let (w, h) = (m.w, m.h);
     let on: Vec<bool> = m.v.iter().map(|&v| v >= 0.5).collect();
@@ -510,7 +539,7 @@ fn main_subject(mut m: Img) -> Img {
     let kept: Vec<bool> = label.iter().map(|&l| l > 0 && keep[l as usize - 1]).collect();
     // Soft edge values stay only right next to what's kept (faint spill onto
     // things nearby, like a barrier beside a kart, goes).
-    let near = dilate(&kept, w, h, 3);
+    let near = dilate(&kept, w, h, (w.max(h) / 340).max(3));
     for (k, v) in m.v.iter_mut().enumerate() {
         if !near[k] {
             *v = 0.0;
@@ -518,13 +547,13 @@ fn main_subject(mut m: Img) -> Img {
             *v = v.min(0.49);
         }
     }
-    // Holes: gaps the outline closes around, small next to the subject.
+    // Pinholes: specks the model missed, tiny next to the subject.
     let size: usize = parts.iter().zip(&keep).filter(|(_, &k)| k).map(|(r, _)| r.len()).sum();
     let off: Vec<bool> = kept.iter().map(|&k| !k).collect();
     let (_, holes) = regions(&off, w, h);
     for hole in holes {
         let edge = hole.iter().any(|&k| k % w == 0 || k / w == 0 || k % w == w - 1 || k / w == h - 1);
-        if !edge && hole.len() * 50 < size {
+        if !edge && hole.len() * 2000 < size {
             for k in hole {
                 m.v[k] = 1.0;
             }
@@ -697,7 +726,8 @@ fn masks(ai: &Ai, task: &str, rgb: &Img) -> Result<Vec<(String, Img)>, String> {
     let mut out = vec![];
     match task {
         "subject" => {
-            let m = crisp(refine(&guide, &subject(ai, rgb)?));
+            // A tight guided filter, so the edge follows the picture closely.
+            let m = crisp(clean(guided(&guide, &subject(ai, rgb)?, (guide.w.max(guide.h) / 512).max(2), 1e-3)));
             out.push(("subject".to_string(), m));
         }
         "landscape" => {
