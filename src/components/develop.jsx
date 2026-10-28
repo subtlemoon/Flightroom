@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { bridge as app } from '../bridge.js';
 import { Dropdown, Icon, Modal, PanelHandle } from './ui.jsx';
 import { Slider } from './slider.jsx';
@@ -13,7 +13,7 @@ import { inFilter, STAR_FILTERS } from '../cull/filter.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey } from '../cull/keys.js';
 import {
   COLORS, COLOR_HUES, CURVE_PRESETS, PROFILES, SECTIONS, SLIDER, VIGNETTE_STYLES, WB_PRESETS,
-  curveName, defaults, formatValue, fromXmp, isEdited, resetSection, sectionEdited, toXmp,
+  curveName, defaults, fromXmp, isEdited, resetSection, sectionEdited, toXmp,
 } from '../develop/params.js';
 import { asShotTempTint, colorTransform, inv3, neutralToXy, xyToTempTint } from '../develop/color.js';
 import { Geometry, LOOKS, Renderer, ap, constrainedCrop, fitScale, mat, mm, outToFrame, parseFrame, sourceMap } from '../develop/renderer.js';

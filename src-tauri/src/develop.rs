@@ -586,7 +586,7 @@ pub async fn develop_denoise(app: AppHandle, id: String) -> Result<bool, String>
         // Only the newest few results stay on disk.
         if let Ok(rd) = std::fs::read_dir(dir) {
             let mut files: Vec<_> = rd.flatten().filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path()))).collect();
-            files.sort_by(|a, b| b.0.cmp(&a.0));
+            files.sort_by_key(|f| std::cmp::Reverse(f.0));
             for (_, f) in files.into_iter().skip(DENOISE_KEPT) {
                 let _ = std::fs::remove_file(f);
             }

@@ -264,8 +264,8 @@ fn box_mean(src: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
         let row = &src[y * w..(y + 1) * w];
         let mut acc = 0.0f64;
         let mut n = 0usize;
-        for x in 0..=r.min(w - 1) {
-            acc += row[x] as f64;
+        for &v in &row[..=r.min(w - 1)] {
+            acc += v as f64;
             n += 1;
         }
         for x in 0..w {
@@ -520,7 +520,7 @@ fn people_boxes(person: &Img, min_cells: usize) -> Vec<(usize, usize, usize, usi
             boxes.push((n, x0, y0, x1 + 1, y1 + 1));
         }
     }
-    boxes.sort_by(|a, b| b.0.cmp(&a.0));
+    boxes.sort_by_key(|b| std::cmp::Reverse(b.0));
     // Specks next to a real person are misreadings, not more people.
     let big = boxes.first().map(|b| b.0).unwrap_or(0);
     boxes.into_iter().take_while(|b| b.0 * 16 >= big).take(10).map(|(_, a, b, c, d)| (a, b, c, d)).collect()

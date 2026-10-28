@@ -157,7 +157,7 @@ function MaskRow({ m, size, active, selPart, setSel, acts, menu, setMenu, full, 
             onBlur={(e) => { acts.change(m.id, { name: e.target.value.trim() || m.name }); setRenaming(false); }}
             onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setRenaming(false); }} />
         ) : (
-          <span className="grow mask-name" title="Double-click to rename" onDoubleClick={(e) => { e.stopPropagation(); setRenaming(true); }}>{m.name}</span>
+          <span className="grow mask-name" title={`${m.name} (double-click to rename)`} onDoubleClick={(e) => { e.stopPropagation(); setRenaming(true); }}>{m.name}</span>
         )}
         <span className="mask-btns">
           {btn(m.hidden ? 'eyeOff' : 'eye', m.hidden ? 'Turn this mask back on' : 'Turn this mask off', () => acts.change(m.id, { hidden: !m.hidden }), m.hidden)}

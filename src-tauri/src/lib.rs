@@ -25,6 +25,7 @@ fn handle(app: &tauri::AppHandle, req: &tauri::http::Request<Vec<u8>>) -> photos
 }
 
 fn main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
+    #[cfg_attr(not(windows), allow(unused_variables))]
     let win = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("Flightroom")
         .inner_size(1400.0, 900.0)

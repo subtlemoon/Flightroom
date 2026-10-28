@@ -228,7 +228,6 @@ export function fromXmp(crs, curves, asShot, own = {}) {
   return s;
 }
 
-export const isLinear = (curve) => curve.length === 2 && curve[0][0] === 0 && curve[0][1] === 0 && curve[1][0] === 255 && curve[1][1] === 255;
 export const curveName = (curve) => CURVE_PRESETS.find(([, c]) => same(c, curve))?.[0] || 'Custom';
 
 /** What to write to the sidecar for these settings. */

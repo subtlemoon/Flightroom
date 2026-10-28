@@ -471,7 +471,7 @@ pub fn read_photo_info<S: Source + ?Sized>(src: &S, ext: &str) -> PhotoInfo {
     if let Some(p) = found.first() {
         info.preview = Some(*p);
     }
-    info.thumb = found.iter().skip(1).filter(|j| j.width.max(j.height) >= 400).last().copied();
+    info.thumb = found.iter().skip(1).rfind(|j| j.width.max(j.height) >= 400).copied();
     info
 }
 
@@ -559,7 +559,7 @@ pub fn set_jpeg_rating(buf: &[u8], rating: i32) -> Result<Vec<u8>, String> {
         out.extend_from_slice(&buf[o.end..]);
     } else {
         // Put it after the JFIF/Exif headers, where other apps expect it.
-        let at = segs.iter().filter(|s| s.marker == 0xe0 || is_exif(buf, s)).last().map(|s| s.end).unwrap_or(2);
+        let at = segs.iter().rfind(|s| s.marker == 0xe0 || is_exif(buf, s)).map(|s| s.end).unwrap_or(2);
         out.extend_from_slice(&buf[..at]);
         out.extend_from_slice(&seg);
         out.extend_from_slice(&buf[at..]);
