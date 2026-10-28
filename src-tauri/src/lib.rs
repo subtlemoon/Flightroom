@@ -128,6 +128,7 @@ pub fn run() {
             updater::update_install,
             migrate::migration_data,
             develop::develop_open,
+            develop::develop_read,
             develop::develop_close,
             develop::develop_save,
             develop::export_begin,

@@ -87,13 +87,14 @@ export function maskActions(s, update, sel, setSel, options = MASK_OPTIONS_DEFAU
 
 // --- the left panel ---------------------------------------------------------------
 
-export function MaskPanel({ s, size, sel, setSel, acts, overlay, setOverlay, ai }) {
+export function MaskPanel({ s, size, sel, setSel, acts, overlay, setOverlay, ai, presets }) {
   const masks = s?.masks || [];
   const [menu, setMenu] = useState(null); // 'new' | { mask, mode }
   const pickAi = (type, target) => { setMenu(null); ai.run(type, target); };
   return (
     <div className="mask-panel">
       <MaskPreview has={!!s} selected={masks.find((m) => m.id === sel?.mask)} />
+      {presets}
       <div className="mask-head">
         <span className="grow">Masks</span>
         <span className="muted small">{masks.length} of {MAX_MASKS}</span>

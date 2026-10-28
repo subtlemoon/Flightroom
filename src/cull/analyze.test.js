@@ -57,6 +57,17 @@ describe('auto-rate suggestions', () => {
     expect(s.d.stars).toBeGreaterThan(1);
   });
 
+  it('caps the stars of photos that are soft at full size and rejects blurry ones', () => {
+    const items = [0.58, 0.6, 0.66, 0.7, 0.78].map((blur, i) => ({ id: `p${i}`, name: `P${i}`, m: m(900, i % 2 ? h1 : h2, { blur, subject: { box: {} } }), takenAt: `2026:10:17 13:${10 + i}:00` }));
+    const s = suggest(items);
+    expect(s.p0.stars).toBe(4);
+    expect(s.p2.stars).toBeLessThanOrEqual(3);
+    expect(s.p3.stars).toBe(2);
+    expect(s.p3.reasons.join()).toMatch(/soft at full size/);
+    expect(s.p4.stars).toBe(1);
+    expect(s.p4.reasons.join()).toMatch(/soft or blurry/);
+  });
+
   it('gives most sharp, well-exposed photos 3 or 4 stars', () => {
     const items = Array.from({ length: 20 }, (_, i) => ({ id: `p${i}`, name: `P${i}`, m: m(500 + i * 20, i % 2 ? h1 : h2), takenAt: `2026:10:17 13:${10 + i}:00` }));
     const s = suggest(items);

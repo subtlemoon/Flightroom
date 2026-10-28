@@ -50,6 +50,7 @@ export const bridge = inApp ? {
   // Develop: full RAW decoding and develop settings in the .xmp sidecar.
   develop: {
     open: (photo) => call('develop_open', { id: photo.id, sidecar: photo.sidecar }),
+    read: (photo) => call('develop_read', { sidecar: photo.sidecar }),
     close: () => call('develop_close'),
     save: (sidecar, { set, remove, seqs, xml = {}, own = {} }) => call('develop_save', { args: { sidecar, set, remove, seqs, xml, own } }),
     // dn: how much AI Denoise to blend in (0-100), once worked out with denoise().

@@ -6,13 +6,16 @@
 //               detection model (subject.js), so focus is judged where it matters
 //   sharpness   how crisp the subject is; without a subject, the sharpest part of
 //               the frame, so a soft background never counts against a photo
+//   blur        how blurred the subject is at full size (on the big embedded
+//               preview), where missed focus and motion blur show; small
+//               previews make everything look sharp
 //   exposure    share of blown-out highlights and crushed shadows, overall brightness
 //   look        a tiny fingerprint of the picture, to find bursts and near-duplicates
 // and then, across the folder: groups of similar shots taken within seconds of
 // each other, where only the best one keeps a good rating.
 import { ROTATION } from './rotation.js';
 
-export const VERSION = 3; // bump when measurements change, so old ones are redone
+export const VERSION = 4; // bump when measurements change, so old ones are redone
 const MAX_W = 640; // the embedded preview's size: enough for focus, and fast
 
 // The bitmap turned the right way up (the previews are stored as the sensor saw them).
@@ -65,6 +68,47 @@ export function sharpness(gray, w, h, cols = 8, rows = 6, area = { x: 0, y: 0, w
   return top.reduce((a, b) => a + b, 0) / Math.max(1, top.length);
 }
 
+// Blur at pixel level (Crété-Roffet et al., "The blur effect", 2007): how
+// much of the image's fine detail survives blurring it again. About 0.6 for
+// a sharp 45 MP photo, 0.7 slightly soft, 0.8 and up blurry. Taken over the
+// tiles with the most detail, so plain sky or tarmac in the box don't count.
+export function blurOf(gray, w, h, n = 4) {
+  const scores = [];
+  for (let ty = 0; ty < n; ty++) {
+    for (let tx = 0; tx < n; tx++) {
+      const x0 = Math.floor((tx * w) / n), x1 = Math.floor(((tx + 1) * w) / n);
+      const y0 = Math.floor((ty * h) / n), y1 = Math.floor(((ty + 1) * h) / n);
+      if (x1 - x0 < 12 || y1 - y0 < 12) continue;
+      let worst = 0, detail = 0;
+      for (const [dx, dy] of [[1, 0], [0, 1]]) {
+        let sF = 0, sV = 0;
+        // 9-pixel running mean along the direction, compared with the original's steps.
+        const lines = dx ? y1 - y0 : x1 - x0, len = dx ? x1 - x0 : y1 - y0;
+        for (let l = 0; l < lines; l++) {
+          const at = (i) => (dx ? gray[(y0 + l) * w + x0 + i] : gray[(y0 + i) * w + x0 + l]);
+          let sum = 0;
+          const mean = new Float32Array(len);
+          for (let i = -4; i < len + 4; i++) {
+            sum += at(Math.min(len - 1, Math.max(0, i + 4)));
+            if (i - 5 >= -4) sum -= at(Math.min(len - 1, Math.max(0, i - 5)));
+            if (i >= 0 && i < len) mean[i] = sum / 9;
+          }
+          for (let i = 1; i < len; i++) {
+            const dF = Math.abs(at(i) - at(i - 1)), dB = Math.abs(mean[i] - mean[i - 1]);
+            sF += dF; sV += Math.max(0, dF - dB);
+          }
+        }
+        worst = Math.max(worst, sF ? (sF - sV) / sF : 1);
+        detail += sF / (lines * len);
+      }
+      scores.push([detail, worst]);
+    }
+  }
+  if (!scores.length) return null;
+  const top = scores.sort((a, b) => b[0] - a[0]).slice(0, Math.max(3, Math.ceil(scores.length * 0.4))).map((t) => t[1]).sort((a, b) => a - b).slice(0, 3);
+  return top.reduce((a, b) => a + b, 0) / top.length;
+}
+
 export function exposure(gray) {
   let hi = 0, lo = 0, total = 0;
   for (const v of gray) { if (v >= 250) hi++; else if (v <= 5) lo++; total += v; }
@@ -89,14 +133,14 @@ export const distance = (a, b) => { let d = 0; for (let i = 0; i < a.length; i++
 
 // Measurements for one photo from its upright preview bitmap and the subject
 // found in it (or null). `sharp` is the subject's sharpness when there is one.
-export function measure(bmp, subject = null) {
+export function measure(bmp, subject = null, blur = null) {
   const { gray, w, h } = grayscale(bmp);
   const frameSharp = Math.round(sharpness(gray, w, h));
   // Up to 4x4 tiles on the subject, each at least 16 pixels across.
   const tiles = (frac, size) => Math.max(1, Math.min(4, Math.floor((frac * size) / 16)));
   const subjectSharp = subject ? Math.round(sharpness(gray, w, h, tiles(subject.box.w, w), tiles(subject.box.h, h), subject.box)) : null;
   return {
-    v: VERSION, sharp: subjectSharp ?? frameSharp, frameSharp, subject, ...exposure(gray), hash: fingerprint(gray, w, h),
+    v: VERSION, sharp: subjectSharp ?? frameSharp, frameSharp, subject, blur, ...exposure(gray), hash: fingerprint(gray, w, h),
   };
 }
 
@@ -106,6 +150,8 @@ const seconds = (t) => {
   return m ? Date.UTC(m[1], m[2] - 1, m[3], m[4], m[5], m[6]) / 1000 : null;
 };
 
+// Full-size blur (blurOf) for 4 stars, 3 stars, and past which a photo is soft.
+const BLUR_SHARP = 0.63, BLUR_OK = 0.68, BLUR_SOFT = 0.72;
 const BURST_GAP = 2; // seconds between shots in one burst
 const SIMILAR = 22; // max fingerprint difference (of 64) for "the same shot"
 
@@ -125,13 +171,21 @@ export function suggest(items) {
     const { m } = it;
     const reasons = [];
     let quality = pct(m.sharp);
-    const soft = m.sharp < median * 0.3;
-    if (soft && m.subject && m.frameSharp >= median * 0.7) reasons.push('Focus missed the subject');
+    let soft = m.sharp < median * 0.3;
+    let cap = 4; // the most stars its sharpness allows
+    if (m.blur != null) {
+      // Full-size blur decides: sharp photos rank on it, soft ones are capped or rejected.
+      quality = 0.65 * Math.min(1, Math.max(0, (BLUR_SOFT + 0.04 - m.blur) / 0.2)) + 0.35 * quality;
+      soft = m.blur > BLUR_SOFT;
+      cap = m.blur <= BLUR_SHARP ? 4 : m.blur <= BLUR_OK ? 3 : 2;
+    }
+    if (soft && m.subject && m.blur == null && m.frameSharp >= median * 0.7) reasons.push('Focus missed the subject');
     else if (soft) reasons.push(m.subject ? 'Subject is soft or blurry' : 'Soft or blurry');
+    else if (cap < 4) reasons.push(`${m.subject ? 'Subject is' : 'Photo is'} ${cap === 3 ? 'a little soft' : 'soft'} at full size`);
     if (m.clipHi > 0.12) { quality -= 0.15; reasons.push(`Blown highlights (${Math.round(m.clipHi * 100)}%)`); }
     if (m.clipLo > 0.3) { quality -= 0.15; reasons.push('Very dark shadows'); }
     if (m.mean < 35) { quality -= 0.2; reasons.push('Very dark'); } else if (m.mean > 225) { quality -= 0.2; reasons.push('Very bright'); }
-    out[it.id] = { quality, soft, reasons };
+    out[it.id] = { quality, soft, cap, reasons };
   }
 
   // Bursts: neighbours taken within a couple of seconds that look alike.
@@ -165,13 +219,13 @@ export function suggest(items) {
     .sort((a, b) => out[b.id].quality - out[a.id].quality);
   keepers.forEach((it, i) => {
     const rank = i / Math.max(1, keepers.length);
-    out[it.id].stars = rank < 0.35 ? 4 : rank < 0.8 ? 3 : 2;
+    out[it.id].stars = Math.min(out[it.id].cap, rank < 0.35 ? 4 : rank < 0.8 ? 3 : 2);
   });
   for (const it of done) {
     const s = out[it.id];
     if (s.duplicate && !s.soft) {
       const best = groups[s.group].find((id) => !out[id].duplicate);
-      s.stars = Math.max(2, (out[best].stars || 2) - 1);
+      s.stars = Math.min(s.cap, Math.max(2, (out[best].stars || 2) - 1));
     }
   }
   for (const it of done) {
@@ -179,6 +233,7 @@ export function suggest(items) {
     if (s.stars == null) s.stars = 1;
     if (!s.reasons.length) s.reasons.push(s.stars >= 3 ? (it.m.subject ? 'Sharp subject, well exposed' : 'Sharp and well exposed') : 'Fine, nothing stands out');
     delete s.quality;
+    delete s.cap;
   }
   return out;
 }
