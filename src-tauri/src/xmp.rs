@@ -5,6 +5,8 @@
 use std::collections::HashMap;
 
 pub const CRS_NS: &str = "http://ns.adobe.com/camera-raw-settings/1.0/";
+/// Flightroom's own settings that Lightroom has no place for.
+pub const FR_NS: &str = "http://ns.flightroom.app/1.0/";
 
 pub struct Doc {
     pub text: String,
@@ -187,14 +189,20 @@ impl Doc {
 
     /// Replaces an rdf:Seq property with these items (removed when empty).
     pub fn set_seq(&mut self, prefix: &str, name: &str, items: &[String], ns: &str) {
+        let lis: String = items.iter().map(|i| format!("\n     <rdf:li>{}</rdf:li>", escape(i))).collect();
+        let inner = if items.is_empty() { String::new() } else { format!("\n    <rdf:Seq>{lis}\n    </rdf:Seq>\n   ") };
+        self.set_xml(prefix, name, &inner, ns);
+    }
+
+    /// Replaces a structured property with `inner` (already-escaped XML; removed when empty).
+    pub fn set_xml(&mut self, prefix: &str, name: &str, inner: &str, ns: &str) {
         self.remove(prefix, name);
-        if items.is_empty() {
+        if inner.is_empty() {
             return;
         }
         self.ensure_ns(prefix, ns);
         let q = format!("{prefix}:{name}");
-        let lis: String = items.iter().map(|i| format!("\n     <rdf:li>{}</rdf:li>", escape(i))).collect();
-        let elem = format!("\n   <{q}>\n    <rdf:Seq>{lis}\n    </rdf:Seq>\n   </{q}>");
+        let elem = format!("\n   <{q}>{inner}</{q}>");
         let Some((_, end, self_closing)) = self.description_tag() else { return };
         if self_closing {
             // <rdf:Description .../> becomes <rdf:Description ...> ... </rdf:Description>
@@ -267,6 +275,22 @@ mod tests {
         assert_eq!(d.get("crs", "Exposure2012").as_deref(), Some("+0.50"));
         assert!(d.text.contains("</rdf:Description>"));
         assert_eq!(d.get_seq("crs", "ToneCurvePV2012").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn structured_properties() {
+        let mut d = Doc::new(&empty());
+        d.set_attr("crs", "Exposure2012", "+0.50", CRS_NS);
+        d.set_xml("crs", "GradientBasedCorrections", "<rdf:Seq><rdf:li><rdf:Description crs:What=\"Correction\" crs:LocalExposure2012=\"0.5\"/></rdf:li></rdf:Seq>", CRS_NS);
+        d.set_attr("fr", "Masks", "[{\"id\":1}]", FR_NS);
+        assert_eq!(d.get("crs", "Exposure2012").unwrap(), "+0.50");
+        assert_eq!(d.get("fr", "Masks").unwrap(), "[{\"id\":1}]");
+        assert!(d.text.contains("xmlns:fr="));
+        d.set_xml("crs", "GradientBasedCorrections", "<rdf:Seq/>", CRS_NS);
+        assert_eq!(d.text.matches("GradientBasedCorrections>").count(), 2);
+        d.set_xml("crs", "GradientBasedCorrections", "", CRS_NS);
+        assert!(!d.text.contains("GradientBasedCorrections"));
+        assert_eq!(d.get("crs", "Exposure2012").unwrap(), "+0.50");
     }
 
     #[test]

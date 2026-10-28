@@ -46,9 +46,11 @@ export default function App() {
   else if (group) main = <GroupView group={group} store={store} onOpenPreset={(presetId) => setView({ name: 'group', groupId: group.id, presetId })} />;
   else main = <div className="view"><div className="hero-empty"><h2>No groups yet</h2><button className="btn btn-primary" onClick={() => setNewGroup(true)}>Create a group</button></div></div>;
 
+  // In Develop the sidebar is a slim strip of icons: the left side holds the masks.
+  const rail = view.name === 'develop';
   const navBtn = (key, label, icon, extra) => (
-    <button className={`nav-item${view.name === key ? ' active' : ''}`} onClick={() => setView({ name: key })}>
-      <Icon name={icon} />{label}{extra}
+    <button className={`nav-item${view.name === key ? ' active' : ''}`} onClick={() => setView({ name: key })} title={rail ? label : undefined}>
+      <Icon name={icon} /><span className="nav-text">{label}</span>{extra}
     </button>
   );
 
@@ -69,8 +71,8 @@ export default function App() {
   }, [photoView]);
 
   return (
-    <div className={`app${layout.nav ? '' : ' nav-hidden'}`}>
-      <nav className="sidebar" aria-hidden={!layout.nav}>
+    <div className={`app${rail ? ' rail' : layout.nav ? '' : ' nav-hidden'}`}>
+      <nav className="sidebar" aria-hidden={!rail && !layout.nav}>
         <div className="logo">
           <div className="logo-mark"><Icon name="lens" size={20} /></div>
           <div><div className="logo-name">Flightroom</div><div className="logo-sub">Cull · develop · plan</div></div>
@@ -87,7 +89,7 @@ export default function App() {
         <div className="group-list">
           {state.groups.map((g) => (
             <button key={g.id} className={`nav-item group${view.name === 'group' && view.groupId === g.id ? ' active' : ''}`} style={{ '--accent': g.color }}
-              onClick={() => setView({ name: 'group', groupId: g.id })}>
+              onClick={() => setView({ name: 'group', groupId: g.id })} title={rail ? g.name : undefined}>
               <span className="group-emoji">{g.icon}</span><span className="grow">{g.name}</span><span className="nav-count">{g.presets.length}</span>
             </button>
           ))}
@@ -100,7 +102,7 @@ export default function App() {
       </nav>
 
       <main className={`content${photoView ? ' content-cull' : ''}`}>
-        <PanelHandle side="left" open={layout.nav} onClick={() => toggle('nav')} title={`${layout.nav ? 'Hide' : 'Show'} sidebar (F7)`} />
+        {!rail && <PanelHandle side="left" open={layout.nav} onClick={() => toggle('nav')} title={`${layout.nav ? 'Hide' : 'Show'} sidebar (F7)`} />}
         <Boundary key={view.name}>{main}</Boundary>
       </main>
 

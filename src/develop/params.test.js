@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CURVE_PRESETS, defaults, fromXmp, isEdited, resetSection, sectionEdited, toXmp } from './params.js';
 import { curveTable } from './luts.js';
+import { newMask, newPart } from './masks.js';
 
 const asShot = { temp: 5450, tint: 15 };
 
@@ -36,5 +37,25 @@ describe('develop settings in the sidecar', () => {
     expect(t[0]).toBeCloseTo(1);
     expect(t[(t.length / 4 - 1) * 4]).toBeCloseTo(0);
     expect(CURVE_PRESETS.length).toBe(3);
+  });
+
+  it('keeps masks in its own field and writes Lightroom mask records', () => {
+    const m = newMask('linear', []);
+    m.parts[0] = { ...m.parts[0], placed: true };
+    m.parts.push({ ...newPart('brush', 'subtract'), strokes: [{ erase: false, size: 0.02, feather: 50, flow: 100, pts: [[0.123456789, 0.5], [0.2, 0.5]] }] });
+    m.adj = { exposure: -1.5, clarity: 20 };
+    const out = toXmp({ ...defaults(asShot), masks: [m] });
+    expect(out.xml.GradientBasedCorrections).toContain('crs:LocalExposure2012="-1.500000"');
+    expect(out.xml.GradientBasedCorrections).toContain('crs:LocalClarity2012="0.200000"');
+    expect(out.xml.MaskGroupBasedCorrections).toBe('');
+    const back = fromXmp(out.set, out.seqs, asShot, out.own);
+    expect(back.masks[0].adj).toEqual(m.adj);
+    expect(back.masks[0].parts[1].strokes[0].pts[0]).toEqual([0.1235, 0.5]);
+    expect(isEdited(back, asShot)).toBe(true);
+    // Deleting every mask clears both copies; a photo never masked here leaves Lightroom's alone.
+    const cleared = toXmp({ ...back, masks: [] });
+    expect(cleared.own.Masks).toBe('');
+    expect(cleared.xml.GradientBasedCorrections).toBe('');
+    expect(toXmp(defaults(asShot)).xml).toBeUndefined();
   });
 });

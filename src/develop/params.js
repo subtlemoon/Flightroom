@@ -1,6 +1,7 @@
 // Develop settings: what each slider is, its range and default, and how it is
 // stored in the .xmp sidecar using Lightroom's own names (the crs: namespace),
 // so Lightroom picks the edits up when it imports or re-reads the photo.
+import { masksFromJson, masksToCrs, masksToJson } from './masks.js';
 
 export const COLORS = ['Red', 'Orange', 'Yellow', 'Green', 'Aqua', 'Blue', 'Purple', 'Magenta'];
 export const COLOR_HUES = [0, 30, 60, 120, 180, 240, 270, 300]; // band centres, degrees
@@ -165,7 +166,7 @@ export function defaults(asShot) {
   return { ...d };
 }
 function makeDefaults(asShot) {
-  const s = { wb: 'As Shot', profile: 'adobe', bw: false, removeCA: false, lensProfile: false, vignetteStyle: 1, constrainCrop: false, crop: null };
+  const s = { wb: 'As Shot', profile: 'adobe', bw: false, removeCA: false, lensProfile: false, vignetteStyle: 1, constrainCrop: false, crop: null, masks: [] };
   for (const [k] of CURVE_CHANNELS) s[k] = LINEAR_CURVE;
   for (const sl of SLIDERS) s[sl.key] = sl.def;
   s.temp = asShot.temp;
@@ -193,7 +194,7 @@ const signed = (v, decimals = 0) => {
 };
 
 /** Settings from a sidecar's crs: values and point curves (anything missing keeps its default). */
-export function fromXmp(crs, curves, asShot) {
+export function fromXmp(crs, curves, asShot, own = {}) {
   const s = defaults(asShot);
   const num = (k) => (crs[k] != null && crs[k] !== '' && Number.isFinite(Number(crs[k])) ? Number(crs[k]) : null);
   for (const sl of SLIDERS) {
@@ -219,6 +220,8 @@ export function fromXmp(crs, curves, asShot) {
     const c = { left: num('CropLeft') ?? 0, top: num('CropTop') ?? 0, right: num('CropRight') ?? 1, bottom: num('CropBottom') ?? 1, angle: num('CropAngle') ?? 0 };
     if (c.right > c.left && c.bottom > c.top) s.crop = c;
   }
+  // Masks are read from Flightroom's own copy (Lightroom's newer mask format isn't read yet).
+  if (own.Masks != null) { s.masks = masksFromJson(own.Masks); s.masksOwned = true; }
   return s;
 }
 
@@ -265,12 +268,17 @@ export function toXmp(s) {
   }
   const pts = (c) => c.map(([x, y]) => `${Math.round(x)}, ${Math.round(y)}`);
   const seqs = Object.fromEntries(CURVE_CHANNELS.map(([k, suffix]) => [`ToneCurvePV2012${suffix}`, pts(s[k] || LINEAR_CURVE)]));
-  return { set, remove, seqs };
+  // Masks: Flightroom's own copy, plus Lightroom's mask records. Only written
+  // once Flightroom has made masks for the photo, so Lightroom's own masks
+  // stay untouched otherwise.
+  const out = { set, remove, seqs, own: { Masks: masksToJson(s.masks) } };
+  if (s.masks?.length || s.masksOwned) out.xml = { ...masksToCrs(s.masks), ...(s.masks?.length ? { MaskGroupBasedCorrections: '' } : {}) };
+  return out;
 }
 
 /** True when the settings differ from what the photo looked like straight from the camera. */
 export function isEdited(s, asShot) {
-  return !!s.crop || SECTIONS.some((sec) => sectionEdited(s, sec.id, asShot));
+  return !!s.crop || !!s.masks?.length || SECTIONS.some((sec) => sectionEdited(s, sec.id, asShot));
 }
 
 export function formatValue(sl, v) {

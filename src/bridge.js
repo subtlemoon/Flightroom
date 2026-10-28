@@ -51,7 +51,7 @@ export const bridge = inApp ? {
   develop: {
     open: (photo) => call('develop_open', { id: photo.id, sidecar: photo.sidecar }),
     close: () => call('develop_close'),
-    save: (sidecar, { set, remove, seqs }) => call('develop_save', { args: { sidecar, set, remove, seqs } }),
+    save: (sidecar, { set, remove, seqs, xml = {}, own = {} }) => call('develop_save', { args: { sidecar, set, remove, seqs, xml, own } }),
     imageUrl: (photo, edge, ahead) => fileUrl('develop/image', { p: photo.id, edge, ...(ahead ? { ahead: 1 } : {}) }),
     regionUrl: (photo, r) => fileUrl('develop/region', { p: photo.id, ...r }),
     pickFolder: (title) => open({ directory: true, title }).catch(() => null),

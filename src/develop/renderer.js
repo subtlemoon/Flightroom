@@ -4,6 +4,7 @@
 import { VERT, GUIDE_DOWN, BLUR, FINAL } from './shaders.js';
 import { colorTransform, inv3, mul3 } from './color.js';
 import { CURVE_SIZE, HUE_SIZE, calibrationMatrix, curveTable, gradeTints, hueTable } from './luts.js';
+import { MAX_MASKS, lumRange, maskRaster } from './masks.js';
 
 const GUIDE_EDGE = 320;
 // The base rendering under the sliders, per profile (params.js PROFILES).
@@ -183,6 +184,9 @@ export function constrainedCrop(geo, s) {
   return { ...geo.toCrop({ cx: geo.ow / 2, cy: geo.oh / 2, hw: (lo * geo.ow) / 2, hh: (lo * geo.oh) / 2, angle }), aspect: s.crop?.aspect };
 }
 
+// How the selected mask is shown on screen (uMaskStyle is the index).
+export const MASK_STYLES = ['color', 'both', 'outline', 'matte', 'image'];
+
 export const fitScale = (W, H, f, margin = 0) => Math.min((W - margin * 2) / (2 * f.hw), (H - margin * 2) / (2 * f.hh));
 
 export class Renderer {
@@ -264,9 +268,10 @@ export class Renderer {
   /** Releases everything on the graphics card. */
   dispose() {
     const gl = this.gl;
-    this.free(this.src); this.clearHi();
+    this.free(this.src); this.clearHi(); this.free(this.histTarget); this.free(this.prevTarget);
     for (const t of this.guide || []) this.free(t);
     gl.deleteTexture(this.curveTex); gl.deleteTexture(this.hueTex); gl.deleteTexture(this.blank);
+    for (const t of this.maskTex || []) gl.deleteTexture(t.tex);
     // An offscreen (export) context is done for good; a page canvas may be
     // given a new renderer (React remounts), so its context must stay usable.
     if (typeof OffscreenCanvas !== 'undefined' && this.canvas instanceof OffscreenCanvas) gl.getExtension('WEBGL_lose_context')?.loseContext();
@@ -286,6 +291,7 @@ export class Renderer {
         gl.bindTexture(gl.TEXTURE_2D, v);
         gl.uniform1i(l, unit++);
       } else if (typeof v === 'number') gl.uniform1f(l, v);
+      else if (v.length > 9) gl.uniform4fv(l, v); // vec4 arrays
       else if (v.length === 2) gl.uniform2fv(l, v);
       else if (v.length === 3) gl.uniform3fv(l, v);
       else if (v.length === 4) gl.uniform4fv(l, v);
@@ -358,14 +364,73 @@ export class Renderer {
   }
 
   /**
+   * Puts the shown masks on the graphics card: four to a texture, one per
+   * channel. Uploaded again only when a mask's shape changes.
+   */
+  updateMasks(s, geo) {
+    const masks = (s.masks || []).filter((m) => !m.hidden).slice(0, MAX_MASKS);
+    this.masks = masks;
+    if (!masks.length) return;
+    const rasters = masks.map((m) => maskRaster(m, geo.ow, geo.oh));
+    const gl = this.gl;
+    this.maskTex ||= [];
+    for (let t = 0; t * 4 < rasters.length; t++) {
+      const group = rasters.slice(t * 4, t * 4 + 4);
+      const cur = this.maskTex[t];
+      if (cur && cur.rasters.length === group.length && cur.rasters.every((r, i) => r === group[i])) continue;
+      const { W, H } = group[0];
+      const px = new Uint8Array(W * H * 4);
+      group.forEach((r, c) => { const d = r.data; for (let i = 0; i < d.length; i++) px[i * 4 + c] = d[i]; });
+      if (cur && cur.W === W && cur.H === H) {
+        gl.bindTexture(gl.TEXTURE_2D, cur.tex);
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        cur.rasters = group;
+      } else {
+        if (cur) gl.deleteTexture(cur.tex);
+        this.maskTex[t] = { tex: this.texture(gl.RGBA8, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px), W, H, rasters: group };
+      }
+    }
+  }
+
+  maskUniforms(view) {
+    const masks = this.masks || [];
+    const A = new Float32Array(MAX_MASKS * 4), B = new Float32Array(MAX_MASKS * 4), C = new Float32Array(MAX_MASKS * 4);
+    const D = new Float32Array(MAX_MASKS * 4), R = new Float32Array(MAX_MASKS * 4);
+    masks.forEach((m, i) => {
+      const a = m.adj || {}, g = (k) => (a[k] || 0) / 100;
+      A.set([a.exposure || 0, g('contrast'), g('highlights'), g('shadows')], i * 4);
+      B.set([g('whites'), g('blacks'), g('texture'), g('clarity')], i * 4);
+      C.set([g('dehaze'), g('saturation'), g('temp'), g('tint')], i * 4);
+      D.set([g('hue'), g('sharpness'), g('noise'), (m.amount ?? 100) / 100], i * 4);
+      const lr = lumRange(m);
+      R.set(lr ? [lr.lo / 100, lr.hi / 100, lr.smooth / 100, 1 + (m.invert ? 2 : 0)] : [0, 1, 0, m.invert ? 2 : 0], i * 4);
+    });
+    const sel = view ? masks.findIndex((m) => m.id === view.id) : -1;
+    const tex = this.maskTex || [];
+    return {
+      uMaskN: masks.length,
+      uMask0: masks.length ? tex[0].tex : this.blank,
+      uMask1: masks.length > 4 ? tex[1].tex : this.blank,
+      uMA: A, uMB: B, uMC: C, uMD: D, uMR: R,
+      uMaskView: sel,
+      uMaskColor: view?.color || [1, 0.2, 0.3],
+      uMaskOpacity: view ? view.opacity : 0,
+      uMaskStyle: view ? MASK_STYLES.indexOf(view.style) : 0,
+      uMaskLine: view?.line || 1.5,
+    };
+  }
+
+  /**
    * Renders into `target` (null = the canvas). `out2frame` maps output pixels
    * to the crop frame; geo/frame say where that frame sits in the photo.
    */
-  render(info, s, geo, frame, out2frame, { target = null, showClip = false } = {}) {
+  render(info, s, geo, frame, out2frame, { target = null, showClip = false, maskView = null } = {}) {
     if (!this.src) return;
     this.updateGuide(info, s);
     this.updateLuts(s);
-    if (s.dehaze && this.airY == null) this.measureAir();
+    this.updateMasks(s, geo);
+    if ((s.dehaze || this.masks.some((m) => m.adj?.dehaze)) && this.airY == null) this.measureAir();
     const out2ori = mm(geo.frameToOriented(frame), out2frame);
     const hi = this.hi;
     const look = LOOKS[s.profile] || LOOKS.adobe;
@@ -435,6 +500,8 @@ export class Renderer {
       uVigRound: s.vignetteRoundness / 100,
       uVigFeather: s.vignetteFeather / 100,
       uShowClip: showClip ? 1 : 0,
+      uOriSize: [geo.ow, geo.oh],
+      ...this.maskUniforms(maskView),
     });
   }
 
@@ -456,6 +523,22 @@ export class Renderer {
     const bins = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
     for (let i = 0; i < px.length; i += 4) { bins[0][px[i]]++; bins[1][px[i + 1]]++; bins[2][px[i + 2]]++; }
     return bins;
+  }
+
+  /** A small copy of the whole (cropped) photo, for the mask preview; pixels bottom row first. */
+  preview(info, s, geo, frame, w, h, maskView) {
+    const gl = this.gl;
+    if (!this.prevTarget || this.prevTarget.w !== w || this.prevTarget.h !== h) {
+      this.free(this.prevTarget);
+      this.prevTarget = this.target(w, h, gl.RGBA8);
+    }
+    const saveHi = this.hi;
+    this.hi = null;
+    this.render(info, s, geo, frame, outToFrame(w, h, frame, { scale: fitScale(w, h, frame), u: 0, v: 0 }), { target: this.prevTarget, maskView });
+    this.hi = saveHi;
+    const px = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    return px;
   }
 
   /** Renders a w x h tile into an 8-bit buffer and returns its pixels (bottom row first). */

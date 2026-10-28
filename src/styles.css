@@ -599,3 +599,76 @@ kbd { font: inherit; font-size: 10.5px; padding: 1px 5px; border-radius: 5px; bo
 .dev-curve.readonly .dev-curve-pad { cursor: default; }
 .dev-tool { border: 1px solid rgba(139, 123, 255, .35); border-radius: 10px; padding: 0 10px; background: rgba(139, 123, 255, .05); }
 .dev-tool-foot { justify-content: flex-end; gap: 6px; margin-top: 2px; }
+
+/* Develop: the sidebar becomes a strip of icons */
+.app.rail { grid-template-columns: 56px 1fr; }
+.app.rail .sidebar { padding: 14px 8px; align-items: center; overflow-x: hidden; }
+.app.rail .logo { padding: 0 0 10px; }
+.app.rail .logo > div:not(.logo-mark), .app.rail .nav-text, .app.rail .nav-count, .app.rail .nav-new,
+.app.rail .group .grow, .app.rail .update-ready, .app.rail .nav-item.refresh, .app.rail .nav-label > * { display: none; }
+.app.rail .nav-label { padding: 0; height: 1px; width: 26px; margin: 8px auto; background: var(--line); font-size: 0; overflow: hidden; }
+.app.rail .nav-item { justify-content: center; width: 40px; padding: 9px 0; }
+.app.rail .group-list { display: flex; flex-direction: column; align-items: center; }
+.app.rail .sidebar-foot { width: 100%; display: flex; flex-direction: column; align-items: center; }
+
+/* Masks: the left panel in Develop (components/masks.jsx) */
+.dev-left { width: 248px; flex-shrink: 0; border-right: 1px solid var(--line); background: var(--bg-2); overflow-y: auto; overflow-x: hidden; }
+.dev-main > .panel-handle-left { position: absolute; left: 0; }
+.dev-main > .panel-handle-left.open { left: 248px; }
+.mask-panel { padding: 12px 12px 20px; display: flex; flex-direction: column; gap: 10px; }
+.mask-preview { position: relative; height: 168px; display: grid; place-items: center; border-radius: 10px; background: #07080c; border: 1px solid var(--line); overflow: hidden; }
+.mask-preview canvas { max-width: 100%; max-height: 100%; }
+.mask-preview-tag { position: absolute; left: 6px; bottom: 6px; font-size: 10.5px; padding: 1px 6px; border-radius: 6px; background: rgba(10,12,18,.75); color: var(--muted); }
+.mask-head { display: flex; align-items: center; font-weight: 600; font-size: 13px; padding-top: 2px; }
+.mask-create { position: relative; }
+.mask-new { width: 100%; justify-content: center; }
+.mask-menu { position: absolute; z-index: 30; left: 0; right: 0; top: calc(100% + 4px); padding: 4px; border-radius: 10px; background: #141821; border: 1px solid var(--line-2); box-shadow: 0 12px 30px rgba(0,0,0,.45); }
+.mask-item .mask-menu { position: relative; top: 4px; }
+.mask-menu-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--text); text-align: left; cursor: pointer; font-size: 12.5px; }
+.mask-menu-item:hover { background: var(--panel-2); }
+.mask-menu-item kbd { font: inherit; font-size: 10.5px; color: var(--muted); }
+.mask-list { display: flex; flex-direction: column; gap: 4px; }
+.mask-empty { margin: 2px 2px 0; line-height: 1.45; }
+.mask-item { border: 1px solid transparent; border-radius: 10px; }
+.mask-item.on { border-color: rgba(139, 123, 255, .4); background: rgba(139, 123, 255, .06); }
+.mask-item.off .mask-thumb, .mask-item.off .mask-name { opacity: .45; }
+.mask-row { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 9px; cursor: pointer; }
+.mask-row:hover { background: var(--panel-2); }
+.mask-thumb { width: 44px; height: 30px; border-radius: 5px; border: 1px solid var(--line-2); background: #000; flex-shrink: 0; }
+.mask-name { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mask-rename { flex: 1; min-width: 0; font: inherit; font-size: 12.5px; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--accent); background: var(--bg); color: var(--text); }
+.mask-btns { display: flex; gap: 1px; opacity: 0; transition: opacity .12s; }
+.mask-row:hover .mask-btns, .mask-item.on .mask-btns, .mask-btns .on { opacity: 1; }
+.mask-btns .icon-btn.on { color: var(--accent); }
+.mask-parts { padding: 0 6px 6px 14px; display: flex; flex-direction: column; gap: 2px; }
+.mask-part { display: flex; align-items: center; gap: 7px; padding: 5px 6px; border-radius: 7px; font-size: 12px; color: #c9cfdb; cursor: pointer; }
+.mask-part:hover { background: var(--panel-2); }
+.mask-part.on { background: rgba(139, 123, 255, .16); color: white; }
+.mask-mode { font-size: 10px; padding: 1px 6px; border-radius: 99px; background: var(--panel-2); color: var(--muted); }
+.mask-mode.subtract { color: #ff8a9b; }
+.mask-mode.intersect { color: #7cc8ff; }
+.mask-add { display: flex; gap: 4px; padding-top: 2px; }
+.mask-overlay-set { border-top: 1px solid var(--line); padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.mask-swatches { display: flex; gap: 6px; flex-wrap: wrap; }
+.mask-swatch { width: 20px; height: 20px; padding: 0; border-radius: 50%; border: 2px solid transparent; box-shadow: 0 0 0 1px var(--line-2); cursor: pointer; position: relative; }
+.mask-swatch.on { border-color: var(--bg-2); box-shadow: 0 0 0 2px var(--text); }
+.mask-swatch.custom { background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red); overflow: hidden; }
+.mask-swatch.custom input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.mask-lum-bar { position: relative; height: 10px; border-radius: 5px; background: linear-gradient(90deg, #000, #fff); margin: 4px 0 2px; border: 1px solid var(--line-2); }
+.mask-lum-bar span { position: absolute; top: -2px; bottom: -2px; border: 2px solid var(--accent); border-radius: 4px; }
+.mask-tool .dev-group-title { gap: 6px; justify-content: flex-start; }
+.mask-tool .dev-group-title .seg { margin-left: auto; }
+.mask-adjust .dev-section-head { gap: 6px; }
+
+/* Masks on the photo */
+.mask-stage { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 3; cursor: crosshair; touch-action: none; overflow: hidden; }
+.mask-stage.brush { cursor: none; }
+.mask-line { fill: none; stroke: white; stroke-width: 1.5; filter: drop-shadow(0 0 1.5px rgba(0,0,0,.9)); pointer-events: none; }
+.mask-line.soft { stroke-opacity: .7; }
+.mask-hit { stroke: transparent; stroke-width: 14; cursor: alias; }
+.mask-dot { fill: white; stroke: rgba(0,0,0,.6); stroke-width: 1.5; cursor: move; }
+.mask-pin { fill: var(--accent); stroke: white; stroke-width: 2.5; cursor: move; }
+.mask-cursor circle { fill: none; stroke: white; stroke-width: 1.3; filter: drop-shadow(0 0 1.5px rgba(0,0,0,.9)); }
+.mask-cursor circle.inner { stroke-dasharray: 3 3; stroke-opacity: .8; }
+.mask-cursor path { stroke: white; stroke-width: 1.5; }
+.mask-cursor.erase circle { stroke: #ff8a9b; }

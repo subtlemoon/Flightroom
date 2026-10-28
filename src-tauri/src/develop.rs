@@ -430,6 +430,8 @@ pub struct Opened {
     settings: HashMap<String, String>,
     /// Point curves: ToneCurvePV2012 and its Red, Green and Blue versions.
     curves: HashMap<String, Vec<String>>,
+    /// Flightroom's own values (fr: names), such as its masks.
+    own: HashMap<String, String>,
 }
 
 /// Decodes a RAW file for developing and reads its saved settings.
@@ -457,6 +459,7 @@ pub async fn develop_open(app: AppHandle, id: String, sidecar: Option<String>) -
                     doc.get_seq("crs", &name).map(|v| (name, v))
                 })
                 .collect(),
+            own: doc.all("fr"),
         })
     })
     .await
@@ -475,6 +478,12 @@ pub struct SaveArgs {
     set: HashMap<String, String>,
     remove: Vec<String>,
     seqs: HashMap<String, Vec<String>>,
+    /// Structured crs: properties (masks), as XML inside the element; empty removes it.
+    #[serde(default)]
+    xml: HashMap<String, String>,
+    /// Flightroom's own values (fr: names); empty removes one.
+    #[serde(default)]
+    own: HashMap<String, String>,
 }
 
 /// Writes develop settings to the sidecar, keeping everything else in it.
@@ -495,6 +504,16 @@ pub async fn develop_save(app: AppHandle, args: SaveArgs) -> Result<bool, String
             }
             for (name, items) in &args.seqs {
                 doc.set_seq("crs", name, items, crate::xmp::CRS_NS);
+            }
+            for (name, inner) in &args.xml {
+                doc.set_xml("crs", name, inner, crate::xmp::CRS_NS);
+            }
+            for (name, value) in &args.own {
+                if value.is_empty() {
+                    doc.remove("fr", name);
+                } else {
+                    doc.set_attr("fr", name, value, crate::xmp::FR_NS);
+                }
             }
             doc.text
         })?;
