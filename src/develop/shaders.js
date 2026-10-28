@@ -144,6 +144,8 @@ vec3 shoulder(vec3 x) {
   return mix(x, over, step(k, x));
 }
 float shoulder1(float x) { return shoulder(vec3(x)).r; }
+const float CHROMA_FLOOR = 0.004;
+vec3 chroma(vec3 c) { float y = dot(c, W709); return (c - y) / max(y, CHROMA_FLOOR); }
 vec3 encode(vec3 x) {
   return mix(x * 12.92, 1.055 * pow(max(x, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055, step(0.0031308, x));
 }
@@ -312,7 +314,10 @@ void main() {
   if (nrLum > 0.0 || nrColor > 0.0) {
     float y0 = max(dot(lin, W709), 1e-5);
     vec3 lsum = lin; float lw = 1.0;
-    vec3 csum = lin / y0; float cw = 1.0;
+    // Colour as an offset from grey relative to brightness, but never divided by
+    // less than CHROMA_FLOOR: in near-black noise brightness is about 0 (or below),
+    // and dividing by it turned the noise into bright purple and blue speckles.
+    vec3 csum = chroma(lin); float cw = 1.0;
     float sigma = (0.02 + nrLum * 0.25) * (1.5 - uNrLumDetail);
     float cr = 4.0 * (1.5 - uNrColorDetail);
     for (int i = 0; i < 8; i++) {
@@ -325,17 +330,17 @@ void main() {
       lsum += n1 * w; lw += w;
       if (nrColor > 0.0) {
         vec3 n2 = toLinear(cam(p + dir * uPhotoPx * cr));
-        csum += n2 / max(dot(n2, W709), 1e-5) * nrColor; cw += nrColor;
+        csum += chroma(n2) * nrColor; cw += nrColor;
         if (uNrColorSmooth > 0.0) {
           vec3 n3 = toLinear(cam(p + dir * uPhotoPx * cr * 2.5));
-          csum += n3 / max(dot(n3, W709), 1e-5) * nrColor * uNrColorSmooth; cw += nrColor * uNrColorSmooth;
+          csum += chroma(n3) * nrColor * uNrColorSmooth; cw += nrColor * uNrColorSmooth;
         }
       }
     }
     lin = lsum / lw;
     // Contrast brings back some of the local contrast the smoothing took.
     if (uNrLumContrast > 0.0) lin *= exp2((log2(y0) - log2(max(dot(lin, W709), 1e-5))) * uNrLumContrast * 0.6);
-    if (nrColor > 0.0) lin = (csum / cw) * max(dot(lin, W709), 1e-5);
+    if (nrColor > 0.0) { float yl = dot(lin, W709); lin = yl + (csum / cw) * max(yl, CHROMA_FLOOR); }
   }
 
   // Lens vignetting (positive brightens the corners) and calibration's shadow tint.
@@ -394,7 +399,9 @@ void main() {
   // Bring colours outside the screen's range back in by desaturating them.
   float y1 = dot(lin, W709);
   float mn = min(lin.r, min(lin.g, lin.b));
-  if (mn < 0.0 && y1 > 0.0) lin = y1 + (lin - y1) * (y1 / (y1 - mn + 1e-6));
+  // Noise below black (brightness at or under 0) is black, not its leftover
+  // positive channels, which showed as purple speckle in high-ISO shadows.
+  if (mn < 0.0) lin = y1 > 0.0 ? y1 + (lin - y1) * (y1 / (y1 - mn + 1e-6)) : vec3(0.0);
   lin = max(lin, vec3(0.0));
 
   if (whites != 0.0) lin *= exp2(whites * 0.8 * smoothstep(0.55, 1.0, disp(dot(lin, W709))));

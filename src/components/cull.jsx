@@ -275,7 +275,8 @@ export function CullView({ store, onDevelop }) {
   }
 
   if (!folder || list?.error) {
-    return <FolderHome state={state} actions={actions} bridge={bridge} onPick={pick} error={list?.error && folder} />;
+    // The Culling tab doesn't scroll as a whole (the photo view fills it), so the folder list scrolls itself.
+    return <div className="home-scroll"><FolderHome state={state} actions={actions} bridge={bridge} onPick={pick} error={list?.error && folder} /></div>;
   }
 
   const curMeta = photo && meta[photo.id];
@@ -417,7 +418,9 @@ function FolderTree({ parent, opened, stats, bridge, onOpen, onForget }) {
     <section className="tree">
       <div className="tree-parent" title={parent}>
         <Icon name="folder" size={16} /><span className="tree-parent-name">{splitPath(parent).name || parent}</span>
-        <span className="tree-parent-path">{splitPath(parent).parent}</span>
+        <span className="tree-parent-path grow">{splitPath(parent).parent}</span>
+        <button className="btn btn-sm btn-ghost tree-forget-all" title="Take this group off the list (nothing on disk is changed)"
+          onClick={() => opened.forEach(onForget)}><Icon name="x" size={12} />Remove</button>
       </div>
       <div className="tree-children">
         {names.map((name) => {
@@ -435,7 +438,7 @@ function FolderTree({ parent, opened, stats, bridge, onOpen, onForget }) {
                 </span>
                 {st?.photos > 0 && <span className="tree-progress" title={`${Math.round((st.rated / st.photos) * 100)}% rated`}><span style={{ width: `${(st.rated / st.photos) * 100}%` }} /></span>}
               </button>
-              <button className="icon-btn tiny tree-forget" title="Remove from this list" onClick={() => onForget(opened.find((f) => splitPath(f).name === name))}><Icon name="x" size={12} /></button>
+              <button className="icon-btn tiny tree-forget" title="Remove from this list (nothing on disk is changed)" onClick={() => onForget(opened.find((f) => splitPath(f).name === name))}><Icon name="x" size={12} /></button>
             </div>
           ) : (
             <div key={name} className="tree-item other">
