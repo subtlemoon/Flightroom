@@ -456,6 +456,7 @@ export class Renderer {
       uMaskOpacity: view ? view.opacity : 0,
       uMaskStyle: view ? MASK_STYLES.indexOf(view.style) : 0,
       uMaskLine: view?.line || 1.5,
+      uMaskFeather: view?.ai ? 0 : 1,
     };
   }
 

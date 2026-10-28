@@ -420,6 +420,16 @@ fn clean(mut m: Img) -> Img {
     m
 }
 
+/// A firmer edge: one clear outline instead of a wide soft band, whose faint
+/// values would spread onto things nearby.
+fn crisp(mut m: Img) -> Img {
+    for v in &mut m.v {
+        let t = ((*v - 0.3) / 0.4).clamp(0.0, 1.0);
+        *v = t * t * (3.0 - 2.0 * t);
+    }
+    m
+}
+
 // --- the models -----------------------------------------------------------------
 
 /// Subject: IS-Net (general use), 1024 x 1024.
@@ -480,7 +490,7 @@ fn main_subject(mut m: Img) -> Img {
     let (w, h) = (m.w, m.h);
     let on: Vec<bool> = m.v.iter().map(|&v| v >= 0.5).collect();
     let (label, parts) = regions(&on, w, h);
-    if parts.len() < 2 {
+    if parts.is_empty() {
         return m;
     }
     let bounds = |cells: &[usize]| {
@@ -498,8 +508,9 @@ fn main_subject(mut m: Img) -> Img {
     let inside = |(a, b, c, d): (usize, usize, usize, usize)| a + mx >= x0 && b + my >= y0 && c <= x1 + mx && d <= y1 + my;
     let keep: Vec<bool> = parts.iter().enumerate().map(|(i, r)| i == best || inside(bounds(r))).collect();
     let kept: Vec<bool> = label.iter().map(|&l| l > 0 && keep[l as usize - 1]).collect();
-    // Soft edge values stay only next to what's kept.
-    let near = dilate(&kept, w, h, 6);
+    // Soft edge values stay only right next to what's kept (faint spill onto
+    // things nearby, like a barrier beside a kart, goes).
+    let near = dilate(&kept, w, h, 3);
     for (k, v) in m.v.iter_mut().enumerate() {
         if !near[k] {
             *v = 0.0;
@@ -686,7 +697,7 @@ fn masks(ai: &Ai, task: &str, rgb: &Img) -> Result<Vec<(String, Img)>, String> {
     let mut out = vec![];
     match task {
         "subject" => {
-            let m = refine(&guide, &subject(ai, rgb)?);
+            let m = crisp(refine(&guide, &subject(ai, rgb)?));
             out.push(("subject".to_string(), m));
         }
         "landscape" => {

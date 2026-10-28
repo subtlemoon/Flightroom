@@ -113,7 +113,7 @@ uniform sampler2D uMaskCurve; // each mask's curve, a row each (as uCurve)
 uniform float uPointView; // the mask whose point colour range is shown (-1: none)
 uniform float uMaskView;   // the mask shown on top (-1: none)
 uniform vec3 uMaskColor;
-uniform float uMaskOpacity, uMaskStyle, uMaskLine;
+uniform float uMaskOpacity, uMaskStyle, uMaskLine, uMaskFeather;
 out vec4 o;
 
 vec3 cam(vec2 p) {
@@ -463,11 +463,12 @@ void main() {
   // The selected mask on top: a colour, its outline, or the mask itself.
   if (uMaskView >= 0.0) {
     // The outline is the mask's halfway line; the fainter lines either side
-    // show where its feathering starts and ends.
+    // show where its feathering starts and ends (not for AI masks, whose soft
+    // edge would draw them as stray rings).
     float fw = max(fwidth(shownW), 1e-4) * uMaskLine;
     float edge = 1.0 - smoothstep(0.0, fw, abs(shownW - 0.5));
     float soft = max(1.0 - smoothstep(0.0, fw * 0.7, abs(shownW - 0.08)), 1.0 - smoothstep(0.0, fw * 0.7, abs(shownW - 0.92))) * 0.55;
-    soft *= step(0.002, fwidth(shownW)); // only where the mask actually fades
+    soft *= step(0.002, fwidth(shownW)) * uMaskFeather; // only where the mask actually fades
     float lines = max(edge, soft);
     if (uMaskStyle < 0.5) d = mix(d, uMaskColor, shownW * uMaskOpacity);
     else if (uMaskStyle < 1.5) d = mix(mix(d, uMaskColor, shownW * uMaskOpacity * 0.6), uMaskColor, lines);
