@@ -71,15 +71,23 @@ jobs:
       - name: Install GearCheck 1.5.0 and let it save its data
         if: steps.handover.outputs.test == 'true'
         shell: pwsh
-        timeout-minutes: 5
+        timeout-minutes: 12
         run: |
           Invoke-WebRequest https://github.com/subtlemoon/gearcheck/releases/download/v1.5.0/GearCheck-Setup-1.5.0.exe -OutFile gc.exe
-          Start-Process .\gc.exe -ArgumentList '/S' -Wait
-          # The installer can hand off to a copy of itself and return early,
-          # so give the files a minute to appear.
+          Write-Host "downloaded $((Get-Item gc.exe).Length) bytes"
+          # The old installer now and then exits without installing on a fresh
+          # runner, so try a few times and say where things went.
           $exe = "$env:LOCALAPPDATA\Programs\gearcheck\GearCheck.exe"
-          for ($i = 0; $i -lt 60 -and !(Test-Path $exe); $i++) { Start-Sleep 1 }
-          if (!(Test-Path $exe)) { throw "GearCheck did not install" }
+          for ($try = 1; $try -le 3 -and !(Test-Path $exe); $try++) {
+            $p = Start-Process .\gc.exe -ArgumentList '/S', '/currentuser' -PassThru
+            $p.WaitForExit(180000) | Out-Null
+            for ($i = 0; $i -lt 30 -and !(Test-Path $exe); $i++) { Start-Sleep 1 }
+            Write-Host "attempt $try exit code $($p.ExitCode), installed: $(Test-Path $exe)"
+          }
+          if (!(Test-Path $exe)) {
+            Get-ChildItem "$env:LOCALAPPDATA\Programs", "$env:ProgramFiles" -Filter *gear* -ErrorAction SilentlyContinue | Format-Table FullName
+            throw "GearCheck did not install"
+          }
           Start-Sleep 5
           Start-Process $exe
           Start-Sleep 25
