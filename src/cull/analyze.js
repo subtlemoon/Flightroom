@@ -12,7 +12,7 @@
 // each other, where only the best one keeps a good rating.
 import { ROTATION } from './rotation.js';
 
-export const VERSION = 2; // bump when measurements change, so old ones are redone
+export const VERSION = 3; // bump when measurements change, so old ones are redone
 const MAX_W = 640; // the embedded preview's size: enough for focus, and fast
 
 // The bitmap turned the right way up (the previews are stored as the sensor saw them).
@@ -112,7 +112,7 @@ const SIMILAR = 22; // max fingerprint difference (of 64) for "the same shot"
 // Turns measurements into suggestions. `items` are in folder order:
 // [{ id, name, m: measure(), takenAt }]. Returns { [id]: { stars, reasons, group } }.
 // Stars: 4 = among the best, 3 = good, 2 = keeper, 1 = likely reject. 5 is left
-// for you to give.
+// for you to give. Most sharp, well-exposed photos get 3 or 4.
 export function suggest(items) {
   const done = items.filter((it) => it.m);
   if (!done.length) return {};
@@ -125,11 +125,11 @@ export function suggest(items) {
     const { m } = it;
     const reasons = [];
     let quality = pct(m.sharp);
-    const soft = m.sharp < median * 0.35;
+    const soft = m.sharp < median * 0.3;
     if (soft && m.subject && m.frameSharp >= median * 0.7) reasons.push('Focus missed the subject');
     else if (soft) reasons.push(m.subject ? 'Subject is soft or blurry' : 'Soft or blurry');
-    if (m.clipHi > 0.08) { quality -= 0.25; reasons.push(`Blown highlights (${Math.round(m.clipHi * 100)}%)`); }
-    if (m.clipLo > 0.25) { quality -= 0.2; reasons.push('Very dark shadows'); }
+    if (m.clipHi > 0.12) { quality -= 0.15; reasons.push(`Blown highlights (${Math.round(m.clipHi * 100)}%)`); }
+    if (m.clipLo > 0.3) { quality -= 0.15; reasons.push('Very dark shadows'); }
     if (m.mean < 35) { quality -= 0.2; reasons.push('Very dark'); } else if (m.mean > 225) { quality -= 0.2; reasons.push('Very bright'); }
     out[it.id] = { quality, soft, reasons };
   }
@@ -158,13 +158,22 @@ export function suggest(items) {
     }
   }
 
-  // Stars: rejects first, then the keepers ranked against each other.
+  // Stars: soft photos are rejects; the rest ranked against each other, where
+  // only the bottom fifth drops to 2. A near-copy of a better shot in its burst
+  // is still a keeper (2), one below that shot.
   const keepers = done.filter((it) => !out[it.id].soft && !out[it.id].duplicate)
     .sort((a, b) => out[b.id].quality - out[a.id].quality);
   keepers.forEach((it, i) => {
     const rank = i / Math.max(1, keepers.length);
-    out[it.id].stars = rank < 0.2 ? 4 : rank < 0.6 ? 3 : 2;
+    out[it.id].stars = rank < 0.35 ? 4 : rank < 0.8 ? 3 : 2;
   });
+  for (const it of done) {
+    const s = out[it.id];
+    if (s.duplicate && !s.soft) {
+      const best = groups[s.group].find((id) => !out[id].duplicate);
+      s.stars = Math.max(2, (out[best].stars || 2) - 1);
+    }
+  }
   for (const it of done) {
     const s = out[it.id];
     if (s.stars == null) s.stars = 1;
