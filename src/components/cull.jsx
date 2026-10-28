@@ -683,7 +683,8 @@ export function Filmstrip(props) {
   );
 }
 
-function FilmstripRow({ photos, index, meta, suggestions, onSelect, requestMeta }) {
+// `picked`: ids selected along with the current photo (Develop's Ctrl/Shift+click); onSelect gets the click.
+function FilmstripRow({ photos, index, meta, suggestions, onSelect, requestMeta, picked }) {
   const ref = useRef();
   const [scroll, setScroll] = useState({ left: 0, width: 0 });
 
@@ -716,20 +717,20 @@ function FilmstripRow({ photos, index, meta, suggestions, onSelect, requestMeta 
     <div className="filmstrip" ref={ref} onScroll={(e) => setScroll({ left: e.currentTarget.scrollLeft, width: e.currentTarget.clientWidth })} onWheel={onWheel}>
       <div className="filmstrip-track" style={{ width: photos.length * CELL }}>
         {visible.map((p, i) => (
-          <Thumb key={p.id} photo={p} meta={meta[p.id]} suggested={suggestions[p.id]?.stars} active={first + i === index} left={(first + i) * CELL} onClick={() => onSelect(first + i)} />
+          <Thumb key={p.id} photo={p} meta={meta[p.id]} suggested={suggestions[p.id]?.stars} active={first + i === index} picked={picked?.has(p.id)} left={(first + i) * CELL} onClick={(e) => onSelect(first + i, e)} />
         ))}
       </div>
     </div>
   );
 }
 
-function Thumb({ photo, meta, suggested, active, left, onClick }) {
+function Thumb({ photo, meta, suggested, active, picked, left, onClick }) {
   const [src, setSrc] = useState(() => imgUrl('thumb', photo.id));
   const rating = photoRating(photo, meta);
   const rot = ROTATION[meta?.orientation] || 0;
   const onError = () => { if (src.startsWith(FILES)) thumbFallbackUrl(photo).then(setSrc, () => {}); };
   return (
-    <button className={`thumb${active ? ' active' : ''}`} style={{ left }} onClick={onClick} onMouseDown={(e) => e.preventDefault()} title={photo.name}>
+    <button className={`thumb${active ? ' active' : ''}${picked ? ' picked' : ''}`} style={{ left }} onClick={onClick} onMouseDown={(e) => e.preventDefault()} title={photo.name}>
       <img src={src} alt="" decoding="async" draggable={false} onError={onError} style={rot ? { transform: `rotate(${rot}deg)` } : undefined} />
       {rating > 0 ? <span className="thumb-stars">{'★'.repeat(rating)}</span>
         : suggested > 0 && <span className="thumb-stars ghost" title="Suggested by auto-rate">{'☆'.repeat(suggested)}</span>}

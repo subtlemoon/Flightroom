@@ -5,7 +5,9 @@ import { Slider } from './slider.jsx';
 import { CurveEditor } from './curve.jsx';
 import { BRUSH_DEFAULT, MASK_OPTIONS_DEFAULT, MaskAdjust, MaskOverlay, MaskPanel, OVERLAY_DEFAULT, maskActions, maskView, useStored } from './masks.jsx';
 import { AiDenoise, useAiInstall, useAiMasks } from './ai.jsx';
-import { MASK_EDGE, POINT_DEFAULT } from '../develop/masks.js';
+import { CopyDialog, PresetPanel } from './copy.jsx';
+import { applyTo, pick as pickSettings } from '../develop/copy.js';
+import { MASK_EDGE, POINT_DEFAULT, newId } from '../develop/masks.js';
 import { toggle, useLayout } from '../layout.js';
 import { Filmstrip, photoRating } from './cull.jsx';
 import { imgUrl, ROTATION } from '../cull/previews.js';
@@ -27,6 +29,8 @@ import { exportPhoto, exportSize } from '../develop/export.js';
 const isRaw = (p) => !!p.raw;
 const TRANSFORM_KEYS = ['perspVertical', 'perspHorizontal', 'perspRotate', 'perspAspect', 'perspScale', 'perspX', 'perspY', 'distortion'];
 const META_WINDOW = 20;
+// Stands in for a photo's as-shot colour when it isn't decoded (see applyPart).
+const NO_AS_SHOT = { temp: 5500, tint: 0 };
 
 export function DevelopView({ store, onCull }) {
   const bridge = app?.cull;
@@ -47,7 +51,12 @@ export function DevelopView({ store, onCull }) {
   const [clip, setClip] = useState(false);
   const [toast, setToast] = useState('');
   const [exporting, setExporting] = useState(null); // modal state
-  const [clipboard, setClipboard] = useState(null);
+  const [clipboard, setClipboard] = useState(null); // { part, groups }
+  const [copyGroups, setCopyGroups] = useStored('flightroom-copy-groups', { groups: null });
+  const [dialog, setDialog] = useState(null); // 'copy' | 'preset'
+  const [presets, setPresets] = useStored('flightroom-presets', { list: [], open: true });
+  const [hoverPreset, setHoverPreset] = useState(null);
+  const [picked, setPicked] = useState(() => new Set()); // filmstrip photos selected with the current one
   const [picking, setPicking] = useState(false); // 'wb' (white balance selector) | 'point' (a mask's Point Color)
   const [sel, setSelState] = useState(null); // selected mask and part: { mask, part }
   const [overlay, setOverlay] = useStored('flightroom-mask-overlay-2', OVERLAY_DEFAULT);
@@ -215,13 +224,52 @@ export function DevelopView({ store, onCull }) {
       blacks: r(loStops > -5 ? -(loStops + 5) * 10 : -5),
     });
   };
-  const copy = () => { if (s) { setClipboard(s); setToast('Settings copied'); } };
-  const paste = () => {
-    if (!clipboard || !opened?.asShot) return;
-    // White balance pastes as-is only if it was set by hand; crops aren't pasted.
-    const { crop: _, ...rest } = clipboard;
-    update((old) => ({ ...old, ...rest, crop: old.crop, ...(rest.wb === 'As Shot' ? { temp: opened.asShot.temp, tint: opened.asShot.tint } : {}) }));
-    setToast('Settings pasted');
+  const copy = () => { if (s) setDialog('copy'); };
+  // The photos an action applies to: the current one and any picked in the filmstrip.
+  const targets = () => (picked.size ? photos.filter((p) => p.id === photo?.id || picked.has(p.id)) : photo ? [photo] : []);
+  // Puts settings onto photos. Others than the one on screen get them written
+  // straight to their sidecars, without decoding their RAW files.
+  const applyPart = async (part, what) => {
+    const list = targets().filter((p) => p.raw);
+    let n = 0;
+    for (const p of list) {
+      if (p.id === photo?.id) {
+        if (opened?.asShot) { update((old) => applyTo(old, part, opened.asShot)); n++; }
+        continue;
+      }
+      const saved = await app.develop.read(p);
+      if (saved?.error) continue;
+      // Its as-shot colour isn't known without decoding; "As Shot" is written as just that.
+      const base = settingsCache.current.get(p.id) || fromXmp(saved.settings, saved.curves, NO_AS_SHOT, saved.own);
+      const out = toXmp(applyTo(base, part, null));
+      if (out.set.WhiteBalance === 'As Shot') { delete out.set.Temperature; delete out.set.Tint; out.remove.push('Temperature', 'Tint'); }
+      const res = await app.develop.save(p.sidecar, out);
+      if (res?.error) { setToast(`Couldn't save ${p.name}: ${res.error}`); return; }
+      settingsCache.current.delete(p.id);
+      history.current.delete(p.id);
+      n++;
+    }
+    setToast(n > 1 ? `${what} ${n} photos` : `${what} this photo`);
+  };
+  const paste = () => clipboard && applyPart(clipboard.part, 'Settings pasted to');
+  // Moving to a photo outside the selection ends it.
+  useEffect(() => { if (photo && picked.size && !picked.has(photo.id)) setPicked(new Set()); }, [photo?.id]);
+  const applyPreset = (p) => { setHoverPreset(null); applyPart(p.part, `${p.name} applied to`); };
+  const selectInStrip = (i, e) => {
+    const p = photos[i];
+    if (!p) return;
+    if (e?.ctrlKey || e?.metaKey) {
+      // Ctrl+click adds or removes a photo, keeping the current one.
+      setPicked((old) => { const n = new Set(old); if (photo) n.add(photo.id); n.has(p.id) && p.id !== photo?.id ? n.delete(p.id) : n.add(p.id); return n; });
+      return;
+    }
+    if (e?.shiftKey && photo) {
+      const [a, b] = [Math.min(index, i), Math.max(index, i)];
+      setPicked(new Set(photos.slice(a, b + 1).map((x) => x.id)));
+      return;
+    }
+    setPicked(new Set());
+    go(i);
   };
 
   const rate = useCallback(async (p, rating) => {
@@ -256,15 +304,17 @@ export function DevelopView({ store, onCull }) {
   const geoCache = useRef(null);
   useEffect(() => {
     const onKey = (e) => {
-      if (exporting) return;
+      if (exporting || dialog) return;
       const typing = e.target.closest?.('input[type=text], input[type=number], textarea, select, [contenteditable]');
       if (typing) return;
       const ctrl = e.ctrlKey || e.metaKey;
       const k = e.key.toLowerCase();
       if (ctrl && k === 'z') { e.preventDefault(); undo(e.shiftKey); return; }
       if (ctrl && k === 'y') { e.preventDefault(); undo(true); return; }
-      if (ctrl && e.shiftKey && k === 'c') { e.preventDefault(); copy(); return; }
-      if (ctrl && e.shiftKey && k === 'v') { e.preventDefault(); paste(); return; }
+      if (ctrl && k === 'c') { e.preventDefault(); copy(); return; }
+      if (ctrl && k === 'v') { e.preventDefault(); paste(); return; }
+      if (ctrl && k === 'a') { e.preventDefault(); setPicked(new Set(photos.map((p) => p.id))); return; }
+      if (e.key === 'Escape' && picked.size) { setPicked(new Set()); return; }
       if (ctrl || e.altKey) return;
       if (e.target.type === 'range') e.target.blur();
       if (e.key === '\\') { e.preventDefault(); if (!e.repeat) setBefore((b) => !b); return; }
@@ -315,7 +365,8 @@ export function DevelopView({ store, onCull }) {
 
   const info = photo && opened?.id === photo.id ? opened.info : null;
   const geo = info && (geoCache.current?.info === info ? geoCache.current.geo : (geoCache.current = { info, geo: new Geometry(info.width, info.height, info.orientation) }).geo);
-  const shown = s && before && opened?.asShot ? { ...defaults(opened.asShot), crop: s.crop } : s;
+  const shown = s && before && opened?.asShot ? { ...defaults(opened.asShot), crop: s.crop }
+    : s && hoverPreset && opened?.asShot ? applyTo(s, hoverPreset.part, opened.asShot) : s;
   // On the main photo: the mask overlay (when on) and Point Color's Visualize Range.
   const pointView = !!(maskOptions.visualize && selMask?.point);
   const mainMaskView = selMask && (overlay.show || pointView) ? { ...maskView(selMask, overlay), noOverlay: !overlay.show, point: pointView } : null;
@@ -348,7 +399,11 @@ export function DevelopView({ store, onCull }) {
       </header>
       <div className="dev-main">
         {layout.nav && <aside className="dev-left">
-          <MaskPanel s={s && info ? s : null} size={geo} sel={selMask ? sel : null} setSel={setSel} acts={acts} overlay={overlay} setOverlay={setOverlay} ai={aiMasks} />
+          <MaskPanel presets={(
+            <PresetPanel presets={presets.list} open={presets.open} setOpen={(open) => setPresets({ open })} disabled={!s || !info}
+              onApply={applyPreset} onHover={setHoverPreset} onNew={() => setDialog('preset')}
+              onDelete={(p) => setPresets({ list: presets.list.filter((x) => x.id !== p.id) })} />
+          )} s={s && info ? s : null} size={geo} sel={selMask ? sel : null} setSel={setSel} acts={acts} overlay={overlay} setOverlay={setOverlay} ai={aiMasks} />
         </aside>}
         <PanelHandle side="left" open={layout.nav} onClick={() => toggle('nav')} title={`${layout.nav ? 'Hide' : 'Show'} masks (F7)`} />
         <div className="dev-stage-col">
@@ -365,7 +420,7 @@ export function DevelopView({ store, onCull }) {
           ) : (
             <div className="hero-empty dev-msg"><h2>{list?.loading ? 'Reading folder…' : filter !== 'all' && allPhotos.length ? 'No photos with those stars' : 'No photos in this folder'}</h2></div>
           )}
-          <Filmstrip photos={photos} index={index} meta={meta} suggestions={{}} onSelect={go} requestMeta={requestMeta} />
+          <Filmstrip photos={photos} index={index} meta={meta} suggestions={{}} onSelect={selectInStrip} requestMeta={requestMeta} picked={picked.size ? picked : null} />
         </div>
         <PanelHandle side="right" open={layout.panel} onClick={() => toggle('panel')} title={`${layout.panel ? 'Hide' : 'Show'} adjustments (F8)`} />
         {layout.panel && <aside className="dev-panel">
@@ -384,6 +439,21 @@ export function DevelopView({ store, onCull }) {
       </div>
       {toast && <div className="cull-toast">{toast}</div>}
       {aiDialog}
+      {dialog === 'copy' && s && (
+        <CopyDialog groups={copyGroups.groups} onClose={() => setDialog(null)} onDone={(groups) => {
+          setCopyGroups({ groups });
+          setClipboard({ part: pickSettings(s, groups), groups });
+          setDialog(null);
+          setToast('Settings copied');
+        }} />
+      )}
+      {dialog === 'preset' && s && (
+        <CopyDialog naming onClose={() => setDialog(null)} onDone={(groups, name) => {
+          setPresets({ list: [...presets.list, { id: newId(), name, groups, part: pickSettings(s, groups) }].sort((a, b) => a.name.localeCompare(b.name)) });
+          setDialog(null);
+          setToast(`Preset "${name}" saved`);
+        }} />
+      )}
       {exporting && <ExportModal photo={photo} photos={allPhotos} folder={list?.folder} info={info} s={s} settingsCache={settingsCache.current}
         onClose={() => setExporting(null)} onDone={(msg) => { setExporting(null); setToast(msg); }} />}
     </div>
@@ -958,8 +1028,8 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
           ))}
         </div>
         <div className="grow" />
-        <button className="icon-btn" title="Copy settings (Ctrl+Shift+C)" onClick={onCopy}><Icon name="copy" size={15} /></button>
-        <button className="icon-btn" title="Paste settings (Ctrl+Shift+V)" onClick={onPaste || undefined} disabled={!onPaste}><Icon name="paste" size={15} /></button>
+        <button className="icon-btn" title="Copy settings (Ctrl+C)" onClick={onCopy}><Icon name="copy" size={15} /></button>
+        <button className="icon-btn" title="Paste settings (Ctrl+V)" onClick={onPaste || undefined} disabled={!onPaste}><Icon name="paste" size={15} /></button>
         <button className="btn btn-sm" onClick={onReset} disabled={!edited} title="Back to how the camera shot it">Reset all</button>
       </div>
       {cropMode && <CropPanel s={s} geo={geo} update={update} overlay={cropOverlay} setOverlay={setCropOverlay} onClose={onCropClose} />}

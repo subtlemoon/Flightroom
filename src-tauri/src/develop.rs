@@ -485,12 +485,8 @@ pub struct Opened {
     /// XYZ -> camera matrices with the colour temperature they were measured at.
     matrices: Vec<(f32, [f32; 9])>,
     camera: String,
-    /// Develop settings already in the sidecar (crs: names without the prefix).
-    settings: HashMap<String, String>,
-    /// Point curves: ToneCurvePV2012 and its Red, Green and Blue versions.
-    curves: HashMap<String, Vec<String>>,
-    /// Flightroom's own values (fr: names), such as its masks.
-    own: HashMap<String, String>,
+    #[serde(flatten)]
+    saved: Saved,
     /// AI Denoise has been worked out for this photo.
     denoised: bool,
 }
@@ -503,8 +499,6 @@ pub async fn develop_open(app: AppHandle, id: String, sidecar: Option<String>) -
         let p = photos.allowed(&id).ok_or("This photo's folder isn't open")?;
         let raw = app.state::<Develop>().raw(&p, true)?;
         let orientation = photos.info(&p).map(|(_, i)| i.orientation).unwrap_or(1);
-        let text = sidecar.and_then(|s| photos.allowed(&s)).and_then(|s| std::fs::read_to_string(s).ok());
-        let doc = crate::xmp::Doc::new(text.as_deref().unwrap_or(""));
         Ok(Opened {
             width: raw.w,
             height: raw.h,
@@ -512,20 +506,45 @@ pub async fn develop_open(app: AppHandle, id: String, sidecar: Option<String>) -
             as_shot: raw.wb,
             matrices: raw.matrices.clone(),
             camera: format!("{} {}", raw.make, raw.model),
-            settings: doc.all("crs"),
-            curves: ["", "Red", "Green", "Blue"]
-                .iter()
-                .filter_map(|c| {
-                    let name = format!("ToneCurvePV2012{c}");
-                    doc.get_seq("crs", &name).map(|v| (name, v))
-                })
-                .collect(),
-            own: doc.all("fr"),
+            saved: saved(&photos, sidecar),
             denoised: denoise_file(&app, &raw).exists(),
         })
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Develop settings in a sidecar.
+#[derive(Serialize, Default)]
+pub struct Saved {
+    /// crs: names without the prefix.
+    settings: HashMap<String, String>,
+    /// Point curves: ToneCurvePV2012 and its Red, Green and Blue versions.
+    curves: HashMap<String, Vec<String>>,
+    /// Flightroom's own values (fr: names), such as its masks.
+    own: HashMap<String, String>,
+}
+
+fn saved(photos: &Photos, sidecar: Option<String>) -> Saved {
+    let text = sidecar.and_then(|s| photos.allowed(&s)).and_then(|s| std::fs::read_to_string(s).ok());
+    let doc = crate::xmp::Doc::new(text.as_deref().unwrap_or(""));
+    Saved {
+        settings: doc.all("crs"),
+        curves: ["", "Red", "Green", "Blue"]
+            .iter()
+            .filter_map(|c| {
+                let name = format!("ToneCurvePV2012{c}");
+                doc.get_seq("crs", &name).map(|v| (name, v))
+            })
+            .collect(),
+        own: doc.all("fr"),
+    }
+}
+
+/// A photo's saved settings without decoding it (for pasting settings and presets onto it).
+#[tauri::command]
+pub fn develop_read(app: AppHandle, sidecar: Option<String>) -> Saved {
+    saved(&app.state::<Photos>(), sidecar)
 }
 
 /// Frees memory when leaving the Develop tab.
