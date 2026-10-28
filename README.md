@@ -93,3 +93,12 @@ Edits are never written into the RAW file. They are saved as Lightroom
 `crs:Contrast2012`, tone curve, HSL, crop, and so on), the same file Lightroom
 reads, alongside the star rating. Export renders the full-resolution photo in
 tiles and saves sRGB JPEGs with the camera's Exif.
+
+The panels follow Lightroom's: Basic (profile, treatment, white balance presets
+and selector, Auto), Tone Curve (parametric with splits, point and RGB curves,
+Refine Saturation), Color Mixer (and the B&W mix), Color Grading, Detail,
+Lens Corrections (manual distortion, vignetting, defringe), Transform, Effects
+and Calibration, each written under Lightroom's own `crs:` name. Lightroom's AI
+tools (Denoise, Super Resolution, Lens Blur), Point Color, Upright and lens
+profiles aren't previewed; "Enable profile corrections" is passed on for
+Lightroom to apply.

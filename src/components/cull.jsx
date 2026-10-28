@@ -1,6 +1,7 @@
 import { bridge as app, FILES } from '../bridge.js';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Icon, Modal } from './ui.jsx';
+import { Dropdown, Icon, Modal, PanelHandle } from './ui.jsx';
+import { toggle, useLayout } from '../layout.js';
 import { clearPreviews, decodeThumb, drawPhoto, geometry, imgUrl, loadFit, loadFull, loadThumb, prune, ROTATION, thumbFallbackUrl } from '../cull/previews.js';
 import { loadAnalysis, measure, saveAnalysis, suggest, upright } from '../cull/analyze.js';
 import { measurePool } from '../cull/measure-pool.js';
@@ -62,6 +63,7 @@ export function CullView({ store, onDevelop }) {
     if (filter === 'rejects') return allPhotos.filter((p) => suggestions[p.id]?.stars === 1);
     return allPhotos.filter((p) => inFilter(filter, photoRating(p, meta[p.id])));
   }, [allPhotos, meta, filter, suggestions]);
+  const starOptions = useMemo(() => STAR_FILTERS.map(([k, label]) => ({ value: k, label, hint: allPhotos.filter((p) => inFilter(k, photoRating(p, meta[p.id]))).length })), [allPhotos, meta]);
   // The current photo is tracked by id so it stays put when the filter changes.
   // If it drops out of the filter (say, rated while showing Unrated), the photo
   // that slid into its place becomes current.
@@ -298,13 +300,9 @@ export function CullView({ store, onDevelop }) {
             </button>
           ))}
         </div>
-        <select className={`cull-stars${filter.startsWith('stars:') ? ' on' : ''}`} value={filter.startsWith('stars:') ? filter : ''}
-          onChange={(e) => setFilter(e.target.value || 'all')} title="Show photos by star rating">
-          <option value="">Stars…</option>
-          {STAR_FILTERS.map(([k, label]) => (
-            <option key={k} value={k}>{label} ({allPhotos.filter((p) => inFilter(k, photoRating(p, meta[p.id]))).length})</option>
-          ))}
-        </select>
+        <Dropdown className={`cull-stars${filter.startsWith('stars:') ? ' on' : ''}`} value={filter} label={filter.startsWith('stars:') ? undefined : 'Stars…'}
+          onChange={setFilter} title="Show photos by star rating"
+          options={starOptions} />
         <div className="cull-stats muted">
           {list?.loading ? 'Reading folder…' : `${photos.length ? index + 1 : 0} of ${photos.length}`}
         </div>
@@ -674,7 +672,18 @@ function SubjectBox({ box, g, W, H, dpr }) {
 // folder of thousands of photos scrolls as smoothly as a folder of ten.
 const CELL = 96;
 
-export function Filmstrip({ photos, index, meta, suggestions, onSelect, requestMeta }) {
+// The filmstrip with its hide/show handle (F6).
+export function Filmstrip(props) {
+  const { strip } = useLayout();
+  return (
+    <div className={`strip-wrap${strip ? '' : ' closed'}`}>
+      <PanelHandle side="bottom" open={strip} onClick={() => toggle('strip')} title={`${strip ? 'Hide' : 'Show'} filmstrip (F6)`} />
+      {strip && <FilmstripRow {...props} />}
+    </div>
+  );
+}
+
+function FilmstripRow({ photos, index, meta, suggestions, onSelect, requestMeta }) {
   const ref = useRef();
   const [scroll, setScroll] = useState({ left: 0, width: 0 });
 

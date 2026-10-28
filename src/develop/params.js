@@ -8,8 +8,11 @@ export const COLOR_HUES = [0, 30, 60, 120, 180, 240, 270, 300]; // band centres,
 // key, label, crs name, min, max, step, default
 const S = (key, label, crs, min, max, step = 1, def = 0, extra = {}) => ({ key, label, crs, min, max, step, def, ...extra });
 
+// Sections, in Lightroom's order. `groups` are plain sliders; `more` are
+// values drawn by their own controls (colour wheels, mixer); `keys` are the
+// other settings a section owns (for its reset button).
 export const SECTIONS = [
-  { id: 'basic', title: 'Basic', groups: [
+  { id: 'basic', title: 'Basic', keys: ['wb', 'temp', 'tint', 'profile', 'bw'], groups: [
     { title: 'White balance', sliders: [
       S('temp', 'Temp', 'Temperature', 2000, 50000, 50, null, { log: true, gradient: 'temp' }),
       S('tint', 'Tint', 'Tint', -150, 150, 1, null, { gradient: 'tint' }),
@@ -30,15 +33,34 @@ export const SECTIONS = [
       S('saturation', 'Saturation', 'Saturation', -100, 100),
     ] },
   ] },
-  { id: 'curve', title: 'Tone curve', groups: [
-    { title: 'Regions', sliders: [
+  { id: 'curve', title: 'Tone curve', keys: ['curve', 'curveR', 'curveG', 'curveB'], groups: [
+    { title: 'Regions', parametric: true, sliders: [
       S('pHighlights', 'Highlights', 'ParametricHighlights', -100, 100),
       S('pLights', 'Lights', 'ParametricLights', -100, 100),
       S('pDarks', 'Darks', 'ParametricDarks', -100, 100),
       S('pShadows', 'Shadows', 'ParametricShadows', -100, 100),
     ] },
+    { title: 'Splits', parametric: true, sliders: [
+      S('pSplitS', 'Shadows', 'ParametricShadowSplit', 10, 70, 1, 25),
+      S('pSplitM', 'Midtones', 'ParametricMidtoneSplit', 20, 80, 1, 50),
+      S('pSplitH', 'Highlights', 'ParametricHighlightSplit', 30, 90, 1, 75),
+    ] },
+    { title: 'Refine', sliders: [
+      S('refineSat', 'Saturation', 'CurveRefineSaturation', 0, 100, 1, 100),
+    ] },
   ] },
   { id: 'color', title: 'Color mixer', groups: [] },
+  { id: 'grading', title: 'Color grading', groups: [
+    { title: 'Balance', sliders: [
+      S('gBlending', 'Blending', 'ColorGradeBlending', 0, 100, 1, 50),
+      S('gBalance', 'Balance', 'SplitToningBalance', -100, 100),
+    ] },
+  ], more: [
+    S('gShadowHue', 'Hue', 'SplitToningShadowHue', 0, 359), S('gShadowSat', 'Saturation', 'SplitToningShadowSaturation', 0, 100), S('gShadowLum', 'Luminance', 'ColorGradeShadowLum', -100, 100),
+    S('gMidHue', 'Hue', 'ColorGradeMidtoneHue', 0, 359), S('gMidSat', 'Saturation', 'ColorGradeMidtoneSat', 0, 100), S('gMidLum', 'Luminance', 'ColorGradeMidtoneLum', -100, 100),
+    S('gHighHue', 'Hue', 'SplitToningHighlightHue', 0, 359), S('gHighSat', 'Saturation', 'SplitToningHighlightSaturation', 0, 100), S('gHighLum', 'Luminance', 'ColorGradeHighlightLum', -100, 100),
+    S('gGlobalHue', 'Hue', 'ColorGradeGlobalHue', 0, 359), S('gGlobalSat', 'Saturation', 'ColorGradeGlobalSat', 0, 100), S('gGlobalLum', 'Luminance', 'ColorGradeGlobalLum', -100, 100),
+  ] },
   { id: 'detail', title: 'Detail', groups: [
     { title: 'Sharpening', sliders: [
       S('sharpen', 'Amount', 'Sharpness', 0, 150, 1, 40),
@@ -48,37 +70,120 @@ export const SECTIONS = [
     ] },
     { title: 'Noise reduction', sliders: [
       S('nrLuminance', 'Luminance', 'LuminanceSmoothing', 0, 100, 1, 0),
+      S('nrLumDetail', 'Detail', 'LuminanceNoiseReductionDetail', 0, 100, 1, 50),
+      S('nrLumContrast', 'Contrast', 'LuminanceNoiseReductionContrast', 0, 100, 1, 0),
       S('nrColor', 'Color', 'ColorNoiseReduction', 0, 100, 1, 25),
+      S('nrColorDetail', 'Detail', 'ColorNoiseReductionDetail', 0, 100, 1, 50),
+      S('nrColorSmooth', 'Smoothness', 'ColorNoiseReductionSmoothness', 0, 100, 1, 50),
     ] },
   ] },
-  { id: 'effects', title: 'Effects', groups: [
-    { title: 'Vignette', sliders: [
+  { id: 'lens', title: 'Lens corrections', keys: ['removeCA', 'lensProfile'], groups: [
+    { title: 'Distortion', sliders: [
+      S('distortion', 'Amount', 'LensManualDistortionAmount', -100, 100),
+    ] },
+    { title: 'Defringe', sliders: [
+      S('defringePurple', 'Purple', 'DefringePurpleAmount', 0, 20),
+      S('defringeGreen', 'Green', 'DefringeGreenAmount', 0, 20),
+    ] },
+    { title: 'Vignetting', sliders: [
+      S('lensVignette', 'Amount', 'VignetteAmount', -100, 100),
+      S('lensVignetteMid', 'Midpoint', 'VignetteMidpoint', 0, 100, 1, 50),
+    ] },
+  ] },
+  { id: 'transform', title: 'Transform', keys: ['constrainCrop'], groups: [
+    { title: 'Transform', sliders: [
+      S('perspVertical', 'Vertical', 'PerspectiveVertical', -100, 100),
+      S('perspHorizontal', 'Horizontal', 'PerspectiveHorizontal', -100, 100),
+      S('perspRotate', 'Rotate', 'PerspectiveRotate', -10, 10, 0.1, 0, { decimals: 1 }),
+      S('perspAspect', 'Aspect', 'PerspectiveAspect', -100, 100),
+      S('perspScale', 'Scale', 'PerspectiveScale', 50, 150, 1, 100),
+      S('perspX', 'X Offset', 'PerspectiveX', -100, 100, 0.1, 0, { decimals: 1 }),
+      S('perspY', 'Y Offset', 'PerspectiveY', -100, 100, 0.1, 0, { decimals: 1 }),
+    ] },
+  ] },
+  { id: 'effects', title: 'Effects', keys: ['vignetteStyle'], groups: [
+    { title: 'Post-crop vignetting', sliders: [
       S('vignette', 'Amount', 'PostCropVignetteAmount', -100, 100),
       S('vignetteMidpoint', 'Midpoint', 'PostCropVignetteMidpoint', 0, 100, 1, 50),
       S('vignetteRoundness', 'Roundness', 'PostCropVignetteRoundness', -100, 100),
       S('vignetteFeather', 'Feather', 'PostCropVignetteFeather', 0, 100, 1, 50),
+      S('vignetteHighlights', 'Highlights', 'PostCropVignetteHighlightContrast', 0, 100),
     ] },
+    { title: 'Grain', sliders: [
+      S('grain', 'Amount', 'GrainAmount', 0, 100),
+      S('grainSize', 'Size', 'GrainSize', 0, 100, 1, 25),
+      S('grainRough', 'Roughness', 'GrainFrequency', 0, 100, 1, 50),
+    ] },
+  ] },
+  { id: 'calibration', title: 'Calibration', groups: [
+    { title: 'Shadows', sliders: [S('shadowTint', 'Tint', 'ShadowTint', -100, 100, 1, 0, { gradient: 'tint' })] },
+    { title: 'Red primary', sliders: [S('redHue', 'Hue', 'RedHue', -100, 100, 1, 0, { gradient: 'hue-red' }), S('redSat', 'Saturation', 'RedSaturation', -100, 100, 1, 0, { gradient: 'sat-red' })] },
+    { title: 'Green primary', sliders: [S('greenHue', 'Hue', 'GreenHue', -100, 100, 1, 0, { gradient: 'hue-green' }), S('greenSat', 'Saturation', 'GreenSaturation', -100, 100, 1, 0, { gradient: 'sat-green' })] },
+    { title: 'Blue primary', sliders: [S('blueHue', 'Hue', 'BlueHue', -100, 100, 1, 0, { gradient: 'hue-blue' }), S('blueSat', 'Saturation', 'BlueSaturation', -100, 100, 1, 0, { gradient: 'sat-blue' })] },
   ] },
 ];
 
+const MIX = { hue: 'Hue', sat: 'Saturation', lum: 'Luminance' };
 export const HSL_SLIDERS = ['hue', 'sat', 'lum'].flatMap((kind) => COLORS.map((c, i) => ({
   key: `${kind}${i}`,
   label: c,
-  crs: `${{ hue: 'Hue', sat: 'Saturation', lum: 'Luminance' }[kind]}Adjustment${c}`,
+  crs: `${MIX[kind]}Adjustment${c}`,
   min: -100, max: 100, step: 1, def: 0, kind, index: i,
 })));
+// The black & white mix: how bright each colour turns out in grey.
+export const GRAY_SLIDERS = COLORS.map((c, i) => ({ key: `gray${i}`, label: c, crs: `GrayMixer${c}`, min: -100, max: 100, step: 1, def: 0, kind: 'gray', index: i }));
 
-export const SLIDERS = [...SECTIONS.flatMap((s) => s.groups.flatMap((g) => g.sliders)), ...HSL_SLIDERS];
+const sectionSliders = (sec) => [...sec.groups.flatMap((g) => g.sliders), ...(sec.more || []), ...(sec.id === 'color' ? [...HSL_SLIDERS, ...GRAY_SLIDERS] : [])];
+export const SLIDERS = SECTIONS.flatMap(sectionSliders);
 export const SLIDER = Object.fromEntries(SLIDERS.map((s) => [s.key, s]));
+/** Every setting each section owns, for its reset button. */
+export const SECTION_KEYS = Object.fromEntries(SECTIONS.map((sec) => [sec.id, [...sectionSliders(sec).map((s) => s.key), ...(sec.keys || [])]]));
 
 export const LINEAR_CURVE = [[0, 0], [255, 255]];
+// Lightroom's point curve presets (process 2012 and later).
+export const CURVE_PRESETS = [
+  ['Linear', LINEAR_CURVE],
+  ['Medium Contrast', [[0, 0], [32, 22], [64, 56], [128, 128], [192, 196], [255, 255]]],
+  ['Strong Contrast', [[0, 0], [32, 16], [64, 50], [128, 128], [192, 202], [255, 255]]],
+];
+export const CURVE_CHANNELS = [['curve', '', 'RGB'], ['curveR', 'Red', 'Red'], ['curveG', 'Green', 'Green'], ['curveB', 'Blue', 'Blue']];
 
+// The starting look, as Lightroom's profile list names them. Adobe Color is
+// Lightroom's default; Camera Standard matches the camera's own JPEG.
+export const PROFILES = [['adobe', 'Adobe Color'], ['camera', 'Camera Standard']];
+
+// White balance presets for RAW files, as in Lightroom: [name, temp, tint].
+export const WB_PRESETS = [['As Shot'], ['Auto'], ['Daylight', 5500, 10], ['Cloudy', 6500, 10], ['Shade', 7500, 10], ['Tungsten', 2850, 0], ['Fluorescent', 3800, 21], ['Flash', 5500, 0], ['Custom']];
+
+export const VIGNETTE_STYLES = [[1, 'Highlight Priority'], [2, 'Color Priority'], [3, 'Paint Overlay']];
+
+// Defaults are asked for often (every redraw of the panel), so they're kept per photo.
+const defaultsCache = new WeakMap();
 export function defaults(asShot) {
-  const s = { wb: 'As Shot', curve: LINEAR_CURVE, crop: null };
+  let d = defaultsCache.get(asShot);
+  if (!d) { d = makeDefaults(asShot); defaultsCache.set(asShot, d); }
+  return { ...d };
+}
+function makeDefaults(asShot) {
+  const s = { wb: 'As Shot', profile: 'adobe', bw: false, removeCA: false, lensProfile: false, vignetteStyle: 1, constrainCrop: false, crop: null };
+  for (const [k] of CURVE_CHANNELS) s[k] = LINEAR_CURVE;
   for (const sl of SLIDERS) s[sl.key] = sl.def;
   s.temp = asShot.temp;
   s.tint = asShot.tint;
   return s;
+}
+
+/** Settings with one section put back to how the camera shot it. */
+export function resetSection(s, id, asShot) {
+  const d = defaults(asShot);
+  return { ...s, ...Object.fromEntries(SECTION_KEYS[id].map((k) => [k, d[k]])) };
+}
+
+const same = (a, b) => a === b || (Array.isArray(a) && JSON.stringify(a) === JSON.stringify(b));
+/** Whether a section differs from how the camera shot it. */
+export function sectionEdited(s, id, asShot) {
+  const d = defaultsCache.get(asShot) || defaults(asShot);
+  return SECTION_KEYS[id].some((k) => (k === 'temp' || k === 'tint' ? false : !same(s[k], d[k])));
 }
 
 // Lightroom writes numbers with an explicit sign: "+0.35", "-20", "0".
@@ -87,19 +192,28 @@ const signed = (v, decimals = 0) => {
   return Number(t) > 0 ? `+${t}` : Number(t) === 0 ? (0).toFixed(decimals) : t;
 };
 
-/** Settings from a sidecar's crs: values (anything missing keeps its default). */
-export function fromXmp(crs, curve, asShot) {
+/** Settings from a sidecar's crs: values and point curves (anything missing keeps its default). */
+export function fromXmp(crs, curves, asShot) {
   const s = defaults(asShot);
   const num = (k) => (crs[k] != null && crs[k] !== '' && Number.isFinite(Number(crs[k])) ? Number(crs[k]) : null);
   for (const sl of SLIDERS) {
     const v = num(sl.crs);
     if (v != null) s[sl.key] = Math.min(sl.max, Math.max(sl.min, v));
   }
-  if (crs.WhiteBalance && crs.WhiteBalance !== 'As Shot' && num('Temperature') != null) s.wb = 'Custom';
+  if (/^Camera /i.test(crs.CameraProfile || '')) s.profile = 'camera';
+  s.bw = crs.ConvertToGrayscale === 'True';
+  s.removeCA = num('AutoLateralCA') === 1;
+  s.lensProfile = num('LensProfileEnable') === 1;
+  s.constrainCrop = num('CropConstrainToWarp') === 1;
+  if ([1, 2, 3].includes(num('PostCropVignetteStyle'))) s.vignetteStyle = num('PostCropVignetteStyle');
+  const wb = crs.WhiteBalance;
+  if (wb && wb !== 'As Shot' && num('Temperature') != null) s.wb = WB_PRESETS.some(([n]) => n === wb) ? wb : 'Custom';
   else { s.temp = asShot.temp; s.tint = asShot.tint; }
-  if (curve?.length >= 2) {
-    const pts = curve.map((p) => p.split(',').map(Number)).filter((p) => p.length === 2 && p.every(Number.isFinite));
-    if (pts.length >= 2) s.curve = pts;
+  for (const [k, suffix] of CURVE_CHANNELS) {
+    const seq = curves?.[`ToneCurvePV2012${suffix}`];
+    if (!(seq?.length >= 2)) continue;
+    const pts = seq.map((p) => p.split(',').map(Number)).filter((p) => p.length === 2 && p.every(Number.isFinite));
+    if (pts.length >= 2) s[k] = pts;
   }
   if (crs.HasCrop === 'True') {
     const c = { left: num('CropLeft') ?? 0, top: num('CropTop') ?? 0, right: num('CropRight') ?? 1, bottom: num('CropBottom') ?? 1, angle: num('CropAngle') ?? 0 };
@@ -108,7 +222,8 @@ export function fromXmp(crs, curve, asShot) {
   return s;
 }
 
-const isLinear = (curve) => curve.length === 2 && curve[0][0] === 0 && curve[0][1] === 0 && curve[1][0] === 255 && curve[1][1] === 255;
+export const isLinear = (curve) => curve.length === 2 && curve[0][0] === 0 && curve[0][1] === 0 && curve[1][0] === 255 && curve[1][1] === 255;
+export const curveName = (curve) => CURVE_PRESETS.find(([, c]) => same(c, curve))?.[0] || 'Custom';
 
 /** What to write to the sidecar for these settings. */
 export function toXmp(s) {
@@ -117,12 +232,12 @@ export function toXmp(s) {
     ProcessVersion: '11.0',
     HasSettings: 'True',
     AlreadyApplied: 'False',
-    WhiteBalance: s.wb === 'As Shot' ? 'As Shot' : 'Custom',
-    ToneCurveName2012: isLinear(s.curve) ? 'Linear' : 'Custom',
-    ParametricShadowSplit: '25',
-    ParametricMidtoneSplit: '50',
-    ParametricHighlightSplit: '75',
-    PostCropVignetteStyle: '1',
+    WhiteBalance: s.wb,
+    ToneCurveName2012: curveName(s.curve),
+    ConvertToGrayscale: s.bw ? 'True' : 'False',
+    AutoLateralCA: s.removeCA ? '1' : '0',
+    LensProfileEnable: s.lensProfile ? '1' : '0',
+    PostCropVignetteStyle: String(s.vignetteStyle || 1),
   };
   for (const sl of SLIDERS) {
     const v = s[sl.key];
@@ -131,27 +246,31 @@ export function toXmp(s) {
     else set[sl.crs] = sl.min >= 0 ? String(Math.round(v)) : signed(v, sl.decimals || 0);
   }
   const remove = [];
+  // No CameraProfile means Lightroom's default, Adobe Color.
+  if (s.profile === 'camera') set.CameraProfile = 'Camera Standard';
+  else remove.push('CameraProfile');
+  // Lightroom picks the lens profile itself from the photo's lens details.
+  if (s.lensProfile) set.LensProfileSetup = 'LensDefaults';
   if (s.crop) {
     Object.assign(set, {
       HasCrop: 'True',
       CropLeft: s.crop.left.toFixed(6), CropTop: s.crop.top.toFixed(6),
       CropRight: s.crop.right.toFixed(6), CropBottom: s.crop.bottom.toFixed(6),
       CropAngle: s.crop.angle.toFixed(2),
-      CropConstrainToWarp: '0',
+      CropConstrainToWarp: s.constrainCrop ? '1' : '0',
     });
   } else {
     set.HasCrop = 'False';
     remove.push('CropLeft', 'CropTop', 'CropRight', 'CropBottom', 'CropAngle');
   }
-  const seqs = { ToneCurvePV2012: s.curve.map(([x, y]) => `${Math.round(x)}, ${Math.round(y)}`) };
+  const pts = (c) => c.map(([x, y]) => `${Math.round(x)}, ${Math.round(y)}`);
+  const seqs = Object.fromEntries(CURVE_CHANNELS.map(([k, suffix]) => [`ToneCurvePV2012${suffix}`, pts(s[k] || LINEAR_CURVE)]));
   return { set, remove, seqs };
 }
 
 /** True when the settings differ from what the photo looked like straight from the camera. */
 export function isEdited(s, asShot) {
-  const d = defaults(asShot);
-  return SLIDERS.some((sl) => sl.key !== 'temp' && sl.key !== 'tint' && s[sl.key] !== d[sl.key])
-    || s.wb !== 'As Shot' || !!s.crop || !isLinear(s.curve);
+  return !!s.crop || SECTIONS.some((sec) => sectionEdited(s, sec.id, asShot));
 }
 
 export function formatValue(sl, v) {

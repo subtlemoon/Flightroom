@@ -1,7 +1,8 @@
 import { bridge as app } from './bridge.js';
 import { Component, useEffect, useState } from 'react';
 import { useStore } from './store.js';
-import { Icon } from './components/ui.jsx';
+import { Icon, PanelHandle } from './components/ui.jsx';
+import { toggle, toggleSides, useLayout } from './layout.js';
 import { GearDetail, GearForm } from './components/gear.jsx';
 import { GroupForm, GroupView, PresetView } from './components/groups.jsx';
 import { CatalogView, MyGearView, SettingsView } from './components/library.jsx';
@@ -51,9 +52,25 @@ export default function App() {
     </button>
   );
 
+  const layout = useLayout();
+  const photoView = view.name === 'cull' || view.name === 'develop';
+  // Lightroom's panel keys: Tab = side panels, F6 = filmstrip, F7 = left, F8 = right.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.target.closest?.('input, textarea, select, [contenteditable]') || document.querySelector('.overlay')) return;
+      if (e.key === 'F7') { e.preventDefault(); toggle('nav'); }
+      else if (e.key === 'F8') { e.preventDefault(); toggle('panel'); }
+      else if (e.key === 'F6') { e.preventDefault(); toggle('strip'); }
+      else if (e.key === 'Tab' && photoView && !e.shiftKey) { e.preventDefault(); toggleSides(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [photoView]);
+
   return (
-    <div className="app">
-      <nav className="sidebar">
+    <div className={`app${layout.nav ? '' : ' nav-hidden'}`}>
+      <nav className="sidebar" aria-hidden={!layout.nav}>
         <div className="logo">
           <div className="logo-mark"><Icon name="lens" size={20} /></div>
           <div><div className="logo-name">Flightroom</div><div className="logo-sub">Cull · develop · plan</div></div>
@@ -82,7 +99,10 @@ export default function App() {
         </div>
       </nav>
 
-      <main className={`content${view.name === 'cull' || view.name === 'develop' ? ' content-cull' : ''}`}><Boundary key={view.name}>{main}</Boundary></main>
+      <main className={`content${photoView ? ' content-cull' : ''}`}>
+        <PanelHandle side="left" open={layout.nav} onClick={() => toggle('nav')} title={`${layout.nav ? 'Hide' : 'Show'} sidebar (F7)`} />
+        <Boundary key={view.name}>{main}</Boundary>
+      </main>
 
       {detail && (
         <GearDetail key={detail.id} item={detail} owned={state.owned.includes(detail.id)} usedIn={usedIn(detail.id)}

@@ -28,7 +28,7 @@ export const bridge = inApp ? {
   checkForUpdates: () => call('update_check'),
   installUpdate: () => call('update_install'),
   onUpdateStatus: (fn) => onEvent('update:status', fn),
-  openUrl: (url) => openUrl(url).catch(() => {}),
+  openUrl: (url) => openUrl(url).catch((err) => console.error('Could not open link', err)),
   saveTextFile: async (defaultName, text) => {
     const path = await save({ defaultPath: defaultName, filters: [{ name: 'Backup', extensions: ['json'] }] });
     if (!path) return null;

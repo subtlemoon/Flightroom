@@ -1,13 +1,17 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { bridge as app } from '../bridge.js';
-import { Icon, Modal } from './ui.jsx';
+import { Dropdown, Icon, Modal, PanelHandle } from './ui.jsx';
+import { toggle, useLayout } from '../layout.js';
 import { Filmstrip, photoRating } from './cull.jsx';
 import { imgUrl, ROTATION } from '../cull/previews.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey } from '../cull/keys.js';
-import { COLORS, COLOR_HUES, LINEAR_CURVE, SECTIONS, SLIDER, defaults, formatValue, fromXmp, isEdited, toXmp } from '../develop/params.js';
-import { asShotTempTint } from '../develop/color.js';
-import { Geometry, Renderer, fitScale, outToFrame, parseFrame } from '../develop/renderer.js';
+import {
+  COLORS, COLOR_HUES, CURVE_PRESETS, LINEAR_CURVE, PROFILES, SECTIONS, SLIDER, VIGNETTE_STYLES, WB_PRESETS,
+  curveName, defaults, formatValue, fromXmp, isEdited, resetSection, sectionEdited, toXmp,
+} from '../develop/params.js';
+import { asShotTempTint, colorTransform, neutralToXy, xyToTempTint } from '../develop/color.js';
+import { Geometry, LOOKS, Renderer, ap, constrainedCrop, fitScale, outToFrame, parseFrame, sourceMap } from '../develop/renderer.js';
 import { exportPhoto, exportSize } from '../develop/export.js';
 import { monotoneCurve, parametric } from '../develop/luts.js';
 
@@ -17,6 +21,7 @@ import { monotoneCurve, parametric } from '../develop/luts.js';
 // them when it imports the photo or reads its metadata again.
 
 const isRaw = (p) => !!p.raw;
+const TRANSFORM_KEYS = ['perspVertical', 'perspHorizontal', 'perspRotate', 'perspAspect', 'perspScale', 'perspX', 'perspY', 'distortion'];
 const META_WINDOW = 20;
 
 export function DevelopView({ store, onCull }) {
@@ -37,6 +42,7 @@ export function DevelopView({ store, onCull }) {
   const [toast, setToast] = useState('');
   const [exporting, setExporting] = useState(null); // modal state
   const [clipboard, setClipboard] = useState(null);
+  const [picking, setPicking] = useState(false); // white balance selector
   const pendingMeta = useRef(new Set());
   const settingsCache = useRef(new Map()); // id -> settings (this session)
   const history = useRef(new Map()); // id -> { past, future, lastPush }
@@ -45,11 +51,15 @@ export function DevelopView({ store, onCull }) {
   positions.current = state.cull?.positions || {};
 
   const [filter, setFilter] = useState('all'); // see inFilter
+  const layout = useLayout();
   const allPhotos = list?.photos || [];
   const photos = useMemo(() => (filter === 'all' ? allPhotos : allPhotos.filter((p) => inFilter(filter, photoRating(p, meta[p.id])))),
     [allPhotos, meta, filter]);
   // The current photo is tracked by id. If it drops out of the star filter
   // (rated lower), the one now in its place is shown.
+  // Counted once per rating change, not on every slider move.
+  const starOptions = useMemo(() => [{ value: 'all', label: 'All photos', hint: allPhotos.length },
+    ...STAR_FILTERS.map(([k, label]) => ({ value: k, label, hint: allPhotos.filter((p) => inFilter(k, photoRating(p, meta[p.id]))).length }))], [allPhotos, meta]);
   const lastIndex = useRef(0);
   let index = photos.findIndex((p) => p.id === currentId);
   if (index < 0) index = Math.min(lastIndex.current, Math.max(0, photos.length - 1));
@@ -109,7 +119,7 @@ export function DevelopView({ store, onCull }) {
       const asShot = asShotTempTint(info);
       setOpened({ id: photo.id, info, asShot });
       dirty.current = false;
-      setS(settingsCache.current.get(photo.id) || fromXmp(info.settings, info.toneCurve, asShot));
+      setS(settingsCache.current.get(photo.id) || fromXmp(info.settings, info.curves, asShot));
     });
     return () => { live = false; };
   }, [photo?.id]);
@@ -151,6 +161,36 @@ export function DevelopView({ store, onCull }) {
   };
 
   const reset = () => opened?.asShot && update(defaults(opened.asShot));
+
+  // White balance from a camera colour that should look neutral (the selector, Auto).
+  const wbFrom = (camRgb, name) => {
+    const info = opened?.info;
+    if (!info || !camRgb || camRgb.some((v) => !(v > 0))) { setToast('Pick a spot that isn\'t pure black or clipped'); return; }
+    const t = xyToTempTint(neutralToXy(info.matrices, camRgb));
+    const temp = Math.min(50000, Math.max(2000, Math.round(t.temp / 50) * 50)), tint = Math.min(150, Math.max(-150, Math.round(t.tint)));
+    update({ wb: name, temp, tint });
+  };
+  const autoWb = () => wbFrom(stageApi.current.average?.(), 'Auto');
+  const pick = (camRgb) => { setPicking(false); wbFrom(camRgb, 'Custom'); };
+  // Auto tone: exposure for a good middle, then pull in clipping highlights and lift crushed shadows.
+  const autoTone = () => {
+    const st = stageApi.current.stats?.(s);
+    if (!st) return;
+    const look = LOOKS[s.profile] || LOOKS.adobe;
+    const exposure = Math.round(Math.min(4, Math.max(-4, Math.log2(0.17 / st.median) - look.exposure)) * 20) / 20;
+    const k = 2 ** (exposure + look.exposure);
+    const hiStops = Math.log2(Math.max(st.p99 * k, 1e-4));
+    const loStops = Math.log2(Math.max(st.p02 * k, 1e-5));
+    const r = (v) => Math.round(Math.min(100, Math.max(-100, v)));
+    update({
+      exposure,
+      contrast: r(st.spread < 6 ? 10 : st.spread > 9 ? -10 : 0),
+      highlights: r(hiStops > -0.3 ? -(hiStops + 0.3) * 35 : 0),
+      shadows: r(loStops < -6 ? (-6 - loStops) * 12 : 0),
+      whites: r(hiStops < -0.8 ? (-0.8 - hiStops) * 20 : 0),
+      blacks: r(loStops > -5 ? -(loStops + 5) * 10 : -5),
+    });
+  };
   const copy = () => { if (s) { setClipboard(s); setToast('Settings copied'); } };
   const paste = () => {
     if (!clipboard || !opened?.asShot) return;
@@ -179,6 +219,7 @@ export function DevelopView({ store, onCull }) {
 
   // Keyboard, as in Lightroom where it makes sense.
   const stageApi = useRef({});
+  const geoCache = useRef(null);
   useEffect(() => {
     const onKey = (e) => {
       if (exporting) return;
@@ -194,9 +235,10 @@ export function DevelopView({ store, onCull }) {
       if (e.target.type === 'range') e.target.blur();
       if (e.key === '\\') { e.preventDefault(); if (!e.repeat) setBefore((b) => !b); return; }
       if (k === 'j') { setClip((c) => !c); return; }
+      if (k === 'w' && ratingForKey(keys, e.key) === undefined) { if (s) setPicking((p) => !p); return; }
       if (k === 'g' && onCull && ratingForKey(keys, e.key) === undefined) { onCull(); return; }
       if (k === 'r') { if (s) setCrop((c) => !c); return; }
-      if (e.key === 'Escape') { setCrop(false); stageApi.current.unzoom?.(); return; }
+      if (e.key === 'Escape') { if (picking) { setPicking(false); return; } setCrop(false); stageApi.current.unzoom?.(); return; }
       if (e.key === 'Enter' && crop) { setCrop(false); return; }
       if (normKey(e.key) === zKey) { e.preventDefault(); if (!e.repeat) stageApi.current.toggleZoom?.(); return; }
       const r = ratingForKey(keys, e.key);
@@ -226,6 +268,7 @@ export function DevelopView({ store, onCull }) {
   }
 
   const info = photo && opened?.id === photo.id ? opened.info : null;
+  const geo = info && (geoCache.current?.info === info ? geoCache.current.geo : (geoCache.current = { info, geo: new Geometry(info.width, info.height, info.orientation) }).geo);
   const shown = s && before && opened?.asShot ? { ...defaults(opened.asShot), crop: s.crop } : s;
   const curMeta = photo && meta[photo.id];
   const rating = photo ? photoRating(photo, curMeta) : 0;
@@ -237,13 +280,8 @@ export function DevelopView({ store, onCull }) {
           <div className="eyebrow">Develop</div>
           <div className="cull-folder" title={list?.folder || folder}>{photo ? photo.name : (list?.folder || folder).split(/[\\/]/).pop()}</div>
         </div>
-        <select className={`cull-stars${filter !== 'all' ? ' on' : ''}`} value={filter === 'all' ? '' : filter}
-          onChange={(e) => { setFilter(e.target.value || 'all'); e.target.blur(); }} title="Show photos by star rating">
-          <option value="">{filter === 'all' ? 'Stars…' : 'All photos'}</option>
-          {STAR_FILTERS.map(([k, label]) => (
-            <option key={k} value={k}>{label} ({allPhotos.filter((p) => inFilter(k, photoRating(p, meta[p.id]))).length})</option>
-          ))}
-        </select>
+        <Dropdown className={`cull-stars${filter !== 'all' ? ' on' : ''}`} value={filter} label={filter === 'all' ? 'Stars…' : undefined} onChange={setFilter} title="Show photos by star rating"
+          options={starOptions} />
         <div className="cull-stats muted">{list?.loading ? 'Reading folder…' : `${photos.length ? index + 1 : 0} of ${photos.length}`}</div>
         <div className="dev-tools">
           {onCull && <button className="btn btn-sm btn-ghost" onClick={onCull} title="Back to Culling (G)"><Icon name="photo" size={14} />Culling</button>}
@@ -263,21 +301,22 @@ export function DevelopView({ store, onCull }) {
             </div>
           ) : photo ? (
             <DevelopStage key={photo.id} photo={photo} meta={curMeta} info={info} s={shown} cropMode={crop} clip={clip}
-              onCrop={(c) => update({ crop: c })} apiRef={stageApi} nextPhoto={photos[index + 1]} before={before} />
+              onCrop={(c) => update({ crop: c })} apiRef={stageApi} nextPhoto={photos[index + 1]} before={before} onPick={picking ? pick : null} />
           ) : (
             <div className="hero-empty dev-msg"><h2>{list?.loading ? 'Reading folder…' : filter !== 'all' && allPhotos.length ? 'No photos with those stars' : 'No photos in this folder'}</h2></div>
           )}
           <Filmstrip photos={photos} index={index} meta={meta} suggestions={{}} onSelect={go} requestMeta={requestMeta} />
         </div>
-        <aside className="dev-panel">
+        <PanelHandle side="right" open={layout.panel} onClick={() => toggle('panel')} title={`${layout.panel ? 'Hide' : 'Show'} adjustments (F8)`} />
+        {layout.panel && <aside className="dev-panel">
           {s && info ? (
-            <Panel s={s} info={info} asShot={opened.asShot} update={update} crop={crop} meta={curMeta} rating={rating} keys={keys}
+            <Panel s={s} info={info} geo={geo} asShot={opened.asShot} update={update} meta={curMeta} rating={rating} keys={keys}
               onRate={(r) => rate(photo, r)} onReset={reset} onCopy={copy} onPaste={clipboard ? paste : null}
-              edited={isEdited(s, opened.asShot)} />
+              edited={isEdited(s, opened.asShot)} picking={picking} onPick={() => setPicking((p) => !p)} onAutoWb={autoWb} onAutoTone={autoTone} />
           ) : (
             <div className="dev-panel-empty muted small">{opened?.loading ? 'Reading RAW data…' : ''}</div>
           )}
-        </aside>
+        </aside>}
       </div>
       {toast && <div className="cull-toast">{toast}</div>}
       {exporting && <ExportModal photo={photo} photos={allPhotos} folder={list?.folder} info={info} s={s} settingsCache={settingsCache.current}
@@ -296,7 +335,37 @@ async function fetchFrame(url) {
   return parseFrame(await res.arrayBuffer());
 }
 
-function DevelopStage({ photo, meta, info, s, cropMode, clip, onCrop, apiRef, nextPhoto, before }) {
+// Half floats (the RAW data's format) to numbers.
+function halfTable() {
+  const t = new Float32Array(65536);
+  for (let h = 0; h < 65536; h++) {
+    const e = (h >> 10) & 31, m = h & 1023, sign = h & 0x8000 ? -1 : 1;
+    t[h] = sign * (e === 0 ? m * 2 ** -24 : e === 31 ? (m ? NaN : Infinity) : (1 + m / 1024) * 2 ** (e - 15));
+  }
+  return t;
+}
+let h2f = null;
+
+// A small copy of the photo's camera colours, for Auto and the white balance selector.
+function sampleGrid(frame, edge = 320) {
+  h2f ||= halfTable();
+  const step = Math.max(1, Math.ceil(Math.max(frame.w, frame.h) / edge));
+  const gw = Math.floor(frame.w / step), gh = Math.floor(frame.h / step);
+  const out = new Float32Array(gw * gh * 3);
+  const d = frame.data, half = Math.max(1, step >> 1);
+  for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
+    let r = 0, g = 0, b = 0;
+    for (const [dx, dy] of [[0, 0], [half, 0], [0, half], [half, half]]) {
+      const i = ((y * step + dy) * frame.w + x * step + dx) * 3;
+      r += h2f[d[i]]; g += h2f[d[i + 1]]; b += h2f[d[i + 2]];
+    }
+    const o = (y * gw + x) * 3;
+    out[o] = r / 4; out[o + 1] = g / 4; out[o + 2] = b / 4;
+  }
+  return { gw, gh, data: out };
+}
+
+function DevelopStage({ photo, meta, info, s, cropMode, clip, onCrop, apiRef, nextPhoto, before, onPick }) {
   const wrapRef = useRef();
   const canvasRef = useRef();
   const rendererRef = useRef(null);
@@ -307,6 +376,7 @@ function DevelopStage({ photo, meta, info, s, cropMode, clip, onCrop, apiRef, ne
   const [hist, setHist] = useState(null);
   const drag = useRef(null);
   const hiReq = useRef(0);
+  const grid = useRef(null);
   const dpr = window.devicePixelRatio || 1;
   const W = Math.round(size.w * dpr), H = Math.round(size.h * dpr);
 
@@ -331,6 +401,7 @@ function DevelopStage({ photo, meta, info, s, cropMode, clip, onCrop, apiRef, ne
     fetchFrame(app.develop.imageUrl(photo, fitEdge())).then((frame) => {
       if (!live || !rendererRef.current) return;
       rendererRef.current.setSource(frame);
+      grid.current = sampleGrid(frame);
       setReady(true);
       if (nextPhoto?.raw) fetch(app.develop.imageUrl(nextPhoto, fitEdge(), true)).catch(() => {});
     }, (err) => live && setError(String(err.message || err)));
@@ -349,6 +420,9 @@ function DevelopStage({ photo, meta, info, s, cropMode, clip, onCrop, apiRef, ne
     }
     return geo.frame(s.crop);
   }, [geo, s?.crop, cropMode]);
+  // Where each point of the finished photo comes from (Transform and lens distortion).
+  const xform = s && TRANSFORM_KEYS.map((k) => s[k]).join('|');
+  const toSource = useMemo(() => geo && s && sourceMap(geo, s), [geo, xform]);
   const fit = frame && W ? fitScale(W, H, frame, cropMode ? 28 * dpr : 0) : 1;
   const v = !cropMode && view ? { scale: view.scale * dpr, u: view.u, v: view.v } : { scale: fit, u: 0, v: 0 };
 
@@ -366,8 +440,8 @@ function DevelopStage({ photo, meta, info, s, cropMode, clip, onCrop, apiRef, ne
         const a = (frame.angle * Math.PI) / 180;
         const ox = frame.cx + Math.cos(a) * fx * frame.hw - Math.sin(a) * fy * frame.hh;
         const oy = frame.cy + Math.sin(a) * fx * frame.hw + Math.cos(a) * fy * frame.hh;
-        const m = geo.o2s;
-        return [m[0] * ox + m[1] * oy + m[2], m[3] * ox + m[4] * oy + m[5]];
+        const [px, py] = toSource(ox, oy);
+        return [px * geo.sw, py * geo.sh];
       };
       const pts = [[0, 0], [W, 0], [0, H], [W, H]].map(([x, y]) => toPhoto(x, y));
       const pad = 0.25;
@@ -390,7 +464,7 @@ function DevelopStage({ photo, meta, info, s, cropMode, clip, onCrop, apiRef, ne
       } catch {}
     }, 120);
     return () => clearTimeout(t);
-  }, [ready, view, W, H, cropMode, frame]);
+  }, [ready, view, W, H, cropMode, frame, toSource]);
 
   const draw = () => {
     const r = rendererRef.current;
@@ -433,6 +507,52 @@ function DevelopStage({ photo, meta, info, s, cropMode, clip, onCrop, apiRef, ne
   };
   apiRef.current.toggleZoom = () => (view ? setView(null) : zoomTo(size.w / 2, size.h / 2, 1 / dpr));
   apiRef.current.unzoom = () => setView(null);
+  // Brightness spread at this white balance (linear, before the sliders).
+  apiRef.current.stats = (st) => {
+    const g = grid.current;
+    if (!g) return null;
+    const { wb, matrix: m } = colorTransform(info, st.temp, st.tint);
+    const ys = new Float32Array(g.gw * g.gh);
+    for (let i = 0; i < ys.length; i++) {
+      const r = Math.min(1, g.data[i * 3] * wb[0]), gg = Math.min(1, g.data[i * 3 + 1] * wb[1]), b = Math.min(1, g.data[i * 3 + 2] * wb[2]);
+      const lr = m[0] * r + m[1] * gg + m[2] * b, lg = m[3] * r + m[4] * gg + m[5] * b, lb = m[6] * r + m[7] * gg + m[8] * b;
+      ys[i] = Math.max(1e-5, 0.2126 * lr + 0.7152 * lg + 0.0722 * lb);
+    }
+    ys.sort();
+    const at = (q) => ys[Math.min(ys.length - 1, Math.floor(ys.length * q))];
+    return { median: at(0.5), p99: at(0.99), p02: at(0.02), spread: Math.log2(at(0.99) / at(0.02)) };
+  };
+  // Average camera colour of the parts that are neither clipped nor near black (grey world).
+  apiRef.current.average = () => {
+    const g = grid.current;
+    if (!g) return null;
+    const sum = [0, 0, 0];
+    let n = 0;
+    for (let i = 0; i < g.gw * g.gh; i++) {
+      const r = g.data[i * 3], gg = g.data[i * 3 + 1], b = g.data[i * 3 + 2];
+      const mx = Math.max(r, gg, b);
+      if (mx > 0.97 || mx < 0.01) continue;
+      sum[0] += r; sum[1] += gg; sum[2] += b; n++;
+    }
+    return n ? sum.map((v) => v / n) : null;
+  };
+  // The camera colour under a point of the canvas (css px).
+  const colorAt = (cssX, cssY) => {
+    const g = grid.current;
+    if (!g || !frame || !toSource) return null;
+    const f = ap(outToFrame(W, H, frame, v), cssX * dpr, H - cssY * dpr);
+    const [u, w] = toSource(...ap(geo.frameToOriented(frame), f[0], f[1]));
+    if (u < 0 || w < 0 || u > 1 || w > 1) return null;
+    const cx = Math.round(u * (g.gw - 1)), cy = Math.round(w * (g.gh - 1));
+    const sum = [0, 0, 0];
+    let n = 0;
+    for (let y = cy - 1; y <= cy + 1; y++) for (let x = cx - 1; x <= cx + 1; x++) {
+      if (x < 0 || y < 0 || x >= g.gw || y >= g.gh) continue;
+      const i = (y * g.gw + x) * 3;
+      sum[0] += g.data[i]; sum[1] += g.data[i + 1]; sum[2] += g.data[i + 2]; n++;
+    }
+    return sum.map((c) => c / n);
+  };
 
   const onPointerDown = (e) => {
     if (e.button !== 0 || cropMode || !ready) return;
@@ -453,6 +573,11 @@ function DevelopStage({ photo, meta, info, s, cropMode, clip, onCrop, apiRef, ne
     const d = drag.current;
     drag.current = null;
     if (!d || d.moved) return;
+    if (onPick) {
+      const rect = canvasRef.current.getBoundingClientRect();
+      onPick(colorAt(e.clientX - rect.left, e.clientY - rect.top));
+      return;
+    }
     if (view) setView(null);
     else {
       const rect = canvasRef.current.getBoundingClientRect();
@@ -471,7 +596,8 @@ function DevelopStage({ photo, meta, info, s, cropMode, clip, onCrop, apiRef, ne
   const rot = ROTATION[meta?.orientation] || 0;
   const pct = Math.round(((view ? view.scale : fit / dpr) * dpr) * 100);
   return (
-    <div className={`stage dev-stage${view ? ' zoomed' : ''}${cropMode ? ' cropping' : ''}`} ref={wrapRef}>
+    <div className={`stage dev-stage${view ? ' zoomed' : ''}${cropMode ? ' cropping' : ''}${onPick ? ' picking' : ''}`} ref={wrapRef}>
+      {onPick && <div className="dev-pick-tip">Click something white or grey to set the white balance (Esc to cancel)</div>}
       {!ready && (
         <img className="dev-placeholder" src={imgUrl('preview', photo.id)} alt="" draggable={false}
           style={rot ? { transform: `rotate(${rot}deg)`, maxWidth: rot % 180 ? size.h : undefined, maxHeight: rot % 180 ? size.w : undefined } : undefined} />
@@ -591,11 +717,81 @@ function CropOverlay({ geo, view, k, size, crop, onChange }) {
 
 // --- the panel ---------------------------------------------------------------
 
-function Panel({ s, info, asShot, update, meta, rating, keys, onRate, onReset, onCopy, onPaste, edited }) {
+const PANELS_KEY = 'flightroom-develop-panels';
+
+function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onReset, onCopy, onPaste, edited, picking, onPick, onAutoWb, onAutoTone }) {
   const [open, setOpen] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('flightroom-develop-panels')) || { basic: true, curve: false, color: false, detail: false, effects: false }; } catch { return { basic: true }; }
+    try { return JSON.parse(localStorage.getItem(PANELS_KEY)) || { basic: true }; } catch { return { basic: true }; }
   });
-  const toggle = (id) => setOpen((o) => { const n = { ...o, [id]: !o[id] }; try { localStorage.setItem('flightroom-develop-panels', JSON.stringify(n)); } catch {} return n; });
+  const toggleSection = (id) => setOpen((o) => { const n = { ...o, [id]: !o[id] }; try { localStorage.setItem(PANELS_KEY, JSON.stringify(n)); } catch {} return n; });
+
+  // One stable setter for every slider, so moving one redraws only that one.
+  const set = useCallback((k, v) => update((old) => {
+    const n = { ...old, [k]: v };
+    if (k === 'temp' || k === 'tint') n.wb = 'Custom';
+    if (n.constrainCrop && TRANSFORM_KEYS.includes(k)) n.crop = constrainedCrop(geo, n);
+    return n;
+  }), [update, geo]);
+
+  const pickWb = (name) => {
+    if (name === 'Auto') { onAutoWb(); return; }
+    const p = WB_PRESETS.find(([n]) => n === name);
+    if (name === 'As Shot') update({ wb: name, temp: asShot.temp, tint: asShot.tint });
+    else if (p?.[1]) update({ wb: name, temp: p[1], tint: p[2] });
+    else update({ wb: name });
+  };
+
+  const bodies = {
+    basic: () => (
+      <>
+        <div className="dev-line"><span className="muted">Treatment</span>
+          <div className="seg small">
+            <button className={!s.bw ? 'on' : ''} onClick={() => update({ bw: false })}>Color</button>
+            <button className={s.bw ? 'on' : ''} onClick={() => update({ bw: true })}>B&amp;W</button>
+          </div>
+        </div>
+        <div className="dev-line dev-wb"><span className="muted">Profile</span>
+          <Dropdown value={s.profile || 'adobe'} options={PROFILES.map(([value, label]) => ({ value, label }))} onChange={(v) => update({ profile: v })} title="The starting look, as in Lightroom" />
+        </div>
+        <div className="dev-line dev-wb"><span className="muted">WB</span>
+          <span className="dev-line">
+            <button className={`icon-btn sm${picking ? ' on' : ''}`} onClick={onPick} title="White balance selector (W): click something white or grey"><Icon name="picker" size={15} /></button>
+            <Dropdown value={s.wb} options={WB_PRESETS.map(([value]) => ({ value, label: value }))} onChange={pickWb} />
+          </span>
+        </div>
+        <Groups sec={SECTION.basic} s={s} asShot={asShot} set={set} extra={{ Tone: <button className="btn btn-sm btn-ghost" onClick={onAutoTone} title="Set the tone sliders for this photo">Auto</button> }} />
+      </>
+    ),
+    curve: () => <ToneCurve s={s} set={set} update={update} />,
+    color: () => <ColorMixer s={s} set={set} />,
+    grading: () => <><ColorGrading s={s} set={set} /><Groups sec={SECTION.grading} s={s} asShot={asShot} set={set} /></>,
+    detail: () => <Groups sec={SECTION.detail} s={s} asShot={asShot} set={set} />,
+    lens: () => (
+      <>
+        <label className="dev-check"><input type="checkbox" checked={!!s.removeCA} onChange={(e) => update({ removeCA: e.target.checked })} />Remove chromatic aberration</label>
+        <label className="dev-check"><input type="checkbox" checked={!!s.lensProfile} onChange={(e) => update({ lensProfile: e.target.checked })} />Enable profile corrections</label>
+        {s.lensProfile && <p className="muted small">Lightroom applies your lens's profile when it reads this photo. Flightroom doesn't preview it yet; use the sliders below to see it here.</p>}
+        <Groups sec={SECTION.lens} s={s} asShot={asShot} set={set} />
+      </>
+    ),
+    transform: () => (
+      <>
+        <Groups sec={SECTION.transform} s={s} asShot={asShot} set={set} />
+        <label className="dev-check"><input type="checkbox" checked={!!s.constrainCrop}
+          onChange={(e) => update((old) => ({ ...old, constrainCrop: e.target.checked, crop: e.target.checked ? constrainedCrop(geo, old) : old.crop }))} />Constrain crop</label>
+      </>
+    ),
+    effects: () => (
+      <>
+        <div className="dev-line dev-wb"><span className="muted">Style</span>
+          <Dropdown value={s.vignetteStyle || 1} options={VIGNETTE_STYLES.map(([value, label]) => ({ value, label }))} onChange={(v) => update({ vignetteStyle: v })} />
+        </div>
+        <Groups sec={SECTION.effects} s={s} asShot={asShot} set={set} hide={s.vignetteStyle === 3 ? ['vignetteHighlights'] : []} />
+      </>
+    ),
+    calibration: () => <Groups sec={SECTION.calibration} s={s} asShot={asShot} set={set} />,
+  };
+
   return (
     <div className="dev-panel-inner">
       <Histogram />
@@ -612,42 +808,44 @@ function Panel({ s, info, asShot, update, meta, rating, keys, onRate, onReset, o
         <div className="grow" />
         <button className="icon-btn" title="Copy settings (Ctrl+Shift+C)" onClick={onCopy}><Icon name="copy" size={15} /></button>
         <button className="icon-btn" title="Paste settings (Ctrl+Shift+V)" onClick={onPaste || undefined} disabled={!onPaste}><Icon name="paste" size={15} /></button>
-        <button className="btn btn-sm" onClick={onReset} disabled={!edited} title="Back to how the camera shot it">Reset</button>
+        <button className="btn btn-sm" onClick={onReset} disabled={!edited} title="Back to how the camera shot it">Reset all</button>
       </div>
-      {SECTIONS.map((sec) => (
-        <section key={sec.id} className={`dev-section${open[sec.id] ? ' open' : ''}`}>
-          <button className="dev-section-head" onClick={() => toggle(sec.id)}>
-            <span className="grow">{sec.title}</span><span className="dev-caret">{open[sec.id] ? '▾' : '▸'}</span>
-          </button>
-          {open[sec.id] && (
-            <div className="dev-section-body">
-              {sec.id === 'basic' && (
-                <div className="dev-wb">
-                  <span className="muted small">WB</span>
-                  <select value={s.wb} onChange={(e) => update(e.target.value === 'As Shot' ? { wb: 'As Shot', temp: asShot.temp, tint: asShot.tint } : { wb: e.target.value })}>
-                    <option value="As Shot">As Shot</option>
-                    <option value="Custom">Custom</option>
-                  </select>
-                </div>
-              )}
-              {sec.id === 'curve' && <CurveEditor s={s} update={update} />}
-              {sec.id === 'color' && <ColorMixer s={s} update={update} />}
-              {sec.groups.map((g) => (
-                <div key={g.title} className="dev-group">
-                  {sec.groups.length > 1 || sec.id !== 'basic' ? <div className="dev-group-title">{g.title}</div> : null}
-                  {g.sliders.map((sl) => (
-                    <Slider key={sl.key} sl={sl} value={s[sl.key]} def={sl.key === 'temp' ? asShot.temp : sl.key === 'tint' ? asShot.tint : sl.def}
-                      onChange={(v) => update({ [sl.key]: v, ...(sl.key === 'temp' || sl.key === 'tint' ? { wb: 'Custom' } : {}) })} />
-                  ))}
-                </div>
-              ))}
+      {SECTIONS.map((sec) => {
+        const changed = sectionEdited(s, sec.id, asShot);
+        return (
+          <section key={sec.id} className={`dev-section${open[sec.id] ? ' open' : ''}`}>
+            <div className="dev-section-head" role="button" tabIndex={0} onClick={() => toggleSection(sec.id)}
+              onKeyDown={(e) => { if (e.key === 'Enter') toggleSection(sec.id); }}>
+              {changed && !open[sec.id] && <span className="dev-dot" title="Edited" />}
+              <span className="grow">{sec.title}</span>
+              <span className={`dev-reset${changed ? ' on' : ''}`} role="button" title={`Reset ${sec.title}`}
+                onClick={(e) => { e.stopPropagation(); update((old) => resetSection(old, sec.id, asShot)); }}><Icon name="reset" size={13} /></span>
+              <span className="dev-caret">{open[sec.id] ? '▾' : '▸'}</span>
             </div>
-          )}
-        </section>
-      ))}
+            {open[sec.id] && <div className="dev-section-body">{bodies[sec.id]()}</div>}
+          </section>
+        );
+      })}
       <p className="muted small dev-note">Edits are saved next to each photo (.xmp), where Lightroom reads them. Your RAW files are never changed.</p>
     </div>
   );
+}
+
+const SECTION = Object.fromEntries(SECTIONS.map((sec) => [sec.id, sec]));
+
+// A section's plain sliders, in their groups. `extra` puts something beside a group's title.
+function Groups({ sec, s, asShot, set, only, hide = [], extra = {} }) {
+  const groups = only ? sec.groups.filter(only) : sec.groups;
+  return groups.map((g) => (
+    <div key={g.title} className="dev-group">
+      {sec.groups.length > 1 || g.title !== sec.title ? (
+        <div className="dev-group-title dev-line">{g.title}{extra[g.title]}</div>
+      ) : null}
+      {g.sliders.filter((sl) => !hide.includes(sl.key)).map((sl) => (
+        <Slider key={sl.key} sl={sl} value={s[sl.key]} def={sl.key === 'temp' ? asShot.temp : sl.key === 'tint' ? asShot.tint : sl.def} onSet={set} />
+      ))}
+    </div>
+  ));
 }
 
 const fmtShutter = (t) => (!t ? null : t >= 1 ? `${+t.toFixed(1)}s` : `1/${Math.round(1 / t)}`);
@@ -663,10 +861,12 @@ const fromPos = (sl, p) => {
   return Math.min(sl.max, Math.max(sl.min, Math.round(v / sl.step) * sl.step));
 };
 
-function Slider({ sl, value, def, onChange, color }) {
+// Redraws only when its own value changes (onSet is the panel's stable setter).
+const Slider = memo(function Slider({ sl, value, def, onSet, color }) {
   const [text, setText] = useState(null);
   const pos = toPos(sl, value ?? def ?? 0);
   const zero = sl.log || sl.min >= 0 ? 0 : toPos(sl, 0);
+  const onChange = (v) => onSet(sl.key, v);
   const commitText = () => {
     const n = Number(String(text).replace(/[^\d.+-]/g, ''));
     if (text !== null && Number.isFinite(n)) onChange(Math.min(sl.max, Math.max(sl.min, n)));
@@ -685,7 +885,7 @@ function Slider({ sl, value, def, onChange, color }) {
       </div>
     </div>
   );
-}
+});
 
 function Histogram() {
   const ref = useRef();
@@ -726,43 +926,78 @@ function Histogram() {
   return <canvas className="dev-hist" ref={ref} title="Histogram. Corner boxes light up when shadows (left) or highlights (right) clip; press J to see where." />;
 }
 
-// Point curve: drag points, click to add, double-click a point to remove it.
-function CurveEditor({ s, update }) {
+// --- tone curve ----------------------------------------------------------------
+
+const CURVE_MODES = [['parametric', 'Parametric'], ['curve', 'Point'], ['curveR', 'Red'], ['curveG', 'Green'], ['curveB', 'Blue']];
+
+function ToneCurve({ s, set, update }) {
+  const [mode, setMode] = useState(() => localStorage.getItem('flightroom-curve-mode') || 'parametric');
+  const pick = (m) => { setMode(m); try { localStorage.setItem('flightroom-curve-mode', m); } catch {} };
+  const parametricMode = mode === 'parametric';
+  return (
+    <>
+      <div className="seg small full">
+        {CURVE_MODES.map(([k, label]) => <button key={k} className={mode === k ? 'on' : ''} onClick={() => pick(k)}>{label}</button>)}
+      </div>
+      <CurveEditor s={s} channel={parametricMode ? 'curve' : mode} readOnly={parametricMode} set={set} />
+      {mode === 'curve' && (
+        <div className="dev-line dev-wb"><span className="muted">Point curve</span>
+          <Dropdown value={curveName(s.curve)} options={[...CURVE_PRESETS.map(([value]) => ({ value, label: value })), ...(curveName(s.curve) === 'Custom' ? [{ value: 'Custom', label: 'Custom', disabled: true }] : [])]}
+            onChange={(v) => update({ curve: CURVE_PRESETS.find(([n]) => n === v)[1] })} />
+        </div>
+      )}
+      <Groups sec={SECTION.curve} s={s} asShot={null} set={set} only={(g) => parametricMode || !g.parametric} />
+    </>
+  );
+}
+
+const CH_CLASS = { curve: '', curveR: ' ch-r', curveG: ' ch-g', curveB: ' ch-b' };
+
+// Point curve: drag points, click to add, double-click a point (or drag it off) to remove it.
+function CurveEditor({ s, channel, readOnly, set }) {
   const ref = useRef();
   const drag = useRef(null);
+  const [read, setRead] = useState(null);
   const SIZE = 236;
-  const pts = s.curve;
+  const pts = s[channel];
   const toXY = ([x, y]) => [(x / 255) * SIZE, SIZE - (y / 255) * SIZE];
   const fromEvent = (e) => {
     const r = ref.current.getBoundingClientRect();
     return [Math.round(Math.min(255, Math.max(0, ((e.clientX - r.left) / r.width) * 255))), Math.round(Math.min(255, Math.max(0, (1 - (e.clientY - r.top) / r.height) * 255)))];
   };
   const curve = useMemo(() => monotoneCurve(pts.map(([x, y]) => [x / 255, y / 255])), [pts]);
+  const isMaster = channel === 'curve';
   const path = useMemo(() => {
     let d = '';
-    for (let i = 0; i <= 64; i++) {
-      const x = i / 64;
-      const y = Math.min(1, Math.max(0, curve(parametric(s, x))));
+    for (let i = 0; i <= 96; i++) {
+      const x = i / 96;
+      const y = Math.min(1, Math.max(0, curve(isMaster ? parametric(s, x) : x)));
       d += `${i ? 'L' : 'M'}${(x * SIZE).toFixed(1)},${(SIZE - y * SIZE).toFixed(1)}`;
     }
     return d;
-  }, [curve, s.pShadows, s.pDarks, s.pLights, s.pHighlights]);
+  }, [curve, isMaster, s.pShadows, s.pDarks, s.pLights, s.pHighlights, s.pSplitS, s.pSplitM, s.pSplitH]);
 
+  const near = (x, y) => pts.findIndex(([px, py]) => Math.hypot(px - x, py - y) < 10);
   const down = (e) => {
+    if (readOnly) return;
     const [x, y] = fromEvent(e);
-    let i = pts.findIndex(([px, py]) => Math.hypot(px - x, py - y) < 10);
+    let i = near(x, y);
     let next = pts;
     if (i < 0) {
       next = [...pts, [x, y]].sort((a, b) => a[0] - b[0]);
       i = next.findIndex((p) => p[0] === x && p[1] === y);
-      update({ curve: next });
+      set(channel, next);
     }
     e.currentTarget.setPointerCapture(e.pointerId);
     drag.current = { i, pts: next };
+    setRead([x, y]);
   };
   const move = (e) => {
     const d = drag.current;
-    if (!d) return;
+    if (!d) {
+      if (!readOnly && ref.current) { const [x] = fromEvent(e); setRead([x, Math.round(Math.min(1, Math.max(0, curve(isMaster ? parametric(s, x / 255) : x / 255))) * 255)]); }
+      return;
+    }
     let [x, y] = fromEvent(e);
     const p = d.pts;
     const lo = d.i > 0 ? p[d.i - 1][0] + 1 : 0, hi = d.i < p.length - 1 ? p[d.i + 1][0] - 1 : 255;
@@ -771,44 +1006,131 @@ function CurveEditor({ s, update }) {
     else x = Math.min(hi, Math.max(lo, x));
     const next = p.map((q, j) => (j === d.i ? [x, y] : q));
     d.pts = next;
-    update({ curve: next });
+    set(channel, next);
+    setRead([x, y]);
   };
   const remove = (e) => {
+    if (readOnly) return;
     const [x, y] = fromEvent(e);
-    const i = pts.findIndex(([px, py]) => Math.hypot(px - x, py - y) < 10);
-    if (i > 0 && i < pts.length - 1) update({ curve: pts.filter((_, j) => j !== i) });
+    const i = near(x, y);
+    if (i > 0 && i < pts.length - 1) set(channel, pts.filter((_, j) => j !== i));
   };
   return (
-    <div className="dev-curve">
-      <svg ref={ref} viewBox={`0 0 ${SIZE} ${SIZE}`} onPointerDown={down} onPointerMove={move} onPointerUp={() => { drag.current = null; }} onDoubleClick={remove}>
+    <div className={`dev-curve${CH_CLASS[channel]}${readOnly ? ' readonly' : ''}`}>
+      {/* The handlers sit on a padded box so the corner points can be grabbed past the rounded edge. */}
+      <div className="dev-curve-pad" onPointerDown={down} onPointerMove={move} onPointerUp={() => { drag.current = null; }}
+        onPointerLeave={() => !drag.current && setRead(null)} onDoubleClick={remove}>
+      <svg ref={ref} viewBox={`0 0 ${SIZE} ${SIZE}`}>
         {[1, 2, 3].map((i) => <g key={i}><line x1={(i * SIZE) / 4} y1={0} x2={(i * SIZE) / 4} y2={SIZE} /><line y1={(i * SIZE) / 4} x1={0} y2={(i * SIZE) / 4} x2={SIZE} /></g>)}
         <line className="diag" x1={0} y1={SIZE} x2={SIZE} y2={0} />
         <path d={path} />
-        {pts.map((p, i) => { const [x, y] = toXY(p); return <circle key={i} cx={x} cy={y} r={5} />; })}
+        {!readOnly && pts.map((p, i) => { const [x, y] = toXY(p); return <circle key={i} cx={x} cy={y} r={5} />; })}
       </svg>
+      </div>
       <div className="dev-curve-foot">
-        <span className="muted small">Click to add a point, double-click one to remove it</span>
-        <button className="btn btn-sm btn-ghost" onClick={() => update({ curve: LINEAR_CURVE, pShadows: 0, pDarks: 0, pLights: 0, pHighlights: 0 })}>Reset</button>
+        <span className="dev-curve-read">{read ? `Input ${read[0]}  ·  Output ${read[1]}` : readOnly ? 'Shape the curve with the sliders below' : 'Click to add a point, double-click to remove'}</span>
+        {!readOnly && <button className="btn btn-sm btn-ghost" onClick={() => set(channel, LINEAR_CURVE)}>Linear</button>}
       </div>
     </div>
   );
 }
 
-const SWATCH = COLOR_HUES.map((h) => `hsl(${h} 80% 55%)`);
+// --- color mixer -----------------------------------------------------------------
 
-function ColorMixer({ s, update }) {
-  const [kind, setKind] = useState('hue');
+const SWATCH = COLOR_HUES.map((h) => `hsl(${h} 80% 55%)`);
+const MIXER_MODES = [['color', 'Color'], ['hue', 'Hue'], ['sat', 'Saturation'], ['lum', 'Luminance'], ['all', 'All']];
+const KIND_LABEL = { hue: 'Hue', sat: 'Saturation', lum: 'Luminance' };
+
+function ColorMixer({ s, set }) {
+  const [mode, setMode] = useState(() => localStorage.getItem('flightroom-mixer-mode') || 'color');
+  const [color, setColor] = useState(0);
+  const pick = (m) => { setMode(m); try { localStorage.setItem('flightroom-mixer-mode', m); } catch {} };
+  if (s.bw) {
+    return (
+      <div className="dev-mixer">
+        <div className="dev-group-title">Black &amp; white mix</div>
+        {COLORS.map((c, i) => <Slider key={i} sl={SLIDER[`gray${i}`]} value={s[`gray${i}`]} def={0} color={SWATCH[i]} onSet={set} />)}
+      </div>
+    );
+  }
+  const row = (kind, i, label) => {
+    const sl = SLIDER[`${kind}${i}`];
+    return <Slider key={sl.key} sl={label ? { ...sl, label } : sl} value={s[sl.key]} def={0} color={SWATCH[i]} onSet={set} />;
+  };
   return (
     <div className="dev-mixer">
-      <div className="seg small">
-        {[['hue', 'Hue'], ['sat', 'Saturation'], ['lum', 'Luminance']].map(([k, label]) => (
-          <button key={k} className={kind === k ? 'on' : ''} onClick={() => setKind(k)}>{label}</button>
-        ))}
+      <div className="dev-line dev-wb"><span className="muted">Adjust</span>
+        <Dropdown value={mode} options={MIXER_MODES.map(([value, label]) => ({ value, label }))} onChange={pick} />
       </div>
-      {COLORS.map((c, i) => {
-        const sl = SLIDER[`${kind}${i}`];
-        return <Slider key={sl.key} sl={sl} value={s[sl.key]} def={0} color={SWATCH[i]} onChange={(v) => update({ [sl.key]: v })} />;
-      })}
+      {mode === 'color' ? (
+        <>
+          <div className="dev-dots">
+            {COLORS.map((c, i) => (
+              <button key={c} title={c} style={{ background: SWATCH[i] }} onClick={() => setColor(i)}
+                className={`${color === i ? 'on' : ''}${s[`hue${i}`] || s[`sat${i}`] || s[`lum${i}`] ? ' edited' : ''}`} />
+            ))}
+          </div>
+          {['hue', 'sat', 'lum'].map((k) => row(k, color, KIND_LABEL[k]))}
+        </>
+      ) : mode === 'all' ? (
+        ['hue', 'sat', 'lum'].map((k) => (
+          <div key={k} className="dev-group"><div className="dev-group-title">{KIND_LABEL[k]}</div>{COLORS.map((c, i) => row(k, i))}</div>
+        ))
+      ) : COLORS.map((c, i) => row(mode, i))}
+    </div>
+  );
+}
+
+// --- color grading ---------------------------------------------------------------
+
+const WHEELS = [['gMid', 'Midtones'], ['gShadow', 'Shadows'], ['gHigh', 'Highlights'], ['gGlobal', 'Global']];
+const GRADE_VIEWS = [['3way', '3-Way'], ['gShadow', 'Shadows'], ['gMid', 'Midtones'], ['gHigh', 'Highlights'], ['gGlobal', 'Global']];
+
+function ColorGrading({ s, set }) {
+  const [view, setView] = useState('3way');
+  const wheels = view === '3way' ? WHEELS.slice(0, 3) : WHEELS.filter(([k]) => k === view);
+  return (
+    <>
+      <div className="seg small full">
+        {GRADE_VIEWS.map(([k, label]) => <button key={k} className={view === k ? 'on' : ''} onClick={() => setView(k)}>{label}</button>)}
+      </div>
+      <div className={`dev-wheels${view === '3way' ? '' : ' one'}`}>
+        {wheels.map(([k, title]) => <Wheel key={k} k={k} title={title} s={s} set={set} big={view !== '3way'} />)}
+      </div>
+    </>
+  );
+}
+
+// Hue is the angle, saturation the distance from the centre. Shift-drag changes only saturation.
+function Wheel({ k, title, s, set, big }) {
+  const ref = useRef();
+  const hue = s[`${k}Hue`] || 0, sat = s[`${k}Sat`] || 0;
+  const drag = useRef(null);
+  const at = (e) => {
+    const r = ref.current.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width * 2 - 1, y = (e.clientY - r.top) / r.height * 2 - 1;
+    let h = Math.round((Math.atan2(-y, x) * 180) / Math.PI);
+    if (h < 0) h += 360;
+    return [h % 360, Math.min(100, Math.round(Math.hypot(x, y) * 100))];
+  };
+  const apply = (e) => {
+    const [h, sa] = at(e);
+    if (!e.shiftKey) set(`${k}Hue`, h);
+    set(`${k}Sat`, sa);
+  };
+  const a = (hue * Math.PI) / 180, r = sat / 100;
+  return (
+    <div className={`dev-wheel${k === 'gMid' ? ' wheel-mid' : ''}`}>
+      <div className="dev-wheel-title">{title}</div>
+      <div className="dev-wheel-disc" ref={ref} title="Drag to tint; double-click to reset"
+        onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); drag.current = true; apply(e); }}
+        onPointerMove={(e) => drag.current && apply(e)} onPointerUp={() => { drag.current = null; }}
+        onDoubleClick={() => { set(`${k}Hue`, 0); set(`${k}Sat`, 0); }}>
+        <span className="dev-wheel-knob" style={{ left: `${50 + Math.cos(a) * r * 50}%`, top: `${50 - Math.sin(a) * r * 50}%` }} />
+      </div>
+      <div className="dev-wheel-read">H {hue}  ·  S {sat}</div>
+      {big && <><Slider sl={SLIDER[`${k}Hue`]} value={hue} def={0} onSet={set} /><Slider sl={SLIDER[`${k}Sat`]} value={sat} def={0} onSet={set} /></>}
+      <Slider sl={{ ...SLIDER[`${k}Lum`], gradient: 'lum' }} value={s[`${k}Lum`]} def={0} onSet={set} />
     </div>
   );
 }
@@ -849,7 +1171,7 @@ function ExportModal({ photo, photos, folder, info, s, settingsCache, onClose, o
         if (p.id !== photo.id) {
           pInfo = await app.develop.open(p);
           if (pInfo.error) throw new Error(pInfo.error);
-          pS = settingsCache.get(p.id) || fromXmp(pInfo.settings, pInfo.toneCurve, asShotTempTint(pInfo));
+          pS = settingsCache.get(p.id) || fromXmp(pInfo.settings, pInfo.curves, asShotTempTint(pInfo));
         }
         saved.push(await exportPhoto(p, pInfo, pS, { folder: target, longEdge, quality, cancelled: () => cancel.current, onProgress: (part) => setRun((r) => r && { ...r, part }) }));
       } catch (err) {
@@ -874,19 +1196,17 @@ function ExportModal({ photo, photos, folder, info, s, settingsCache, onClose, o
         </div>
       ) : (
         <div className="export-form">
-          <label className="export-row"><span>Photos</span>
-            <select value={which} onChange={(e) => setWhich(e.target.value)}>
-              <option value="this">This photo ({photo.name})</option>
-              <option value="rated" disabled={!rated.length}>Rated photos in this folder ({rated.length})</option>
-              <option value="edited" disabled={!edited.length}>Photos edited this session ({edited.length})</option>
-            </select>
-          </label>
-          <label className="export-row"><span>Size</span>
-            <select value={longEdge} onChange={(e) => setLongEdge(Number(e.target.value))}>
-              {SIZES.map(([label, v]) => <option key={v} value={v}>{label}</option>)}
-            </select>
+          <div className="export-row"><span>Photos</span>
+            <Dropdown value={which} onChange={setWhich} options={[
+              { value: 'this', label: `This photo (${photo.name})` },
+              { value: 'rated', label: 'Rated photos in this folder', hint: rated.length, disabled: !rated.length },
+              { value: 'edited', label: 'Photos edited this session', hint: edited.length, disabled: !edited.length },
+            ]} />
+          </div>
+          <div className="export-row"><span>Size</span>
+            <Dropdown value={longEdge} onChange={setLongEdge} options={SIZES.map(([label, value]) => ({ value, label }))} />
             {which === 'this' && <span className="muted small">{size.w} × {size.h}</span>}
-          </label>
+          </div>
           <label className="export-row"><span>Quality</span>
             <input type="range" min={60} max={100} value={quality} onChange={(e) => setQuality(Number(e.target.value))} />
             <span className="muted small">{quality}</span>

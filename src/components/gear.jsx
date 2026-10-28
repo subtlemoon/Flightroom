@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Icon, Modal, keySpecs, typeIcon, typeLabel } from './ui.jsx';
+import { Dropdown, Icon, Modal, keySpecs, typeIcon, typeLabel } from './ui.jsx';
 import { MOUNTS, SENSORS, ACCESSORY_CATEGORIES } from '../data/gear.js';
 import { VIDEO_SUPPORT } from '../data/software.js';
 import { uid } from '../store.js';
@@ -102,6 +102,7 @@ const num = (v) => (v === '' || v === undefined ? undefined : Number(v));
 export function GearForm({ initial, onSave, onClose }) {
   const [g, setG] = useState(() => initial || { type: 'body', brand: '', model: '', mount: 'Sony E', sensor: 'Full Frame', videoFormats: [], cardSlots: [], firmwareFeatures: [] });
   const set = (k) => (e) => setG({ ...g, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
+  const choose = (k) => (v) => setG({ ...g, [k]: v });
   const mounts = Object.keys(MOUNTS);
   const editing = !!initial;
 
@@ -117,9 +118,9 @@ export function GearForm({ initial, onSave, onClose }) {
     <label className="field"><span>{label}</span><input value={g[k] ?? ''} onChange={set(k)} {...props} /></label>
   );
   const select = (k, label, options) => (
-    <label className="field"><span>{label}</span>
-      <select value={g[k] ?? ''} onChange={set(k)}>{options.map((o) => <option key={o} value={o}>{o}</option>)}</select>
-    </label>
+    <div className="field"><span>{label}</span>
+      <Dropdown value={g[k] ?? ''} onChange={choose(k)} options={options.map((o) => ({ value: o, label: o }))} />
+    </div>
   );
 
   return (
@@ -127,11 +128,10 @@ export function GearForm({ initial, onSave, onClose }) {
       footer={<><button className="btn btn-ghost" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={!g.brand || !g.model} onClick={save}>Save</button></>}>
       <div className="form-grid">
         {!editing && (
-          <label className="field"><span>Type</span>
-            <select value={g.type} onChange={(e) => setG({ ...g, type: e.target.value, category: e.target.value === 'accessory' ? 'Adapter' : undefined })}>
-              <option value="body">Camera body</option><option value="lens">Lens</option><option value="accessory">Accessory</option>
-            </select>
-          </label>
+          <div className="field"><span>Type</span>
+            <Dropdown value={g.type} onChange={(v) => setG({ ...g, type: v, category: v === 'accessory' ? 'Adapter' : undefined })}
+              options={[{ value: 'body', label: 'Camera body' }, { value: 'lens', label: 'Lens' }, { value: 'accessory', label: 'Accessory' }]} />
+          </div>
         )}
         {field('brand', 'Brand', { placeholder: 'Sony' })}
         {field('model', 'Model', { placeholder: 'α7 IV' })}
@@ -170,12 +170,12 @@ export function GearForm({ initial, onSave, onClose }) {
           {g.category === 'Adapter' && <>
             {select('fromMount', 'Lens side (from)', mounts)}
             {select('toMount', 'Camera side (to)', mounts)}
-            <label className="field"><span>Autofocus</span>
-              <select value={g.af || 'good'} onChange={set('af')}>
-                <option value="full">Full autofocus</option><option value="good">Autofocus works</option>
-                <option value="limited">Limited / unreliable</option><option value="mf">Manual focus only</option>
-              </select>
-            </label>
+            <div className="field"><span>Autofocus</span>
+              <Dropdown value={g.af || 'good'} onChange={choose('af')} options={[
+                { value: 'full', label: 'Full autofocus' }, { value: 'good', label: 'Autofocus works' },
+                { value: 'limited', label: 'Limited / unreliable' }, { value: 'mf', label: 'Manual focus only' },
+              ]} />
+            </div>
           </>}
           {g.category === 'Battery' && field('batteryModel', 'Battery model', { placeholder: 'NP-FZ100' })}
           {g.category === 'Memory card' && select('cardType', 'Card type', ['SD', 'CFexpress A', 'CFexpress B', 'XQD', 'CFast 2.0', 'microSD'])}
@@ -208,7 +208,7 @@ export function useGearFilter(items, initialType = 'all') {
     <div className="filter-bar">
       <div className="search"><Icon name="search" size={16} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search gear, mounts, focal lengths…" /></div>
       <div className="seg">{TYPE_TABS.map(([k, l]) => <button key={k} className={type === k ? 'on' : ''} onClick={() => setType(k)}>{l}</button>)}</div>
-      <select className="brand-select" value={brand} onChange={(e) => setBrand(e.target.value)}>{brands.map((b) => <option key={b}>{b}</option>)}</select>
+      <Dropdown className="brand-select" value={brand} onChange={setBrand} options={brands.map((b) => ({ value: b, label: b }))} />
     </div>
   );
   return { filtered, bar };

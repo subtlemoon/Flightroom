@@ -1,7 +1,7 @@
 import { bridge as app } from '../bridge.js';
 import { useEffect, useRef, useState } from 'react';
 import { GearCard, useGearFilter } from './gear.jsx';
-import { Icon, Modal } from './ui.jsx';
+import { Dropdown, Icon, Modal } from './ui.jsx';
 import { EDITING_APPS } from '../data/software.js';
 import { START_PAGES } from './home.jsx';
 import { DEFAULT_RATING_KEYS, DEFAULT_ZOOM_KEY, RESERVED_KEYS, ZOOM_LEVELS, assignKey, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zoomLevel } from '../cull/keys.js';
@@ -235,12 +235,8 @@ export function SettingsView({ store }) {
         <h3 className="section-title">Start page</h3>
         <div className="update-row">
           <p className="muted grow start-page-text">The page Flightroom opens on.</p>
-          <select value={state.settings.startPage || 'home'} onChange={(e) => actions.setSettings({ startPage: e.target.value })}>
-            {START_PAGES.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-            <optgroup label="Groups">
-              {state.groups.map((g) => <option key={g.id} value={`group:${g.id}`}>{g.icon} {g.name}</option>)}
-            </optgroup>
-          </select>
+          <Dropdown value={state.settings.startPage || 'home'} onChange={(v) => actions.setSettings({ startPage: v })}
+            options={[...START_PAGES.map((p) => ({ value: p.id, label: p.label })), ...state.groups.map((g) => ({ value: `group:${g.id}`, label: `${g.icon} ${g.name}`, hint: 'Group' }))]} />
         </div>
       </section>
       <CullingCard store={store} />

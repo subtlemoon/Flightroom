@@ -428,7 +428,8 @@ pub struct Opened {
     camera: String,
     /// Develop settings already in the sidecar (crs: names without the prefix).
     settings: HashMap<String, String>,
-    tone_curve: Option<Vec<String>>,
+    /// Point curves: ToneCurvePV2012 and its Red, Green and Blue versions.
+    curves: HashMap<String, Vec<String>>,
 }
 
 /// Decodes a RAW file for developing and reads its saved settings.
@@ -449,7 +450,13 @@ pub async fn develop_open(app: AppHandle, id: String, sidecar: Option<String>) -
             matrices: raw.matrices.clone(),
             camera: format!("{} {}", raw.make, raw.model),
             settings: doc.all("crs"),
-            tone_curve: doc.get_seq("crs", "ToneCurvePV2012"),
+            curves: ["", "Red", "Green", "Blue"]
+                .iter()
+                .filter_map(|c| {
+                    let name = format!("ToneCurvePV2012{c}");
+                    doc.get_seq("crs", &name).map(|v| (name, v))
+                })
+                .collect(),
         })
     })
     .await
