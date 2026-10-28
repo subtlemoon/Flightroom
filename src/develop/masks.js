@@ -10,8 +10,8 @@
 // Transform changes afterwards (as in Lightroom until the mask is updated).
 import { deflateSync, inflateSync } from 'fflate';
 
-export const MAX_MASKS = 8;
-export const MASK_EDGE = 1280; // long edge of the mask images the renderer uses
+export const MAX_MASKS = 16;
+export const MASK_EDGE = 2048; // long edge of the mask images the renderer uses
 
 const L = (key, label, crs, min, max, step = 1, extra = {}) => ({ key, label, crs, min, max, step, def: 0, ...extra });
 // Lightroom's mask sliders, in its sections. `crs` values are the slider / 100
