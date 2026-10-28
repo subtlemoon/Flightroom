@@ -981,7 +981,7 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
             <Dropdown value={s.wb} options={WB_PRESETS.map(([value]) => ({ value, label: value }))} onChange={pickWb} />
           </span>
         </div>
-        <Groups sec={SECTION.basic} s={s} asShot={asShot} set={set} extra={{ Tone: <button className="btn btn-sm btn-ghost" onClick={onAutoTone} title="Set the tone sliders for this photo">Auto</button> }} />
+        <Groups sec={SECTION.basic} s={s} asShot={asShot} set={set} untitled={['White balance']} extra={{ Tone: <button className="btn btn-sm btn-ghost" onClick={onAutoTone} title="Set the tone sliders for this photo">Auto</button> }} />
       </>
     ),
     curve: () => <ToneCurve s={s} set={set} update={update} />,
@@ -1030,7 +1030,7 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
         <div className="grow" />
         <button className="icon-btn" title="Copy settings (Ctrl+C)" onClick={onCopy}><Icon name="copy" size={15} /></button>
         <button className="icon-btn" title="Paste settings (Ctrl+V)" onClick={onPaste || undefined} disabled={!onPaste}><Icon name="paste" size={15} /></button>
-        <button className="btn btn-sm" onClick={onReset} disabled={!edited} title="Back to how the camera shot it">Reset all</button>
+        <button className="btn btn-sm" onClick={onReset} disabled={!edited} title="Back to how the camera shot it. Edits are saved next to each photo (.xmp), where Lightroom reads them; your RAW files are never changed.">Reset all</button>
       </div>
       {cropMode && <CropPanel s={s} geo={geo} update={update} overlay={cropOverlay} setOverlay={setCropOverlay} onClose={onCropClose} />}
       {override || SECTIONS.map((sec) => {
@@ -1049,7 +1049,6 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
           </section>
         );
       })}
-      <p className="muted small dev-note">Edits are saved next to each photo (.xmp), where Lightroom reads them. Your RAW files are never changed.</p>
     </div>
   );
 }
@@ -1057,11 +1056,11 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
 const SECTION = Object.fromEntries(SECTIONS.map((sec) => [sec.id, sec]));
 
 // A section's plain sliders, in their groups. `extra` puts something beside a group's title.
-function Groups({ sec, s, asShot, set, only, hide = [], extra = {} }) {
+function Groups({ sec, s, asShot, set, only, hide = [], untitled = [], extra = {} }) {
   const groups = only ? sec.groups.filter(only) : sec.groups;
   return groups.map((g) => (
     <div key={g.title} className="dev-group">
-      {sec.groups.length > 1 || g.title !== sec.title ? (
+      {(sec.groups.length > 1 || g.title !== sec.title) && !untitled.includes(g.title) ? (
         <div className="dev-group-title dev-line">{g.title}{extra[g.title]}</div>
       ) : null}
       {g.sliders.filter((sl) => !hide.includes(sl.key)).map((sl) => (
