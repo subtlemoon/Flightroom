@@ -62,7 +62,7 @@ export const SECTIONS = [
     S('gHighHue', 'Hue', 'SplitToningHighlightHue', 0, 359), S('gHighSat', 'Saturation', 'SplitToningHighlightSaturation', 0, 100), S('gHighLum', 'Luminance', 'ColorGradeHighlightLum', -100, 100),
     S('gGlobalHue', 'Hue', 'ColorGradeGlobalHue', 0, 359), S('gGlobalSat', 'Saturation', 'ColorGradeGlobalSat', 0, 100), S('gGlobalLum', 'Luminance', 'ColorGradeGlobalLum', -100, 100),
   ] },
-  { id: 'detail', title: 'Detail', groups: [
+  { id: 'detail', title: 'Detail', keys: ['aiDenoise'], groups: [
     { title: 'Sharpening', sliders: [
       S('sharpen', 'Amount', 'Sharpness', 0, 150, 1, 40),
       S('sharpenRadius', 'Radius', 'SharpenRadius', 0.5, 3, 0.1, 1, { decimals: 1 }),
@@ -166,7 +166,7 @@ export function defaults(asShot) {
   return { ...d };
 }
 function makeDefaults(asShot) {
-  const s = { wb: 'As Shot', profile: 'adobe', bw: false, removeCA: false, lensProfile: false, vignetteStyle: 1, constrainCrop: false, crop: null, masks: [] };
+  const s = { wb: 'As Shot', profile: 'adobe', bw: false, removeCA: false, lensProfile: false, vignetteStyle: 1, constrainCrop: false, crop: null, masks: [], aiDenoise: 0 };
   for (const [k] of CURVE_CHANNELS) s[k] = LINEAR_CURVE;
   for (const sl of SLIDERS) s[sl.key] = sl.def;
   s.temp = asShot.temp;
@@ -222,10 +222,12 @@ export function fromXmp(crs, curves, asShot, own = {}) {
   }
   // Masks are read from Flightroom's own copy (Lightroom's newer mask format isn't read yet).
   if (own.Masks != null) { s.masks = masksFromJson(own.Masks); s.masksOwned = true; }
+  // AI Denoise: how much of it is blended in (Flightroom's own; Lightroom keeps it as a separate DNG).
+  const dn = Number(own.Denoise);
+  if (dn > 0 && dn <= 100) s.aiDenoise = Math.round(dn);
   return s;
 }
 
-export const isLinear = (curve) => curve.length === 2 && curve[0][0] === 0 && curve[0][1] === 0 && curve[1][0] === 255 && curve[1][1] === 255;
 export const curveName = (curve) => CURVE_PRESETS.find(([, c]) => same(c, curve))?.[0] || 'Custom';
 
 /** What to write to the sidecar for these settings. */
@@ -271,7 +273,7 @@ export function toXmp(s) {
   // Masks: Flightroom's own copy, plus Lightroom's mask records. Only written
   // once Flightroom has made masks for the photo, so Lightroom's own masks
   // stay untouched otherwise.
-  const out = { set, remove, seqs, own: { Masks: masksToJson(s.masks) } };
+  const out = { set, remove, seqs, own: { Masks: masksToJson(s.masks), Denoise: s.aiDenoise ? String(s.aiDenoise) : '' } };
   if (s.masks?.length || s.masksOwned) out.xml = { ...masksToCrs(s.masks), ...(s.masks?.length ? { MaskGroupBasedCorrections: '' } : {}) };
   return out;
 }

@@ -54,9 +54,6 @@ export const VIDEO_SUPPORT = {
   },
 };
 
-// Resolve (free) delivers up to UHD 60p; larger resolutions need Studio.
-export const RESOLVE_FREE_MAX = '4K';
-
 export function supportFor(table, format, appId) {
   const entry = table[format]?.[appId];
   if (!entry) return { status: 'unknown', note: '' };

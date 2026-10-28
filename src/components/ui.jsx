@@ -46,6 +46,14 @@ const paths = {
   eyeOff: <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" /><path d="M3 3l18 18" /></>,
   invert: <><circle cx="12" cy="12" r="8.5" /><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" /></>,
   minus: <path d="M5 12h14" />,
+  // AI selections
+  ai: <><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z" /><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z" /></>,
+  subject: <><circle cx="12" cy="8" r="3.5" /><path d="M5 21c.5-4 3.3-6.5 7-6.5s6.5 2.5 7 6.5" /><path d="M3 7V4h3M18 4h3v3M3 17v3h3M21 17v3h-3" /></>,
+  background: <><rect x="3" y="4" width="18" height="16" rx="2.5" /><circle cx="12" cy="10" r="2.5" /><path d="M7.5 20c.5-3 2.2-4.5 4.5-4.5s4 1.5 4.5 4.5" /></>,
+  sky: <><path d="M7 17a4 4 0 0 1 .4-8A5.5 5.5 0 0 1 18 10.5a3.3 3.3 0 0 1-.5 6.5z" /></>,
+  people: <><circle cx="9" cy="8" r="3" /><path d="M3 20c.4-3.5 2.8-5.5 6-5.5s5.6 2 6 5.5" /><circle cx="17" cy="9" r="2.4" /><path d="M16.5 14.5c2.6.2 4.1 2 4.5 5" /></>,
+  landscape: <><path d="M2 19l6-9 4 5 3-4 7 8z" /><circle cx="17" cy="6" r="2" /></>,
+  dropper: <><path d="M14.5 4.5l5 5" /><path d="M17 2.5a2.1 2.1 0 0 1 3 3L18 7.5l-3-3z" /><path d="M15.5 8.5L6 18l-3 1 1-3 9.5-9.5" /></>,
 };
 
 export function Icon({ name, size = 18 }) {

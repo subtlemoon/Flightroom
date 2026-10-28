@@ -9,7 +9,7 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 const inApp = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
 
 const safe = (p) => p.catch((err) => ({ error: String(err?.message || err) }));
-const call = (cmd, args) => safe(invoke(cmd, args));
+const call = (cmd, args, opts) => safe(invoke(cmd, args, opts));
 
 // Files are served by the desktop side under this address (gcimg:// on Windows
 // is spelled http://gcimg.localhost by WebView2).
@@ -52,12 +52,40 @@ export const bridge = inApp ? {
     open: (photo) => call('develop_open', { id: photo.id, sidecar: photo.sidecar }),
     close: () => call('develop_close'),
     save: (sidecar, { set, remove, seqs, xml = {}, own = {} }) => call('develop_save', { args: { sidecar, set, remove, seqs, xml, own } }),
-    imageUrl: (photo, edge, ahead) => fileUrl('develop/image', { p: photo.id, edge, ...(ahead ? { ahead: 1 } : {}) }),
-    regionUrl: (photo, r) => fileUrl('develop/region', { p: photo.id, ...r }),
+    // dn: how much AI Denoise to blend in (0-100), once worked out with denoise().
+    imageUrl: (photo, edge, ahead, dn = 0) => fileUrl('develop/image', { p: photo.id, edge, ...(ahead ? { ahead: 1 } : {}), ...(dn ? { dn } : {}) }),
+    regionUrl: (photo, r, dn = 0) => fileUrl('develop/region', { p: photo.id, ...r, ...(dn ? { dn } : {}) }),
+    denoise: (photo) => call('develop_denoise', { id: photo.id }),
+    cancelDenoise: () => call('develop_denoise_cancel'),
+    onDenoise: (fn) => onEvent('ai:denoise', fn),
     pickFolder: (title) => open({ directory: true, title }).catch(() => null),
     exportBegin: (args) => call('export_begin', { args }),
     exportTile: (job, x, y, w, h, rgba) => call('export_tile', rgba, { headers: { 'x-job': job, 'x-x': String(x), 'x-y': String(y), 'x-w': String(w), 'x-h': String(h) } }),
     exportFinish: (job, cancel = false) => call('export_finish', { job, cancel }),
+  },
+  // On-device AI: models download on first use; photos never leave the computer.
+  ai: {
+    status: () => invoke('ai_status'),
+    install: (feature) => call('ai_install', { feature }),
+    onProgress: (fn) => onEvent('ai:progress', fn),
+    // rgba: bottom-up RGBA of the upright, uncropped photo. Answers [{ name, data }] of w x h bytes.
+    masks: async (task, w, h, rgba) => {
+      const r = await call('ai_masks', rgba, { headers: { 'x-task': task, 'x-w': String(w), 'x-h': String(h) } });
+      if (r?.error) return r;
+      const buf = r instanceof ArrayBuffer ? r : new Uint8Array(r).buffer;
+      const dv = new DataView(buf);
+      const [mw, mh, n] = [dv.getUint32(0, true), dv.getUint32(4, true), dv.getUint32(8, true)];
+      const out = [];
+      let o = 12;
+      for (let i = 0; i < n; i++) {
+        const len = dv.getUint8(o);
+        const name = new TextDecoder().decode(new Uint8Array(buf, o + 1, len));
+        o += 1 + len;
+        out.push({ name, w: mw, h: mh, data: new Uint8Array(buf.slice(o, o + mw * mh)) });
+        o += mw * mh;
+      }
+      return out;
+    },
   },
 } : null;
 

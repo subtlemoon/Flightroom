@@ -103,6 +103,13 @@ uniform vec4 uMB[8]; // whites, blacks, texture, clarity
 uniform vec4 uMC[8]; // dehaze, saturation, temp, tint
 uniform vec4 uMD[8]; // hue, sharpness, noise, amount
 uniform vec4 uMR[8]; // luminance range: low, high, smoothness, flags (1 = range on, 2 = inverted)
+uniform vec4 uME[8]; // grain amount, size x amount, roughness x amount, moire
+uniform vec4 uMF[8]; // defringe, colour tint (rgb, no brightness)
+uniform vec4 uMP[8]; // point colour: hue (degrees), saturation, brightness, on
+uniform vec4 uMQ[8]; // point colour shifts: hue (degrees), saturation, luminance; range
+uniform vec4 uMS[8]; // point colour softness, own curve on, its refine saturation
+uniform sampler2D uMaskCurve; // each mask's curve, a row each (as uCurve)
+uniform float uPointView; // the mask whose point colour range is shown (-1: none)
 uniform float uMaskView;   // the mask shown on top (-1: none)
 uniform vec3 uMaskColor;
 uniform float uMaskOpacity, uMaskStyle, uMaskLine;
@@ -178,7 +185,8 @@ void main() {
   vec3 lin0 = lin;
 
   // How much each mask covers this pixel, and their sliders added up.
-  vec4 LA = vec4(0.0), LB = vec4(0.0), LC = vec4(0.0), LD = vec4(0.0);
+  vec4 LA = vec4(0.0), LB = vec4(0.0), LC = vec4(0.0), LD = vec4(0.0), LE = vec4(0.0), LF = vec4(0.0);
+  float mw[8] = float[8](0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
   float shownW = 0.0;
   if (uMaskN > 0.0) {
     vec2 muv = ori / uOriSize;
@@ -196,10 +204,12 @@ void main() {
       if (r.w >= 2.0) w = 1.0 - w;
       if (float(i) == uMaskView) shownW = w;
       w *= uMD[i].w;
-      LA += uMA[i] * w; LB += uMB[i] * w; LC += uMC[i] * w; LD += uMD[i] * w;
+      mw[i] = w;
+      LA += uMA[i] * w; LB += uMB[i] * w; LC += uMC[i] * w; LD += uMD[i] * w; LE += uME[i] * w; LF += uMF[i] * w;
     }
   }
   float nrLum = clamp(uNrLum + LD.z, 0.0, 1.0);
+  float nrColor = clamp(uNrColor + LE.w, 0.0, 1.0); // a mask's Moire Reduction smooths colour too
   float exposure = uExposure + LA.x;
   float highlights = uHighlights + LA.z, shadows = uShadows + LA.w;
   float whites = uWhites + LB.x, blacks = uBlacks + LB.y;
@@ -209,7 +219,7 @@ void main() {
 
   // Noise reduction: average with neighbours that are alike (luminance), and
   // smooth colour over a wider area (colour).
-  if (nrLum > 0.0 || uNrColor > 0.0) {
+  if (nrLum > 0.0 || nrColor > 0.0) {
     float y0 = max(dot(lin, W709), 1e-5);
     vec3 lsum = lin; float lw = 1.0;
     vec3 csum = lin / y0; float cw = 1.0;
@@ -223,19 +233,19 @@ void main() {
       float d = log2(y1) - log2(y0);
       float w = exp(-d * d / (2.0 * sigma * sigma)) * nrLum;
       lsum += n1 * w; lw += w;
-      if (uNrColor > 0.0) {
+      if (nrColor > 0.0) {
         vec3 n2 = toLinear(cam(p + dir * uPhotoPx * cr));
-        csum += n2 / max(dot(n2, W709), 1e-5) * uNrColor; cw += uNrColor;
+        csum += n2 / max(dot(n2, W709), 1e-5) * nrColor; cw += nrColor;
         if (uNrColorSmooth > 0.0) {
           vec3 n3 = toLinear(cam(p + dir * uPhotoPx * cr * 2.5));
-          csum += n3 / max(dot(n3, W709), 1e-5) * uNrColor * uNrColorSmooth; cw += uNrColor * uNrColorSmooth;
+          csum += n3 / max(dot(n3, W709), 1e-5) * nrColor * uNrColorSmooth; cw += nrColor * uNrColorSmooth;
         }
       }
     }
     lin = lsum / lw;
     // Contrast brings back some of the local contrast the smoothing took.
     if (uNrLumContrast > 0.0) lin *= exp2((log2(y0) - log2(max(dot(lin, W709), 1e-5))) * uNrLumContrast * 0.6);
-    if (uNrColor > 0.0) lin = (csum / cw) * max(dot(lin, W709), 1e-5);
+    if (nrColor > 0.0) lin = (csum / cw) * max(dot(lin, W709), 1e-5);
   }
 
   // Lens vignetting (positive brightens the corners) and calibration's shadow tint.
@@ -315,6 +325,20 @@ void main() {
   } else d = dc;
   d = clamp(d, 0.0, 1.0);
   d = vec3(texture(uCurve, vec2(d.r, 0.5)).g, texture(uCurve, vec2(d.g, 0.5)).b, texture(uCurve, vec2(d.b, 0.5)).a);
+  // Masks' own curves, the same way, where each mask covers.
+  if (uMaskN > 0.0) {
+    for (int i = 0; i < 8; i++) {
+      if (float(i) >= uMaskN) break;
+      if (uMS[i].y < 0.5 || mw[i] <= 0.0) continue;
+      float row = (float(i) + 0.5) / 8.0;
+      vec3 c = vec3(texture(uMaskCurve, vec2(d.r, row)).r, texture(uMaskCurve, vec2(d.g, row)).r, texture(uMaskCurve, vec2(d.b, row)).r);
+      float yc0 = dot(d, W709), yc = texture(uMaskCurve, vec2(yc0, row)).r;
+      c = mix(yc + (d - yc0) * (yc / max(yc0, 1e-3)), c, uMS[i].z);
+      c = clamp(c, 0.0, 1.0);
+      c = vec3(texture(uMaskCurve, vec2(c.r, row)).g, texture(uMaskCurve, vec2(c.g, row)).b, texture(uMaskCurve, vec2(c.b, row)).a);
+      d = mix(d, c, min(mw[i], 1.0));
+    }
+  }
 
   // Colour: mixer (per hue), then vibrance and saturation.
   vec3 h = hsv(d);
@@ -327,14 +351,42 @@ void main() {
   float sat = (1.0 + adj.y * chroma) * (1.0 + uSaturation + LC.y) * (1.0 + uVibrance * pow(1.0 - h.y, 2.0) * skin);
   d = yd + (d - yd) * max(sat, 0.0);
   d *= 1.0 + adj.z * 0.6 * chroma;
+  // A mask's colour swatch: tints its area, keeping the brightness.
+  if (LF.y != 0.0 || LF.z != 0.0 || LF.w != 0.0) {
+    float yt = dot(d, W709);
+    d *= 1.0 + LF.yzw * 2.4;
+    d *= yt / max(dot(d, W709), 1e-5);
+  }
+  // Point Color: colours near each mask's sampled colour shift in hue,
+  // saturation and luminance (range and softness set how near).
+  float pointShow = -1.0;
+  if (uMaskN > 0.0) {
+    for (int i = 0; i < 8; i++) {
+      if (float(i) >= uMaskN) break;
+      if (uMP[i].w < 0.5) continue;
+      vec3 hp = hsv(d);
+      float dh = abs(hp.x - uMP[i].x);
+      dh = min(dh, 360.0 - dh) / 180.0;
+      float dist = length(vec3(dh * 2.2 * min(hp.y, uMP[i].y) / max(uMP[i].y, 0.05) + dh * 0.4, (hp.y - uMP[i].y) * 0.9, (hp.z - uMP[i].z) * 0.6));
+      float width = uMQ[i].w;
+      float near = 1.0 - smoothstep(width * (1.0 - 0.85 * uMS[i].x), width, dist);
+      if (float(i) == uPointView) pointShow = near;
+      float k = near * mw[i];
+      if (k <= 0.0) continue;
+      if (uMQ[i].x != 0.0) d = rotateHue(d, uMQ[i].x * k);
+      float yp = dot(d, W709);
+      d = yp + (d - yp) * max(1.0 + uMQ[i].y * k, 0.0);
+      d *= 1.0 + uMQ[i].z * 0.8 * k;
+    }
+  }
 
   // Fringes: purple and green edges along high-contrast detail lose their colour.
-  if (uDefringeP > 0.0 || uDefringeG > 0.0) {
+  if (uDefringeP > 0.0 || uDefringeG > 0.0 || LF.x > 0.0) {
     float edge = smoothstep(0.15, 0.6, abs(l0 - ring(p, 2.0)));
     vec3 hd = hsv(d);
     float purple = smoothstep(240.0, 265.0, hd.x) * (1.0 - smoothstep(320.0, 345.0, hd.x));
     float green = smoothstep(75.0, 95.0, hd.x) * (1.0 - smoothstep(150.0, 170.0, hd.x));
-    float k = clamp(edge * (purple * uDefringeP + green * uDefringeG), 0.0, 1.0);
+    float k = clamp(edge * (purple * (uDefringeP + max(LF.x, 0.0)) + green * (uDefringeG + max(LF.x, 0.0))), 0.0, 1.0);
     float yk = dot(d, W709);
     d = mix(d, vec3(yk), k);
   }
@@ -379,13 +431,16 @@ void main() {
     }
   }
 
-  // Grain, tied to the photo so it moves with it.
-  if (uGrain.x > 0.0) {
-    vec2 g = ori / uGrain.y;
+  // Grain, tied to the photo so it moves with it (masks' grain blends into the photo's).
+  float grainAmt = uGrain.x + LE.x;
+  if (grainAmt > 0.0) {
+    float t = LE.x / grainAmt;
+    float size = mix(uGrain.y, LE.y / max(LE.x, 1e-4), t), rough = mix(uGrain.z, LE.z / max(LE.x, 1e-4), t);
+    vec2 g = ori / size;
     float nz = vnoise(g) - 0.5;
-    nz = mix(nz, (vnoise(g * 2.3 + 17.0) - 0.5), uGrain.z * 0.6);
+    nz = mix(nz, (vnoise(g * 2.3 + 17.0) - 0.5), rough * 0.6);
     float yg = dot(d, W709);
-    d += nz * uGrain.x * 0.35 * (0.3 + 0.7 * (1.0 - abs(yg * 2.0 - 1.0)));
+    d += nz * min(grainAmt, 1.5) * 0.35 * (0.3 + 0.7 * (1.0 - abs(yg * 2.0 - 1.0)));
   }
 
   d = clamp(d, 0.0, 1.0);
@@ -404,6 +459,8 @@ void main() {
     else if (uMaskStyle < 3.5) d = vec3(shownW);
     else d *= shownW;
   }
+  // Visualize Range: the point colour's reach in colour, the rest in grey.
+  if (pointShow >= 0.0) d = mix(vec3(dot(d, W709) * 0.6), d, pointShow);
   if (uShowClip > 0.0) {
     if (max(d.r, max(d.g, d.b)) >= 0.998) d = vec3(1.0, 0.15, 0.2);
     else if (max(d.r, max(d.g, d.b)) <= 0.004) d = vec3(0.2, 0.45, 1.0);
