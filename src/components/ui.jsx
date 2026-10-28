@@ -33,8 +33,19 @@ const paths = {
   export: <><path d="M12 3v12" /><path d="M7 10l5 5 5-5" /><path d="M5 21h14" /></>,
   compare: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 4v16" /><path d="M12 8l9 8" /></>,
   picker: <><path d="M14.5 4.5l5 5" /><path d="M17 2.5a2.1 2.1 0 0 1 3 3L18 7.5l-3-3z" /><path d="M15.5 8.5L6 18l-3 1 1-3 9.5-9.5" /></>,
+  lock: <><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></>,
+  unlock: <><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 7.5-2" /></>,
   reset: <><path d="M4 12a8 8 0 1 0 2.4-5.7L4 8.5" /><path d="M4 3.5v5h5" /></>,
   paste: <><rect x="6" y="4" width="12" height="17" rx="2" /><path d="M9 4V3h6v1" /><path d="M9 11h6M9 15h4" /></>,
+  mask: <><rect x="3" y="4" width="18" height="16" rx="2.5" /><circle cx="12" cy="12" r="4.5" /></>,
+  brush: <><path d="M18.5 3.5l2 2L11 15l-2-2z" /><path d="M9 13c-2.5 0-4 1.5-4 4 0 1.5-1 2.5-2 3 3 .5 7 0 7.5-3.5" /></>,
+  linear: <><rect x="3" y="3" width="18" height="18" rx="2.5" /><path d="M3 8h18M3 12h18M3 16h18" /></>,
+  radial: <><circle cx="12" cy="12" r="8.5" /><circle cx="12" cy="12" r="4" /></>,
+  luminance: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>,
+  eye: <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></>,
+  eyeOff: <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" /><path d="M3 3l18 18" /></>,
+  invert: <><circle cx="12" cy="12" r="8.5" /><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" /></>,
+  minus: <path d="M5 12h14" />,
 };
 
 export function Icon({ name, size = 18 }) {

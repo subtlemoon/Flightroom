@@ -93,6 +93,19 @@ uniform vec2 uGradeShape; // blending, balance
 uniform float uGradeOn;
 uniform vec3 uGrain;      // amount, cell size (oriented px), roughness
 uniform float uShowClip;
+// Masks (masks.js): up to 8 greyscale images, one per channel of two
+// textures, and each mask's local sliders.
+uniform vec2 uOriSize;
+uniform sampler2D uMask0, uMask1;
+uniform float uMaskN;
+uniform vec4 uMA[8]; // exposure, contrast, highlights, shadows
+uniform vec4 uMB[8]; // whites, blacks, texture, clarity
+uniform vec4 uMC[8]; // dehaze, saturation, temp, tint
+uniform vec4 uMD[8]; // hue, sharpness, noise, amount
+uniform vec4 uMR[8]; // luminance range: low, high, smoothness, flags (1 = range on, 2 = inverted)
+uniform float uMaskView;   // the mask shown on top (-1: none)
+uniform vec3 uMaskColor;
+uniform float uMaskOpacity, uMaskStyle, uMaskLine;
 out vec4 o;
 
 vec3 cam(vec2 p) {
@@ -164,13 +177,43 @@ void main() {
   vec3 lin = toLinear(cam(p));
   vec3 lin0 = lin;
 
+  // How much each mask covers this pixel, and their sliders added up.
+  vec4 LA = vec4(0.0), LB = vec4(0.0), LC = vec4(0.0), LD = vec4(0.0);
+  float shownW = 0.0;
+  if (uMaskN > 0.0) {
+    vec2 muv = ori / uOriSize;
+    vec4 m0 = texture(uMask0, muv);
+    vec4 m1 = uMaskN > 4.0 ? texture(uMask1, muv) : vec4(0.0);
+    float yl = disp(dot(lin0, W709) * exp2(uExposure));
+    for (int i = 0; i < 8; i++) {
+      if (float(i) >= uMaskN) break;
+      float w = i < 4 ? m0[i] : m1[i - 4];
+      vec4 r = uMR[i];
+      if (mod(r.w, 2.0) >= 1.0) {
+        float sm = max(r.z * 0.5, 0.004);
+        w *= smoothstep(r.x - sm, r.x, yl) * (1.0 - smoothstep(r.y, r.y + sm, yl));
+      }
+      if (r.w >= 2.0) w = 1.0 - w;
+      if (float(i) == uMaskView) shownW = w;
+      w *= uMD[i].w;
+      LA += uMA[i] * w; LB += uMB[i] * w; LC += uMC[i] * w; LD += uMD[i] * w;
+    }
+  }
+  float nrLum = clamp(uNrLum + LD.z, 0.0, 1.0);
+  float exposure = uExposure + LA.x;
+  float highlights = uHighlights + LA.z, shadows = uShadows + LA.w;
+  float whites = uWhites + LB.x, blacks = uBlacks + LB.y;
+  float texAmt = uTexture + LB.z, clarity = uClarity + LB.w;
+  float dehaze = clamp(uDehaze + LC.x, -1.0, 1.0);
+  float sharpen = uSharpen + LD.y * 1.1;
+
   // Noise reduction: average with neighbours that are alike (luminance), and
   // smooth colour over a wider area (colour).
-  if (uNrLum > 0.0 || uNrColor > 0.0) {
+  if (nrLum > 0.0 || uNrColor > 0.0) {
     float y0 = max(dot(lin, W709), 1e-5);
     vec3 lsum = lin; float lw = 1.0;
     vec3 csum = lin / y0; float cw = 1.0;
-    float sigma = (0.02 + uNrLum * 0.25) * (1.5 - uNrLumDetail);
+    float sigma = (0.02 + nrLum * 0.25) * (1.5 - uNrLumDetail);
     float cr = 4.0 * (1.5 - uNrColorDetail);
     for (int i = 0; i < 8; i++) {
       float a = float(i) * 0.785398;
@@ -178,7 +221,7 @@ void main() {
       vec3 n1 = toLinear(cam(p + dir * uPhotoPx * 1.5));
       float y1 = max(dot(n1, W709), 1e-5);
       float d = log2(y1) - log2(y0);
-      float w = exp(-d * d / (2.0 * sigma * sigma)) * uNrLum;
+      float w = exp(-d * d / (2.0 * sigma * sigma)) * nrLum;
       lsum += n1 * w; lw += w;
       if (uNrColor > 0.0) {
         vec3 n2 = toLinear(cam(p + dir * uPhotoPx * cr));
@@ -204,6 +247,12 @@ void main() {
     float w = 1.0 - smoothstep(0.0, 0.2, dot(lin, W709));
     lin.g *= 1.0 - uShadowTint * 0.18 * w;
   }
+  // A mask's Temp and Tint: warmer / cooler and magenta / green, same brightness.
+  if (LC.z != 0.0 || LC.w != 0.0) {
+    float yb = dot(lin, W709);
+    lin *= exp2(vec3(LC.z * 0.45, -LC.w * 0.35, -LC.z * 0.45));
+    lin *= yb / max(dot(lin, W709), 1e-6);
+  }
 
   float y0 = max(dot(lin, W709), 1e-5);
   float l0 = log2(y0);
@@ -212,33 +261,33 @@ void main() {
   float dEdge = l0 - g.r;
   float base = g.r + dEdge * (1.0 - exp(-dEdge * dEdge / 1.3));
   float detail = l0 - base;
-  base += uExposure;
+  base += exposure;
 
   float bd = disp(exp2(base));
-  base += uHighlights * 1.3 * smoothstep(0.4, 1.0, bd);
-  base += uShadows * 1.6 * (1.0 - smoothstep(0.0, 0.55, bd));
+  base += highlights * 1.3 * smoothstep(0.4, 1.0, bd);
+  base += shadows * 1.6 * (1.0 - smoothstep(0.0, 0.55, bd));
   float mid = smoothstep(0.03, 0.35, bd) * (1.0 - smoothstep(0.8, 1.0, bd));
-  detail *= max(0.0, 1.0 + uClarity * 0.9 * mid);
+  detail *= max(0.0, 1.0 + clarity * 0.9 * mid);
 
   float l1 = base + detail;
-  if (uTexture != 0.0) l1 += uTexture * 0.9 * (l0 - ring(p, 3.0)) * (0.4 + 0.6 * mid);
-  if (uSharpen > 0.0) {
+  if (texAmt != 0.0) l1 += texAmt * 0.9 * (l0 - ring(p, 3.0)) * (0.4 + 0.6 * mid);
+  if (sharpen > 0.0) {
     float hp = l0 - ring(p, uSharpenRadius);
     float limit = 0.06 + uSharpenDetail * 0.6;
     float edge = abs(l0 - ring(p, uSharpenRadius * 2.0));
     float mask = uSharpenMasking > 0.0 ? smoothstep(uSharpenMasking * 0.25, uSharpenMasking * 0.25 + 0.08, edge) : 1.0;
-    l1 += uSharpen * clamp(hp, -limit, limit) * mask;
-  }
+    l1 += sharpen * clamp(hp, -limit, limit) * mask;
+  } else if (sharpen < 0.0) l1 += max(sharpen, -1.0) * (l0 - ring(p, 1.5)); // a mask's negative Sharpness softens
   lin *= exp2(l1 - l0);
 
-  if (uDehaze != 0.0) {
-    float air = uAirY * exp2(uExposure);
-    float haze = clamp(g.g * exp2(uExposure) / max(air, 1e-4), 0.0, 1.0);
-    if (uDehaze > 0.0) {
-      float t = max(1.0 - 0.95 * uDehaze * haze, 0.2);
+  if (dehaze != 0.0) {
+    float air = uAirY * exp2(exposure);
+    float haze = clamp(g.g * exp2(exposure) / max(air, 1e-4), 0.0, 1.0);
+    if (dehaze > 0.0) {
+      float t = max(1.0 - 0.95 * dehaze * haze, 0.2);
       lin = (lin - air * (1.0 - t)) / t;
     } else {
-      lin = mix(lin, vec3(air * 0.85), -uDehaze * 0.45 * (0.4 + 0.6 * haze));
+      lin = mix(lin, vec3(air * 0.85), -dehaze * 0.45 * (0.4 + 0.6 * haze));
     }
   }
 
@@ -248,14 +297,14 @@ void main() {
   if (mn < 0.0 && y1 > 0.0) lin = y1 + (lin - y1) * (y1 / (y1 - mn + 1e-6));
   lin = max(lin, vec3(0.0));
 
-  if (uWhites != 0.0) lin *= exp2(uWhites * 0.8 * smoothstep(0.55, 1.0, disp(dot(lin, W709))));
+  if (whites != 0.0) lin *= exp2(whites * 0.8 * smoothstep(0.55, 1.0, disp(dot(lin, W709))));
 
   vec3 d = encode(shoulder(lin));
-  float bp = -uBlacks * 0.06;
+  float bp = -blacks * 0.06;
   d = (d - bp) / (1.0 - bp);
   d = clamp(d, 0.0, 1.0);
   vec3 s = d * d * (3.0 - 2.0 * d);
-  d = d + uContrast * (s - d);
+  d = d + (uContrast + LA.y * 0.75) * (s - d);
   // Tone curve: per channel (Lightroom's way, which adds saturation), eased
   // toward a brightness-only curve by Refine Saturation; then red, green, blue.
   vec3 dc = vec3(texture(uCurve, vec2(d.r, 0.5)).r, texture(uCurve, vec2(d.g, 0.5)).r, texture(uCurve, vec2(d.b, 0.5)).r);
@@ -272,9 +321,10 @@ void main() {
   vec4 adj = texture(uHue, vec2((h.x + 0.5) / 360.0, 0.5));
   float chroma = smoothstep(0.02, 0.25, h.y);
   if (adj.x != 0.0) d = rotateHue(d, adj.x * chroma);
+  if (LD.x != 0.0) d = rotateHue(d, LD.x * 60.0 * chroma);
   float yd = dot(d, W709);
   float skin = 1.0 - 0.5 * exp(-pow((h.x > 180.0 ? h.x - 360.0 : h.x) - 25.0, 2.0) / 450.0);
-  float sat = (1.0 + adj.y * chroma) * (1.0 + uSaturation) * (1.0 + uVibrance * pow(1.0 - h.y, 2.0) * skin);
+  float sat = (1.0 + adj.y * chroma) * (1.0 + uSaturation + LC.y) * (1.0 + uVibrance * pow(1.0 - h.y, 2.0) * skin);
   d = yd + (d - yd) * max(sat, 0.0);
   d *= 1.0 + adj.z * 0.6 * chroma;
 
@@ -339,6 +389,21 @@ void main() {
   }
 
   d = clamp(d, 0.0, 1.0);
+  // The selected mask on top: a colour, its outline, or the mask itself.
+  if (uMaskView >= 0.0) {
+    // The outline is the mask's halfway line; the fainter lines either side
+    // show where its feathering starts and ends.
+    float fw = max(fwidth(shownW), 1e-4) * uMaskLine;
+    float edge = 1.0 - smoothstep(0.0, fw, abs(shownW - 0.5));
+    float soft = max(1.0 - smoothstep(0.0, fw * 0.7, abs(shownW - 0.08)), 1.0 - smoothstep(0.0, fw * 0.7, abs(shownW - 0.92))) * 0.55;
+    soft *= step(0.002, fwidth(shownW)); // only where the mask actually fades
+    float lines = max(edge, soft);
+    if (uMaskStyle < 0.5) d = mix(d, uMaskColor, shownW * uMaskOpacity);
+    else if (uMaskStyle < 1.5) d = mix(mix(d, uMaskColor, shownW * uMaskOpacity * 0.6), uMaskColor, lines);
+    else if (uMaskStyle < 2.5) d = mix(d, uMaskColor, lines * max(uMaskOpacity, 0.35));
+    else if (uMaskStyle < 3.5) d = vec3(shownW);
+    else d *= shownW;
+  }
   if (uShowClip > 0.0) {
     if (max(d.r, max(d.g, d.b)) >= 0.998) d = vec3(1.0, 0.15, 0.2);
     else if (max(d.r, max(d.g, d.b)) <= 0.004) d = vec3(0.2, 0.45, 1.0);
