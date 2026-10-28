@@ -2,13 +2,16 @@
 // on the graphics card as half-float camera RGB; every redraw runs the whole
 // develop pipeline (shaders.js) for just the pixels on screen.
 import { VERT, GUIDE_DOWN, BLUR, FINAL } from './shaders.js';
-import { colorTransform } from './color.js';
-import { CURVE_SIZE, HUE_SIZE, curveTable, hueTable } from './luts.js';
+import { colorTransform, inv3, mul3 } from './color.js';
+import { CURVE_SIZE, HUE_SIZE, calibrationMatrix, curveTable, gradeTints, hueTable } from './luts.js';
 
 const GUIDE_EDGE = 320;
-// Lightroom's default look is brighter and punchier than a straight conversion;
-// these bring the starting point close to it (tuned on Z7 II files).
-export const LOOK = { exposure: 0.95, contrast: 0.4, saturation: 1.25 };
+// The base rendering under the sliders, per profile (params.js PROFILES).
+// Fitted to Lightroom's Adobe Color and to the Z7 II's own JPEGs.
+export const LOOKS = {
+  adobe: { exposure: 1.05, contrast: 0.4, saturation: 0.9 },
+  camera: { exposure: 0.95, contrast: 0.4, saturation: 1.25 },
+};
 
 export function parseFrame(buf) {
   const v = new DataView(buf);
@@ -122,6 +125,64 @@ export function outToFrame(W, H, f, view) {
   return mat(1 / (k * f.hw), 0, -W / 2 / (k * f.hw) + view.u, 0, -1 / (k * f.hh), H / 2 / (k * f.hh) + view.v);
 }
 
+// --- Transform and lens distortion -------------------------------------------
+// Both work in "centred units": oriented pixels from the photo's centre,
+// divided by half its long edge.
+
+const centred = (geo) => ({ cx: geo.ow / 2, cy: geo.oh / 2, half: Math.max(geo.ow, geo.oh) / 2 });
+
+/** The Transform panel as a matrix from the finished photo back to the source (centred units). */
+export function perspective(s) {
+  const v = (s.perspVertical || 0) / 100, h = (s.perspHorizontal || 0) / 100;
+  const a = ((s.perspRotate || 0) * Math.PI) / 180, c = Math.cos(a), sn = Math.sin(a);
+  const ax = 2 ** (((s.perspAspect || 0) / 100) * 0.5);
+  const sc = (s.perspScale ?? 100) / 100;
+  // Source -> finished photo: keystone, rotate, aspect and scale, then offset.
+  let F = [1, 0, 0, 0, 1, 0, h * 0.35, -v * 0.35, 1];
+  F = mm([c, -sn, 0, sn, c, 0, 0, 0, 1], F);
+  F = mm([ax * sc, 0, 0, 0, sc / ax, 0, 0, 0, 1], F);
+  F = mm([1, 0, (s.perspX || 0) / 100, 0, 1, -(s.perspY || 0) / 100, 0, 0, 1], F);
+  return inv3(F);
+}
+
+/** Maps a point of the finished photo (oriented px) to photo coordinates (0-1); null when outside the source. */
+export function sourceMap(geo, s) {
+  const { cx, cy, half } = centred(geo);
+  const P = perspective(s);
+  const corner = (cx * cx + cy * cy) / (half * half);
+  const k = ((s.distortion || 0) / 100) * 0.25;
+  const o2p = geo.orientedToPhoto();
+  return (x, y) => {
+    let nx = (x - cx) / half, ny = (y - cy) / half;
+    const w = P[6] * nx + P[7] * ny + P[8];
+    [nx, ny] = [(P[0] * nx + P[1] * ny + P[2]) / w, (P[3] * nx + P[4] * ny + P[5]) / w];
+    const f = 1 - k * ((nx * nx + ny * ny) / corner);
+    return ap(o2p, nx * f * half + cx, ny * f * half + cy);
+  };
+}
+
+/** The largest crop of the photo's shape (centred, at the crop's angle) with no empty corners after Transform. */
+export function constrainedCrop(geo, s) {
+  const map = sourceMap(geo, s);
+  const angle = s.crop?.angle || 0;
+  const fits = (k) => {
+    const M = geo.frameToOriented({ cx: geo.ow / 2, cy: geo.oh / 2, hw: (k * geo.ow) / 2, hh: (k * geo.oh) / 2, angle });
+    for (let i = 0; i <= 8; i++) {
+      const t = -1 + i / 4;
+      for (const [u, v] of [[t, -1], [t, 1], [-1, t], [1, t]]) {
+        const [x, y] = map(...ap(M, u, v));
+        if (x < -1e-4 || y < -1e-4 || x > 1.0001 || y > 1.0001) return false;
+      }
+    }
+    return true;
+  };
+  let lo = 0.05, hi = 1;
+  if (fits(1)) lo = 1;
+  else for (let i = 0; i < 24; i++) { const m = (lo + hi) / 2; if (fits(m)) lo = m; else hi = m; }
+  if (lo === 1 && !angle) return null;
+  return { ...geo.toCrop({ cx: geo.ow / 2, cy: geo.oh / 2, hw: (lo * geo.ow) / 2, hh: (lo * geo.oh) / 2, angle }), aspect: s.crop?.aspect };
+}
+
 export const fitScale = (W, H, f, margin = 0) => Math.min((W - margin * 2) / (2 * f.hw), (H - margin * 2) / (2 * f.hh));
 
 export class Renderer {
@@ -145,9 +206,8 @@ export class Renderer {
     this.hi = null;  // { tex, rect: [x, y, w, h] (photo 0-1), safe }
     this.guide = null;
     this.guideKey = '';
-    this.curveTex = this.texture(gl.R16F, CURVE_SIZE, 1, gl.RED, gl.FLOAT, new Float32Array(CURVE_SIZE));
-    this.hueTex = this.texture(gl.RGB16F, HUE_SIZE, 1, gl.RGB, gl.FLOAT, new Float32Array(HUE_SIZE * 3), gl.REPEAT);
-    this.lutKey = '';
+    this.curveTex = this.texture(gl.RGBA16F, CURVE_SIZE, 1, gl.RGBA, gl.FLOAT, new Float32Array(CURVE_SIZE * 4));
+    this.hueTex = this.texture(gl.RGBA16F, HUE_SIZE, 1, gl.RGBA, gl.FLOAT, new Float32Array(HUE_SIZE * 4), gl.REPEAT);
     this.blank = this.texture(gl.RGB16F, 1, 1, gl.RGB, gl.FLOAT, new Float32Array(3));
   }
 
@@ -235,13 +295,19 @@ export class Renderer {
   }
 
   colorUniforms(info, s) {
-    const { wb, matrix } = colorTransform(info, s.temp, s.tint);
-    return { uWB: wb, uCam: glMat(matrix) };
+    const key = `${s.temp}|${s.tint}|${s.redHue}|${s.redSat}|${s.greenHue}|${s.greenSat}|${s.blueHue}|${s.blueSat}`;
+    if (this.colorKey !== key || this.colorInfo !== info) {
+      const { wb, matrix } = colorTransform(info, s.temp, s.tint);
+      this.color = { uWB: wb, uCam: glMat(mul3(calibrationMatrix(s), matrix)) };
+      this.colorKey = key;
+      this.colorInfo = info;
+    }
+    return this.color;
   }
 
   /** Rebuilds the blurred brightness guide when the photo or white balance changes. */
   updateGuide(info, s) {
-    const key = `${s.temp}|${s.tint}`;
+    const key = `${s.temp}|${s.tint}|${s.redHue}|${s.redSat}|${s.greenHue}|${s.greenSat}|${s.blueHue}|${s.blueSat}`;
     if (this.guide && key === this.guideKey) return;
     const gl = this.gl;
     const scale = GUIDE_EDGE / Math.max(this.src.w, this.src.h);
@@ -255,27 +321,40 @@ export class Renderer {
     const sigma = Math.max(gw, gh) / 45;
     this.draw(this.blur, b, { uTex: a.tex, uStep: [1 / gw, 0], uSigma: sigma });
     this.draw(this.blur, c, { uTex: b.tex, uStep: [0, 1 / gh], uSigma: sigma });
-    // Airlight for dehaze: the brightness the haziest parts tend toward.
-    const px = new Float32Array(gw * gh * 4);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, a.fb);
-    gl.readPixels(0, 0, gw, gh, gl.RGBA, gl.FLOAT, px);
-    const lum = [];
-    for (let i = 0; i < gw * gh; i++) lum.push(px[i * 4]);
-    lum.sort((x, y) => x - y);
-    this.airY = Math.min(1, 2 ** lum[Math.floor(lum.length * 0.995)]);
-    this.medianLog = lum[Math.floor(lum.length / 2)];
+    this.airY = null; // measured when Dehaze needs it (reading back stalls the graphics card)
     this.guideKey = key;
   }
 
-  updateLuts(s) {
-    const key = JSON.stringify([s.curve, s.pShadows, s.pDarks, s.pLights, s.pHighlights, ...[0, 1, 2, 3, 4, 5, 6, 7].flatMap((i) => [s[`hue${i}`], s[`sat${i}`], s[`lum${i}`]])]);
-    if (key === this.lutKey) return;
+  /** Airlight for dehaze: the brightness the haziest parts tend toward. */
+  measureAir() {
     const gl = this.gl;
-    gl.bindTexture(gl.TEXTURE_2D, this.curveTex);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, CURVE_SIZE, 1, gl.RED, gl.FLOAT, curveTable(s));
-    gl.bindTexture(gl.TEXTURE_2D, this.hueTex);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, HUE_SIZE, 1, gl.RGB, gl.FLOAT, hueTable(s));
-    this.lutKey = key;
+    const a = this.guide[0];
+    const px = new Float32Array(a.w * a.h * 4);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, a.fb);
+    gl.readPixels(0, 0, a.w, a.h, gl.RGBA, gl.FLOAT, px);
+    const lum = new Float32Array(a.w * a.h);
+    for (let i = 0; i < lum.length; i++) lum[i] = px[i * 4];
+    lum.sort();
+    this.airY = Math.min(1, 2 ** lum[Math.floor(lum.length * 0.995)]);
+  }
+
+  updateLuts(s) {
+    const gl = this.gl;
+    // Only rebuilt when their own settings change (cheap to compare: the
+    // curves are kept as the same arrays until edited).
+    const c = [s.curve, s.curveR, s.curveG, s.curveB, s.pShadows, s.pDarks, s.pLights, s.pHighlights, s.pSplitS, s.pSplitM, s.pSplitH];
+    if (!this.curveKey || c.some((x, i) => x !== this.curveKey[i])) {
+      gl.bindTexture(gl.TEXTURE_2D, this.curveTex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, CURVE_SIZE, 1, gl.RGBA, gl.FLOAT, curveTable(s));
+      this.curveKey = c;
+    }
+    const h = [];
+    for (let i = 0; i < 8; i++) h.push(s[`hue${i}`], s[`sat${i}`], s[`lum${i}`], s[`gray${i}`]);
+    if (!this.hueKey || h.some((x, i) => x !== this.hueKey[i])) {
+      gl.bindTexture(gl.TEXTURE_2D, this.hueTex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, HUE_SIZE, 1, gl.RGBA, gl.FLOAT, hueTable(s));
+      this.hueKey = h;
+    }
   }
 
   /**
@@ -286,8 +365,15 @@ export class Renderer {
     if (!this.src) return;
     this.updateGuide(info, s);
     this.updateLuts(s);
-    const out2photo = mm(geo.orientedToPhoto(), mm(geo.frameToOriented(frame), out2frame));
+    if (s.dehaze && this.airY == null) this.measureAir();
+    const out2ori = mm(geo.frameToOriented(frame), out2frame);
     const hi = this.hi;
+    const look = LOOKS[s.profile] || LOOKS.adobe;
+    const { cx, cy, half } = centred(geo);
+    const [tS, tM, tH, tG] = gradeTints(s);
+    const gradeLum = [s.gShadowLum, s.gMidLum, s.gHighLum, s.gGlobalLum].map((v) => (v || 0) / 100);
+    const gradeOn = [...tS, ...tM, ...tH, ...tG, ...gradeLum].some((v) => v !== 0);
+    const defringe = s.removeCA ? 0.5 : 0;
     this.draw(this.final, target, {
       uSrc: this.src.tex,
       uHi: hi ? hi.tex : this.blank,
@@ -296,14 +382,38 @@ export class Renderer {
       uGuide: this.guide[2].tex,
       uCurve: this.curveTex,
       uHue: this.hueTex,
-      uOut2Photo: glMat(out2photo),
+      uOut2Ori: glMat(out2ori),
+      uOri2Photo: glMat(geo.orientedToPhoto()),
+      uOriCenter: [cx, cy],
+      uOriHalf: half,
+      uCornerR2: (cx * cx + cy * cy) / (half * half),
+      uPersp: glMat(perspective(s)),
+      uDistort: ((s.distortion || 0) / 100) * 0.25,
+      uLensVig: (s.lensVignette || 0) / 100,
+      uLensVigMid: (s.lensVignetteMid ?? 50) / 100,
+      uDefringeP: Math.max(defringe, (s.defringePurple || 0) / 20),
+      uDefringeG: Math.max(defringe, (s.defringeGreen || 0) / 20),
+      uShadowTint: (s.shadowTint || 0) / 100,
+      uNrLumDetail: (s.nrLumDetail ?? 50) / 100,
+      uNrLumContrast: (s.nrLumContrast || 0) / 100,
+      uNrColorDetail: (s.nrColorDetail ?? 50) / 100,
+      uNrColorSmooth: (s.nrColorSmooth ?? 50) / 100,
+      uVigStyle: s.vignetteStyle || 1,
+      uVigHighlights: (s.vignetteHighlights || 0) / 100,
+      uRefineSat: (s.refineSat ?? 100) / 100,
+      uBW: s.bw ? 1 : 0,
+      uGradeOn: gradeOn ? 1 : 0,
+      uGradeS: tS, uGradeM: tM, uGradeH: tH, uGradeG: tG,
+      uGradeLum: gradeLum,
+      uGradeShape: [(s.gBlending ?? 50) / 100, (s.gBalance || 0) / 100],
+      uGrain: [(s.grain || 0) / 100, (0.5 + ((s.grainSize ?? 25) / 100) * 3.5) * Math.max(1, Math.max(geo.ow, geo.oh) / 4000), (s.grainRough ?? 50) / 100],
       uOut2Crop: glMat(out2frame),
       uPhotoPx: [1 / geo.sw, 1 / geo.sh],
       uCropAspect: frame.hw / frame.hh,
       uBg: [0.043, 0.051, 0.071],
       ...this.colorUniforms(info, s),
-      uExposure: s.exposure + LOOK.exposure,
-      uContrast: LOOK.contrast + (s.contrast / 100) * 0.75,
+      uExposure: s.exposure + look.exposure,
+      uContrast: look.contrast + (s.contrast / 100) * 0.75,
       uHighlights: s.highlights / 100,
       uShadows: s.shadows / 100,
       uWhites: s.whites / 100,
@@ -312,7 +422,7 @@ export class Renderer {
       uClarity: s.clarity / 100,
       uDehaze: s.dehaze / 100,
       uVibrance: s.vibrance / 100,
-      uSaturation: (1 + s.saturation / 100) * LOOK.saturation - 1,
+      uSaturation: (1 + s.saturation / 100) * look.saturation - 1,
       uAirY: this.airY || 1,
       uSharpen: (s.sharpen / 100) * 1.1,
       uSharpenRadius: s.sharpenRadius,
@@ -326,7 +436,6 @@ export class Renderer {
       uVigFeather: s.vignetteFeather / 100,
       uShowClip: showClip ? 1 : 0,
     });
-    return out2photo;
   }
 
   /** Renders a small copy and counts its pixels per level, for the histogram. */

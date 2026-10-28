@@ -63,8 +63,17 @@ uniform vec4 uHiSafe;     // the part of uHiRect that is safe to use
 uniform sampler2D uGuide;
 uniform sampler2D uCurve;
 uniform sampler2D uHue;
-uniform mat3 uOut2Photo;  // output pixel -> photo coordinates (sensor orientation, 0-1)
+uniform mat3 uOut2Ori;    // output pixel -> oriented pixel of the transformed photo
+uniform mat3 uOri2Photo;  // oriented pixel -> photo coordinates (sensor orientation, 0-1)
 uniform mat3 uOut2Crop;   // output pixel -> crop frame (-1..1)
+uniform vec2 uOriCenter;  // centre and half the long edge of the oriented photo, px
+uniform float uOriHalf;
+uniform float uCornerR2;  // squared distance to a corner, in those units
+uniform mat3 uPersp;      // Transform panel: output -> source, centred units
+uniform float uDistort;
+uniform float uLensVig, uLensVigMid;
+uniform float uDefringeP, uDefringeG;
+uniform float uShadowTint;
 uniform vec2 uPhotoPx;    // 1 / photo size in full-resolution pixels
 uniform float uCropAspect;
 uniform vec3 uBg;
@@ -74,8 +83,15 @@ uniform float uHighlights, uShadows, uWhites, uBlacks;
 uniform float uTexture, uClarity, uDehaze, uVibrance, uSaturation;
 uniform float uAirY;
 uniform float uSharpen, uSharpenRadius, uSharpenDetail, uSharpenMasking;
-uniform float uNrLum, uNrColor;
-uniform float uVignette, uVigMid, uVigRound, uVigFeather;
+uniform float uNrLum, uNrColor, uNrLumDetail, uNrLumContrast, uNrColorDetail, uNrColorSmooth;
+uniform float uVignette, uVigMid, uVigRound, uVigFeather, uVigStyle, uVigHighlights;
+uniform float uRefineSat;
+uniform float uBW;
+uniform vec3 uGradeS, uGradeM, uGradeH, uGradeG; // tints around grey
+uniform vec4 uGradeLum;   // shadows, midtones, highlights, global
+uniform vec2 uGradeShape; // blending, balance
+uniform float uGradeOn;
+uniform vec3 uGrain;      // amount, cell size (oriented px), roughness
 uniform float uShowClip;
 out vec4 o;
 
@@ -127,11 +143,26 @@ vec3 rotateHue(vec3 c, float deg) {
   return m + v * co + cross(k, v) * s;
 }
 
+float hash(vec2 q) { return fract(sin(dot(q, vec2(127.1, 311.7))) * 43758.5453); }
+float vnoise(vec2 q) {
+  vec2 i = floor(q), f = fract(q);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + 1.0), f.x), f.y);
+}
+
 void main() {
-  vec2 p = (uOut2Photo * vec3(gl_FragCoord.xy, 1.0)).xy;
-  if (p.x < 0.0 || p.y < 0.0 || p.x > 1.0 || p.y > 1.0) { o = vec4(uBg, 1.0); return; }
+  vec2 ori = (uOut2Ori * vec3(gl_FragCoord.xy, 1.0)).xy;
+  // Transform (perspective), then the lens: from the finished photo back to the sensor.
+  vec2 n = (ori - uOriCenter) / uOriHalf;
+  vec3 hn = uPersp * vec3(n, 1.0);
+  n = hn.xy / hn.z;
+  float r2 = dot(n, n) / uCornerR2;
+  n *= 1.0 - uDistort * r2;
+  vec2 p = (uOri2Photo * vec3(n * uOriHalf + uOriCenter, 1.0)).xy;
+  if (hn.z <= 0.0 || p.x < 0.0 || p.y < 0.0 || p.x > 1.0 || p.y > 1.0) { o = vec4(uBg, 1.0); return; }
 
   vec3 lin = toLinear(cam(p));
+  vec3 lin0 = lin;
 
   // Noise reduction: average with neighbours that are alike (luminance), and
   // smooth colour over a wider area (colour).
@@ -139,7 +170,8 @@ void main() {
     float y0 = max(dot(lin, W709), 1e-5);
     vec3 lsum = lin; float lw = 1.0;
     vec3 csum = lin / y0; float cw = 1.0;
-    float sigma = 0.02 + uNrLum * 0.25;
+    float sigma = (0.02 + uNrLum * 0.25) * (1.5 - uNrLumDetail);
+    float cr = 4.0 * (1.5 - uNrColorDetail);
     for (int i = 0; i < 8; i++) {
       float a = float(i) * 0.785398;
       vec2 dir = vec2(cos(a), sin(a));
@@ -149,12 +181,28 @@ void main() {
       float w = exp(-d * d / (2.0 * sigma * sigma)) * uNrLum;
       lsum += n1 * w; lw += w;
       if (uNrColor > 0.0) {
-        vec3 n2 = toLinear(cam(p + dir * uPhotoPx * 4.0));
+        vec3 n2 = toLinear(cam(p + dir * uPhotoPx * cr));
         csum += n2 / max(dot(n2, W709), 1e-5) * uNrColor; cw += uNrColor;
+        if (uNrColorSmooth > 0.0) {
+          vec3 n3 = toLinear(cam(p + dir * uPhotoPx * cr * 2.5));
+          csum += n3 / max(dot(n3, W709), 1e-5) * uNrColor * uNrColorSmooth; cw += uNrColor * uNrColorSmooth;
+        }
       }
     }
     lin = lsum / lw;
+    // Contrast brings back some of the local contrast the smoothing took.
+    if (uNrLumContrast > 0.0) lin *= exp2((log2(y0) - log2(max(dot(lin, W709), 1e-5))) * uNrLumContrast * 0.6);
     if (uNrColor > 0.0) lin = (csum / cw) * max(dot(lin, W709), 1e-5);
+  }
+
+  // Lens vignetting (positive brightens the corners) and calibration's shadow tint.
+  if (uLensVig != 0.0) {
+    float w = smoothstep(uLensVigMid * 0.6, 1.0, sqrt(r2));
+    lin *= exp2(uLensVig * 1.6 * w * w);
+  }
+  if (uShadowTint != 0.0) {
+    float w = 1.0 - smoothstep(0.0, 0.2, dot(lin, W709));
+    lin.g *= 1.0 - uShadowTint * 0.18 * w;
   }
 
   float y0 = max(dot(lin, W709), 1e-5);
@@ -208,11 +256,20 @@ void main() {
   d = clamp(d, 0.0, 1.0);
   vec3 s = d * d * (3.0 - 2.0 * d);
   d = d + uContrast * (s - d);
-  d = vec3(texture(uCurve, vec2(d.r, 0.5)).r, texture(uCurve, vec2(d.g, 0.5)).r, texture(uCurve, vec2(d.b, 0.5)).r);
+  // Tone curve: per channel (Lightroom's way, which adds saturation), eased
+  // toward a brightness-only curve by Refine Saturation; then red, green, blue.
+  vec3 dc = vec3(texture(uCurve, vec2(d.r, 0.5)).r, texture(uCurve, vec2(d.g, 0.5)).r, texture(uCurve, vec2(d.b, 0.5)).r);
+  if (uRefineSat < 1.0) {
+    float yc0 = dot(d, W709);
+    float yc = texture(uCurve, vec2(yc0, 0.5)).r;
+    d = mix(yc + (d - yc0) * (yc / max(yc0, 1e-3)), dc, uRefineSat);
+  } else d = dc;
+  d = clamp(d, 0.0, 1.0);
+  d = vec3(texture(uCurve, vec2(d.r, 0.5)).g, texture(uCurve, vec2(d.g, 0.5)).b, texture(uCurve, vec2(d.b, 0.5)).a);
 
   // Colour: mixer (per hue), then vibrance and saturation.
   vec3 h = hsv(d);
-  vec3 adj = texture(uHue, vec2((h.x + 0.5) / 360.0, 0.5)).rgb;
+  vec4 adj = texture(uHue, vec2((h.x + 0.5) / 360.0, 0.5));
   float chroma = smoothstep(0.02, 0.25, h.y);
   if (adj.x != 0.0) d = rotateHue(d, adj.x * chroma);
   float yd = dot(d, W709);
@@ -220,6 +277,36 @@ void main() {
   float sat = (1.0 + adj.y * chroma) * (1.0 + uSaturation) * (1.0 + uVibrance * pow(1.0 - h.y, 2.0) * skin);
   d = yd + (d - yd) * max(sat, 0.0);
   d *= 1.0 + adj.z * 0.6 * chroma;
+
+  // Fringes: purple and green edges along high-contrast detail lose their colour.
+  if (uDefringeP > 0.0 || uDefringeG > 0.0) {
+    float edge = smoothstep(0.15, 0.6, abs(l0 - ring(p, 2.0)));
+    vec3 hd = hsv(d);
+    float purple = smoothstep(240.0, 265.0, hd.x) * (1.0 - smoothstep(320.0, 345.0, hd.x));
+    float green = smoothstep(75.0, 95.0, hd.x) * (1.0 - smoothstep(150.0, 170.0, hd.x));
+    float k = clamp(edge * (purple * uDefringeP + green * uDefringeG), 0.0, 1.0);
+    float yk = dot(d, W709);
+    d = mix(d, vec3(yk), k);
+  }
+
+  // Black & white: each colour's grey comes from the mix sliders.
+  if (uBW > 0.0) {
+    float yb = dot(d, W709) * (1.0 + adj.w * chroma * 1.2);
+    d = vec3(max(yb, 0.0));
+  }
+
+  // Colour grading: tints and brightness for shadows, midtones and highlights.
+  if (uGradeOn > 0.0) {
+    float yg = clamp(dot(d, W709), 0.0, 1.0);
+    float c = 0.5 - uGradeShape.y * 0.3, w = 0.1 + uGradeShape.x * 0.4;
+    float sh = 1.0 - smoothstep(c - w, c + w * 0.3, yg);
+    float hi = smoothstep(c - w * 0.3, c + w, yg);
+    float mi = max(clamp(1.0 - sh - hi, 0.0, 1.0), (1.0 - abs(yg - c) / (w + 0.25)) * 0.8);
+    vec3 tint = (uGradeS * sh + uGradeM * mi + uGradeH * hi + uGradeG) * 0.2;
+    d += tint - dot(tint, W709);
+    float lum = uGradeLum.x * sh + uGradeLum.y * mi + uGradeLum.z * hi + uGradeLum.w;
+    d = lum >= 0.0 ? 1.0 - (1.0 - d) * (1.0 - lum * 0.5) : d * (1.0 + lum * 0.5);
+  }
 
   // Vignette, measured from the centre of the cropped frame.
   if (uVignette != 0.0) {
@@ -231,7 +318,24 @@ void main() {
     float m0 = 1.45 - uVigMid * 0.9;
     float f = 0.08 + uVigFeather * 0.9;
     float mask = smoothstep(m0 - f * 0.5, m0 + f * 0.5, dist);
-    d = mix(d, uVignette > 0.0 ? vec3(1.0) : vec3(0.0), abs(uVignette) * mask * 0.9);
+    float amt = abs(uVignette) * mask * 0.9;
+    if (uVigStyle > 2.5) d = mix(d, uVignette > 0.0 ? vec3(1.0) : vec3(0.0), amt);
+    else {
+      vec3 d0 = d;
+      // Highlight and Color Priority scale the light (keeping colours); Highlights lets bright parts through.
+      d = uVignette > 0.0 ? 1.0 - (1.0 - d) * (1.0 - amt) : d * (1.0 - amt);
+      if (uVigStyle < 1.5) d = mix(d, d0, uVigHighlights * smoothstep(0.55, 1.0, max(d0.r, max(d0.g, d0.b))));
+      else d = mix(d, d0, uVigHighlights * 0.5 * smoothstep(0.7, 1.0, max(d0.r, max(d0.g, d0.b))));
+    }
+  }
+
+  // Grain, tied to the photo so it moves with it.
+  if (uGrain.x > 0.0) {
+    vec2 g = ori / uGrain.y;
+    float nz = vnoise(g) - 0.5;
+    nz = mix(nz, (vnoise(g * 2.3 + 17.0) - 0.5), uGrain.z * 0.6);
+    float yg = dot(d, W709);
+    d += nz * uGrain.x * 0.35 * (0.3 + 0.7 * (1.0 - abs(yg * 2.0 - 1.0)));
   }
 
   d = clamp(d, 0.0, 1.0);
