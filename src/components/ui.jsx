@@ -33,6 +33,8 @@ const paths = {
   export: <><path d="M12 3v12" /><path d="M7 10l5 5 5-5" /><path d="M5 21h14" /></>,
   compare: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 4v16" /><path d="M12 8l9 8" /></>,
   picker: <><path d="M14.5 4.5l5 5" /><path d="M17 2.5a2.1 2.1 0 0 1 3 3L18 7.5l-3-3z" /><path d="M15.5 8.5L6 18l-3 1 1-3 9.5-9.5" /></>,
+  lock: <><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></>,
+  unlock: <><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 7.5-2" /></>,
   reset: <><path d="M4 12a8 8 0 1 0 2.4-5.7L4 8.5" /><path d="M4 3.5v5h5" /></>,
   paste: <><rect x="6" y="4" width="12" height="17" rx="2" /><path d="M9 4V3h6v1" /><path d="M9 11h6M9 15h4" /></>,
 };

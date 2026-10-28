@@ -511,10 +511,6 @@ kbd { font: inherit; font-size: 10.5px; padding: 1px 5px; border-radius: 5px; bo
 .crop-handle.bl { left: 0; bottom: 0; cursor: nesw-resize; } .crop-handle.br { right: 0; bottom: 0; cursor: nwse-resize; }
 .crop-handle.t { left: 50%; top: 0; cursor: ns-resize; } .crop-handle.b { left: 50%; bottom: 0; cursor: ns-resize; }
 .crop-handle.l { left: 0; top: 50%; cursor: ew-resize; } .crop-handle.r { right: 0; top: 50%; cursor: ew-resize; }
-.crop-bar { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 12px; background: rgba(10, 12, 18, .85); border: 1px solid var(--line-2); backdrop-filter: blur(8px); white-space: nowrap; }
-.crop-angle { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 0; }
-.crop-angle input { width: 140px; }
-.crop-angle span { width: 44px; font-variant-numeric: tabular-nums; color: #c9cfdb; }
 .export-form { display: flex; flex-direction: column; gap: 12px; }
 .export-row { display: flex; align-items: center; gap: 10px; margin: 0; }
 .export-row > span:first-child { width: 64px; color: var(--muted); font-size: 12.5px; flex-shrink: 0; }
@@ -601,3 +597,5 @@ kbd { font: inherit; font-size: 10.5px; padding: 1px 5px; border-radius: 5px; bo
 .field .dd { width: 100%; }
 .dev-curve-pad { padding: 6px; margin: -6px; touch-action: none; cursor: crosshair; }
 .dev-curve.readonly .dev-curve-pad { cursor: default; }
+.dev-tool { border: 1px solid rgba(139, 123, 255, .35); border-radius: 10px; padding: 0 10px; background: rgba(139, 123, 255, .05); }
+.dev-tool-foot { justify-content: flex-end; gap: 6px; margin-top: 2px; }

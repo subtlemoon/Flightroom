@@ -37,6 +37,8 @@ export function DevelopView({ store, onCull }) {
   const [opened, setOpened] = useState(null); // { id, info, asShot } | { id, error }
   const [s, setS] = useState(null);
   const [crop, setCrop] = useState(false);
+  const [cropOverlay, setCropOverlayState] = useState(() => { try { return localStorage.getItem('flightroom-crop-overlay') || 'always'; } catch { return 'always'; } });
+  const setCropOverlay = (v) => { setCropOverlayState(v); try { localStorage.setItem('flightroom-crop-overlay', v); } catch {} };
   const [before, setBefore] = useState(false);
   const [clip, setClip] = useState(false);
   const [toast, setToast] = useState('');
@@ -52,6 +54,8 @@ export function DevelopView({ store, onCull }) {
 
   const [filter, setFilter] = useState('all'); // see inFilter
   const layout = useLayout();
+  // The crop tool lives in the right panel, so cropping shows the panel.
+  useEffect(() => { if (crop && !layout.panel) toggle('panel'); }, [crop]);
   const allPhotos = list?.photos || [];
   const photos = useMemo(() => (filter === 'all' ? allPhotos : allPhotos.filter((p) => inFilter(filter, photoRating(p, meta[p.id])))),
     [allPhotos, meta, filter]);
@@ -300,7 +304,7 @@ export function DevelopView({ store, onCull }) {
               <p className="muted">{opened.error === 'notRaw' ? `${photo.name} is a JPEG. Pick a RAW file (NEF and most other cameras' RAW) to edit it here.` : opened.error}</p>
             </div>
           ) : photo ? (
-            <DevelopStage key={photo.id} photo={photo} meta={curMeta} info={info} s={shown} cropMode={crop} clip={clip}
+            <DevelopStage key={photo.id} photo={photo} meta={curMeta} info={info} s={shown} cropMode={crop} cropOverlay={cropOverlay} clip={clip}
               onCrop={(c) => update({ crop: c })} apiRef={stageApi} nextPhoto={photos[index + 1]} before={before} onPick={picking ? pick : null} />
           ) : (
             <div className="hero-empty dev-msg"><h2>{list?.loading ? 'Reading folder…' : filter !== 'all' && allPhotos.length ? 'No photos with those stars' : 'No photos in this folder'}</h2></div>
@@ -312,6 +316,7 @@ export function DevelopView({ store, onCull }) {
           {s && info ? (
             <Panel s={s} info={info} geo={geo} asShot={opened.asShot} update={update} meta={curMeta} rating={rating} keys={keys}
               onRate={(r) => rate(photo, r)} onReset={reset} onCopy={copy} onPaste={clipboard ? paste : null}
+              cropMode={crop} cropOverlay={cropOverlay} setCropOverlay={setCropOverlay} onCropClose={() => setCrop(false)}
               edited={isEdited(s, opened.asShot)} picking={picking} onPick={() => setPicking((p) => !p)} onAutoWb={autoWb} onAutoTone={autoTone} />
           ) : (
             <div className="dev-panel-empty muted small">{opened?.loading ? 'Reading RAW data…' : ''}</div>
@@ -365,7 +370,7 @@ function sampleGrid(frame, edge = 320) {
   return { gw, gh, data: out };
 }
 
-function DevelopStage({ photo, meta, info, s, cropMode, clip, onCrop, apiRef, nextPhoto, before, onPick }) {
+function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCrop, apiRef, nextPhoto, before, onPick }) {
   const wrapRef = useRef();
   const canvasRef = useRef();
   const rendererRef = useRef(null);
@@ -611,15 +616,13 @@ function DevelopStage({ photo, meta, info, s, cropMode, clip, onCrop, apiRef, ne
       </div>
       {error && <div className="stage-error"><b>Can't show the RAW here.</b> {error}. You're seeing the camera's preview instead.</div>}
       {cropMode && ready && frame && geo && s && (
-        <CropOverlay geo={geo} view={frame} k={v.scale / dpr} size={size} crop={s.crop} onChange={onCrop} />
+        <CropOverlay geo={geo} view={frame} k={v.scale / dpr} size={size} crop={s.crop} onChange={onCrop} overlay={cropOverlay} />
       )}
     </div>
   );
 }
 
 // --- crop --------------------------------------------------------------------
-
-const ASPECTS = [['Original', null], ['Free', 0], ['1:1', 1], ['4:5', 4 / 5], ['5:7', 5 / 7], ['2:3', 2 / 3], ['16:9', 16 / 9]];
 
 // Is a crop frame (oriented px) inside the photo?
 function inside(geo, f) {
@@ -639,7 +642,24 @@ function fitInside(geo, f) {
   return g;
 }
 
-function CropOverlay({ geo, view, k, size, crop, onChange }) {
+// Aspect and angle changes, shared by the crop panel and the crop frame on the photo.
+// aspect: undefined = the photo's own shape, 0 = free, else width / height.
+function cropTools(geo, crop, onChange) {
+  const f = geo.frame(crop);
+  const aspect = crop?.aspect;
+  return {
+    f, aspect,
+    setAngle: (angle) => onChange({ ...geo.toCrop(fitInside(geo, { ...f, angle })), aspect }),
+    setAspect: (ratio) => {
+      if (ratio === null) { onChange({ ...geo.toCrop(fitInside(geo, { ...f, hh: f.hw / (geo.ow / geo.oh) })), aspect: undefined }); return; }
+      if (!ratio) { onChange({ ...geo.toCrop(f), aspect: 0 }); return; }
+      const r = f.hw >= f.hh ? Math.max(ratio, 1 / ratio) : Math.min(ratio, 1 / ratio);
+      onChange({ ...geo.toCrop(fitInside(geo, { ...f, hh: f.hw / r })), aspect: r });
+    },
+  };
+}
+
+function CropOverlay({ geo, view, k, size, crop, onChange, overlay }) {
   const f = geo.frame(crop);
   // Screen (css px, from the centre of the stage) <-> oriented px, for a view turned by its angle.
   const a = (view.angle * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
@@ -648,6 +668,7 @@ function CropOverlay({ geo, view, k, size, crop, onChange }) {
   const [cx, cy] = toScreen(f.cx, f.cy);
   const box = { left: cx - f.hw * k, top: cy - f.hh * k, width: 2 * f.hw * k, height: 2 * f.hh * k };
   const drag = useRef(null);
+  const [dragging, setDragging] = useState(false);
   const aspect = crop?.aspect;
 
   const begin = (e, mode) => {
@@ -655,6 +676,7 @@ function CropOverlay({ geo, view, k, size, crop, onChange }) {
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     drag.current = { mode, x: e.clientX, y: e.clientY, box: { ...box } };
+    setDragging(true);
   };
   const move = (e) => {
     const d = drag.current;
@@ -680,38 +702,60 @@ function CropOverlay({ geo, view, k, size, crop, onChange }) {
     const next = { cx: ncx, cy: ncy, hw: width / 2 / k, hh: height / 2 / k, angle: f.angle };
     if (inside(geo, next)) onChange({ ...geo.toCrop(next), aspect });
   };
-  const end = () => { drag.current = null; };
-
-  const setAngle = (angle) => onChange({ ...geo.toCrop(fitInside(geo, { ...f, angle })), aspect });
-  const setAspect = (ratio) => {
-    if (ratio === null) { onChange({ ...geo.toCrop(fitInside(geo, { ...f, hh: f.hw / (geo.ow / geo.oh) })), aspect: undefined }); return; }
-    if (!ratio) { onChange({ ...geo.toCrop(f), aspect: 0 }); return; }
-    const r = f.hw >= f.hh ? Math.max(ratio, 1 / ratio) : Math.min(ratio, 1 / ratio);
-    onChange({ ...geo.toCrop(fitInside(geo, { ...f, hh: f.hw / r })), aspect: r });
-  };
+  const end = () => { drag.current = null; setDragging(false); };
 
   const handles = ['tl', 't', 'tr', 'r', 'br', 'b', 'bl', 'l'];
+  const grid = overlay === 'always' || (overlay === 'auto' && dragging);
   return (
     <>
       <div className="crop-shade" style={{ clipPath: `polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${box.left}px ${box.top}px, ${box.left}px ${box.top + box.height}px, ${box.left + box.width}px ${box.top + box.height}px, ${box.left + box.width}px ${box.top}px, ${box.left}px ${box.top}px)` }} />
       <div className="crop-box" style={box} onPointerDown={(e) => begin(e, 'move')} onPointerMove={move} onPointerUp={end}>
-        <div className="crop-grid" />
+        {grid && <div className="crop-grid" />}
         {handles.map((h) => <div key={h} className={`crop-handle ${h}`} onPointerDown={(e) => begin(e, h)} onPointerMove={move} onPointerUp={end} />)}
       </div>
-      <div className="crop-bar">
-        <div className="seg small">
-          {ASPECTS.map(([label, r]) => (
-            <button key={label} className={(r === null ? aspect === undefined : r === 0 ? aspect === 0 : aspect && Math.abs(Math.max(aspect, 1 / aspect) - Math.max(r, 1 / r)) < 1e-3) ? 'on' : ''}
-              onClick={() => setAspect(r)}>{label}</button>
-          ))}
-        </div>
-        <label className="crop-angle">Straighten
-          <input type="range" min={-45} max={45} step={0.1} value={f.angle} onChange={(e) => setAngle(Number(e.target.value))} onDoubleClick={() => setAngle(0)} />
-          <span>{f.angle.toFixed(1)}°</span>
-        </label>
-        <button className="btn btn-sm" onClick={() => onChange(null)}>Reset crop</button>
-      </div>
     </>
+  );
+}
+
+// Lightroom's Crop & Straighten tool, at the top of the panel while cropping.
+const CROP_ASPECTS = [['orig', 'Original', null], ['free', 'Custom', 0], ['1:1', '1 x 1', 1], ['4:5', '4 x 5 / 8 x 10', 4 / 5], ['8.5:11', '8.5 x 11', 8.5 / 11], ['5:7', '5 x 7', 5 / 7], ['2:3', '2 x 3 / 4 x 6', 2 / 3], ['4:3', '4 x 3', 3 / 4], ['16:9', '16 x 9', 9 / 16], ['16:10', '16 x 10', 10 / 16]];
+const OVERLAYS = [['always', 'Always'], ['auto', 'Auto'], ['never', 'Never']];
+const ANGLE = { key: 'angle', label: 'Angle', min: -45, max: 45, step: 0.01, def: 0, decimals: 2 };
+
+function CropPanel({ s, geo, update, overlay, setOverlay, onClose }) {
+  const onChange = (c) => update({ crop: c });
+  const { f, aspect, setAngle, setAspect } = cropTools(geo, s.crop, onChange);
+  const ratio = (r) => Math.max(r, 1 / r);
+  const current = aspect === undefined ? 'orig' : aspect === 0 ? 'free'
+    : (CROP_ASPECTS.find(([, , r]) => r && Math.abs(ratio(r) - ratio(aspect)) < 1e-3)?.[0] || 'free');
+  const locked = aspect !== 0;
+  const toggleLock = () => {
+    if (locked) onChange({ ...geo.toCrop(f), aspect: 0 });
+    else onChange({ ...geo.toCrop(f), aspect: f.hw / f.hh });
+  };
+  return (
+    <section className="dev-section open dev-tool">
+      <div className="dev-section-head"><span className="grow">Crop &amp; straighten</span></div>
+      <div className="dev-section-body">
+        <div className="dev-line dev-wb"><span className="muted">Aspect</span>
+          <span className="dev-line">
+            <Dropdown value={current} options={CROP_ASPECTS.map(([value, label]) => ({ value, label }))}
+              onChange={(v) => setAspect(CROP_ASPECTS.find(([k]) => k === v)[2])} />
+            <button className={`icon-btn sm${locked ? ' on' : ''}`} onClick={toggleLock} title={locked ? 'Aspect locked: click to crop freely' : 'Lock the aspect'}><Icon name={locked ? 'lock' : 'unlock'} size={14} /></button>
+          </span>
+        </div>
+        <Slider sl={ANGLE} value={f.angle} def={0} onSet={(_, v) => setAngle(v)} />
+        <label className="dev-check"><input type="checkbox" checked={!!s.constrainCrop}
+          onChange={(e) => update((old) => ({ ...old, constrainCrop: e.target.checked, crop: e.target.checked ? constrainedCrop(geo, old) : old.crop }))} />Constrain to image</label>
+        <div className="dev-line dev-wb"><span className="muted">Tool overlay</span>
+          <Dropdown value={overlay} options={OVERLAYS.map(([value, label]) => ({ value, label }))} onChange={setOverlay} />
+        </div>
+        <div className="dev-line dev-tool-foot">
+          <button className="btn btn-sm btn-ghost" onClick={() => onChange(null)} disabled={!s.crop}>Reset</button>
+          <button className="btn btn-sm" onClick={onClose} title="Enter">Close</button>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -719,7 +763,7 @@ function CropOverlay({ geo, view, k, size, crop, onChange }) {
 
 const PANELS_KEY = 'flightroom-develop-panels';
 
-function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onReset, onCopy, onPaste, edited, picking, onPick, onAutoWb, onAutoTone }) {
+function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onReset, onCopy, onPaste, edited, picking, onPick, onAutoWb, onAutoTone, cropMode, cropOverlay, setCropOverlay, onCropClose }) {
   const [open, setOpen] = useState(() => {
     try { return JSON.parse(localStorage.getItem(PANELS_KEY)) || { basic: true }; } catch { return { basic: true }; }
   });
@@ -810,6 +854,7 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
         <button className="icon-btn" title="Paste settings (Ctrl+Shift+V)" onClick={onPaste || undefined} disabled={!onPaste}><Icon name="paste" size={15} /></button>
         <button className="btn btn-sm" onClick={onReset} disabled={!edited} title="Back to how the camera shot it">Reset all</button>
       </div>
+      {cropMode && <CropPanel s={s} geo={geo} update={update} overlay={cropOverlay} setOverlay={setCropOverlay} onClose={onCropClose} />}
       {SECTIONS.map((sec) => {
         const changed = sectionEdited(s, sec.id, asShot);
         return (
