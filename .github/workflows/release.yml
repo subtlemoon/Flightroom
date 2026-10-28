@@ -1,6 +1,8 @@
 name: Build and release
 
-# Every push builds and tests the Windows app. On main, when the "version" in
+# Every push builds and tests the Windows app. (The GearCheck 1.x -> Flightroom
+# hand-over test was dropped in 2.0.2: Jaewon, the only GearCheck user, is on
+# Flightroom already.) On main, when the "version" in
 # package.json has no GitHub release yet, the installer is published as release
 # v<version>; installed copies pick it up on their next update check.
 #
@@ -26,7 +28,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # tags, to see what changed since the last release
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -52,79 +53,6 @@ jobs:
           node scripts/release-manifests.mjs "out/Flightroom-Setup-$version.exe" "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           ls -l out
-
-      # An old GearCheck install updating into Flightroom, the way GearCheck's
-      # updater does it: run the installer with --updated /S --force-run.
-      # Only when something that hand-over depends on changed since the last
-      # release, so ordinary fixes ship a few minutes sooner.
-      - name: Check whether the GearCheck hand-over needs testing
-        id: handover
-        shell: bash
-        run: |
-          last=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || true)
-          if [ -z "$last" ] || git diff --name-only "$last" HEAD -- src-tauri/installer-hooks.nsh src-tauri/tauri.conf.json src-tauri/src/migrate.rs src/bridge.js .github/workflows/release.yml | grep -q .; then
-            echo "test=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Nothing the hand-over depends on changed since $last; skipping it."
-            echo "test=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Install GearCheck 1.5.0 and let it save its data
-        if: steps.handover.outputs.test == 'true'
-        shell: pwsh
-        timeout-minutes: 12
-        run: |
-          Invoke-WebRequest https://github.com/subtlemoon/gearcheck/releases/download/v1.5.0/GearCheck-Setup-1.5.0.exe -OutFile gc.exe
-          Write-Host "downloaded $((Get-Item gc.exe).Length) bytes"
-          # The old installer now and then exits without installing on a fresh
-          # runner, so try a few times and say where things went.
-          $exe = "$env:LOCALAPPDATA\Programs\gearcheck\GearCheck.exe"
-          for ($try = 1; $try -le 3 -and !(Test-Path $exe); $try++) {
-            $p = Start-Process .\gc.exe -ArgumentList '/S', '/currentuser' -PassThru
-            $p.WaitForExit(180000) | Out-Null
-            for ($i = 0; $i -lt 30 -and !(Test-Path $exe); $i++) { Start-Sleep 1 }
-            Write-Host "attempt $try exit code $($p.ExitCode), installed: $(Test-Path $exe)"
-          }
-          if (!(Test-Path $exe)) {
-            Get-ChildItem "$env:LOCALAPPDATA\Programs", "$env:ProgramFiles" -Filter *gear* -ErrorAction SilentlyContinue | Format-Table FullName
-            throw "GearCheck did not install"
-          }
-          Start-Sleep 5
-          Start-Process $exe
-          Start-Sleep 25
-          Stop-Process -Name GearCheck -Force -ErrorAction SilentlyContinue
-          Start-Sleep 3
-          Get-ChildItem "$env:APPDATA\GearCheck\Local Storage\leveldb" -ErrorAction SilentlyContinue | Format-Table Name, Length
-      - name: Flightroom reads GearCheck's saved data
-        if: steps.handover.outputs.test == 'true'
-        shell: pwsh
-        run: |
-          $env:FLIGHTROOM_LEVELDB = "$env:APPDATA\GearCheck\Local Storage\leveldb"
-          cargo test --manifest-path src-tauri/Cargo.toml reads_a_real_chromium_database -- --ignored --nocapture
-      - name: Update GearCheck into Flightroom
-        if: steps.handover.outputs.test == 'true'
-        shell: pwsh
-        timeout-minutes: 8
-        run: |
-          $setup = "out\Flightroom-Setup-${{ steps.out.outputs.version }}.exe"
-          # Wait for the installer itself only: Start-Process -Wait would also
-          # wait for the Flightroom it opens (--force-run), which never exits.
-          $p = Start-Process $setup -ArgumentList '--updated', '/S', '--force-run' -PassThru
-          if (!$p.WaitForExit(300000)) {
-            Get-Process | Where-Object { $_.Name -match 'flightroom|gearcheck|setup|un_|Au_' } | Format-Table Id, Name, StartTime
-            throw 'the installer did not finish within 5 minutes'
-          }
-          Write-Host "installer exit code: $($p.ExitCode)"
-          Start-Sleep 10
-          $failed = @()
-          if (Test-Path "$env:LOCALAPPDATA\Programs\gearcheck") { $failed += 'old GearCheck folder still there' }
-          if (!(Test-Path "$env:LOCALAPPDATA\Flightroom\flightroom.exe")) { $failed += 'Flightroom not installed' }
-          if (!(Get-Process flightroom -ErrorAction SilentlyContinue)) { $failed += 'Flightroom did not start' }
-          if (!(Test-Path "$env:APPDATA\GearCheck")) { $failed += 'GearCheck data folder was deleted' }
-          Get-ChildItem "$env:USERPROFILE\Desktop", "$env:APPDATA\Microsoft\Windows\Start Menu\Programs" -Filter *.lnk | Format-Table FullName
-          if (Test-Path "$env:USERPROFILE\Desktop\GearCheck.lnk") { $failed += 'old desktop shortcut still there' }
-          if ($failed) { throw ($failed -join '; ') }
-          Stop-Process -Name flightroom -Force
-          Write-Host 'GearCheck updated into Flightroom'
 
       - uses: actions/upload-artifact@v4
         with:
