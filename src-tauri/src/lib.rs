@@ -2,6 +2,7 @@
 // sidecar files, app updates, and moving data over from GearCheck. The window
 // (React, in src/) talks to it through commands and the gcimg:// protocol.
 
+pub mod ai;
 pub mod develop;
 pub mod migrate;
 pub mod photolib;
@@ -98,6 +99,7 @@ pub fn run() {
             app.manage(photos::Photos::new(thumbs));
             app.manage(updater::Updater::default());
             app.manage(develop::Develop::default());
+            app.manage(ai::Ai::new(ai::models_dir(&handle)));
             if updater::guard::update_in_progress(&handle) {
                 updater::guard::reopen_when_installed();
                 updating_window(&handle)?;
@@ -131,6 +133,9 @@ pub fn run() {
             develop::export_tile,
             develop::export_finish,
             develop::save_text_file,
+            ai::ai_status,
+            ai::ai_install,
+            ai::ai_masks,
         ])
         .build(tauri::generate_context!())
         .expect("Flightroom failed to start");
