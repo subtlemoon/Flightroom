@@ -626,9 +626,14 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
   const drawRef = useRef(draw);
   drawRef.current = draw;
 
-  // Redraw on any change, at most once per frame.
+  // Redraw when what's drawn changes, at most once per frame (other re-renders,
+  // like the histogram arriving, don't redraw the photo).
   const raf = useRef(0);
+  const drawn = useRef(null);
   useEffect(() => {
+    const key = [ready, s, info, frame, W, H, v.scale, v.u, v.v, clip, maskView && JSON.stringify(maskView)];
+    if (drawn.current && key.every((k, i) => k === drawn.current[i])) return;
+    drawn.current = key;
     cancelAnimationFrame(raf.current);
     raf.current = requestAnimationFrame(draw);
   });
