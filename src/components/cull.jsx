@@ -162,7 +162,8 @@ export function CullView({ store, onDevelop }) {
     }
   }, [bridge, list?.folder]);
 
-  // Measures every photo not measured yet. Reads only the small embedded preview.
+  // Measures every photo not measured yet: the small embedded preview, and the
+  // big one around the subject for its sharpness.
   const analyze = async () => {
     const dir = list.folder;
     const todo = allPhotos.filter((p) => !auto.measured[p.id]);
@@ -181,7 +182,7 @@ export function CullView({ store, onDevelop }) {
         await Promise.all(batch.map(async (p) => {
           const orientation = m[p.id]?.orientation;
           try {
-            measured[p.id] = { ...(await pool.measure(await decodeThumb(p), orientation)), takenAt: m[p.id]?.takenAt };
+            measured[p.id] = { ...(await pool.measure(await decodeThumb(p), orientation, new URL(imgUrl('preview', p.id), location.href).href)), takenAt: m[p.id]?.takenAt };
           } catch {
             // The worker couldn't do it: measure here, on the whole frame.
             try {
@@ -497,9 +498,9 @@ function AutoRatePanel({ photos, measuredCount, suggestions, run, applicable, ha
           <p>Flightroom looks at each photo's built-in preview and suggests stars:</p>
           <ul className="auto-list">
             <li><b>Subject:</b> a small AI model finds what the photo is of (a kart, car, bike, person, animal) and focus is judged on that. Hover a suggestion to see what it picked.</li>
-            <li><b>Sharpness:</b> missed focus and motion blur on the subject. A blurred background is fine. Without a clear subject, the sharpest part of the frame counts.</li>
+            <li><b>Sharpness:</b> missed focus and motion blur on the subject, checked on the full-size preview, as you'd see it zoomed in. A blurred background is fine. Without a clear subject, the middle of the frame counts.</li>
             <li><b>Exposure:</b> blown highlights, crushed shadows, very dark or bright frames.</li>
-            <li><b>Bursts:</b> similar shots taken seconds apart. The best one keeps its stars, and the rest are marked as likely rejects.</li>
+            <li><b>Bursts:</b> similar shots taken seconds apart. The best one keeps its stars, and the rest get one star less.</li>
           </ul>
           <p className="muted small">Nothing is changed until you accept. Photos you've rated yourself are never changed. Everything runs on this PC. In a OneDrive folder, photos stored only online download as they're analyzed.</p>
         </>
@@ -515,7 +516,7 @@ function AutoRatePanel({ photos, measuredCount, suggestions, run, applicable, ha
               </div>
             ))}
           </div>
-          <p className="muted small">★★★★ goes to the best 20% of keepers, ★★★ to the next 40% and ★★ to the rest. Five stars are left for you to give. {handRated ? `${handRated} photos you rated yourself won't be touched.` : ''} Press Enter on a photo to accept just that suggestion.</p>
+          <p className="muted small">★★★★ goes to the best third of the sharp keepers, ★★★ to most of the rest and ★★ to the weakest. Photos a little soft at full size get at most ★★★, soft ones ★★. Five stars are left for you to give. {handRated ? `${handRated} photos you rated yourself won't be touched.` : ''} Press Enter on a photo to accept just that suggestion.</p>
         </>
       )}
     </Modal>
