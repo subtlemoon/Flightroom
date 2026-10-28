@@ -551,6 +551,81 @@ fn masks(ai: &Ai, task: &str, rgb: &Img) -> Result<Vec<(String, Img)>, String> {
     Ok(out)
 }
 
+// --- AI Denoise ---------------------------------------------------------------
+
+const DN_TILE: usize = 256;
+const DN_MARGIN: usize = 24;
+
+/// Tile starts covering 0..len with tiles of `DN_TILE` that overlap by twice the margin.
+fn tile_starts(len: usize) -> Vec<usize> {
+    if len <= DN_TILE {
+        return vec![0];
+    }
+    let mut v: Vec<usize> = (0..).map(|k| k * (DN_TILE - 2 * DN_MARGIN)).take_while(|&p| p + DN_TILE < len).collect();
+    v.push(len - DN_TILE);
+    v
+}
+
+/// The part of a tile at `p` (size `n`) that it writes: the inside, except at the photo's edges.
+fn tile_span(p: usize, n: usize, len: usize) -> (usize, usize) {
+    (if p == 0 { 0 } else { p + DN_MARGIN }, if p + n >= len { len } else { p + n - DN_MARGIN })
+}
+
+/// AI Denoise (SCUNet) over a whole photo. `tile(x, y, w, h)` gives linear camera
+/// RGB; the model sees it white balanced with a display gamma, as it was trained.
+/// Answers half floats (w x h x 3, linear camera RGB like the input).
+pub fn denoise(
+    ai: &Ai,
+    (w, h): (usize, usize),
+    wb: [f32; 3],
+    tile: impl Fn(usize, usize, usize, usize) -> Vec<f32>,
+    cancel: &std::sync::atomic::AtomicBool,
+    mut progress: impl FnMut(usize, usize),
+) -> Result<Vec<u16>, String> {
+    let s = ai.session("scunet.onnx")?;
+    let gain = [wb[0] / wb[1], 1.0, wb[2] / wb[1]];
+    let (xs, ys) = (tile_starts(w), tile_starts(h));
+    let total = xs.len() * ys.len();
+    let mut out = vec![0u16; w * h * 3];
+    let n = DN_TILE * DN_TILE;
+    for (j, &y0) in ys.iter().enumerate() {
+        for (i, &x0) in xs.iter().enumerate() {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err("cancelled".into());
+            }
+            let (tw, th) = (DN_TILE.min(w), DN_TILE.min(h));
+            let src = tile(x0, y0, tw, th);
+            // Planar input, edge pixels repeated out to the tile size.
+            let mut x = vec![0f32; 3 * n];
+            for ty in 0..DN_TILE {
+                for tx in 0..DN_TILE {
+                    let k = (ty.min(th - 1) * tw + tx.min(tw - 1)) * 3;
+                    for c in 0..3 {
+                        x[c * n + ty * DN_TILE + tx] = (src[k + c] * gain[c]).clamp(0.0, 1.0).powf(1.0 / 2.2);
+                    }
+                }
+            }
+            let (_, y) = run(&s, vec![1, 3, DN_TILE as i64, DN_TILE as i64], x)?;
+            let (wx0, wx1) = tile_span(x0, tw, w);
+            let (wy0, wy1) = tile_span(y0, th, h);
+            for py in wy0..wy1 {
+                for px in wx0..wx1 {
+                    let (tx, ty) = (px - x0, py - y0);
+                    let k = (ty * tw + tx) * 3;
+                    // Clipped highlights carry no noise worth removing; keep them exact.
+                    let bright = (0..3).any(|c| src[k + c] * gain[c] > 0.98);
+                    for c in 0..3 {
+                        let v = if bright { src[k + c] } else { y[c * n + ty * DN_TILE + tx].clamp(0.0, 1.0).powf(2.2) / gain[c] };
+                        out[(py * w + px) * 3 + c] = half::f16::from_f32(v).to_bits();
+                    }
+                }
+            }
+            progress(j * xs.len() + i + 1, total);
+        }
+    }
+    Ok(out)
+}
+
 // --- commands ---------------------------------------------------------------------
 
 #[derive(Serialize)]
@@ -661,6 +736,24 @@ pub fn models_dir(app: &AppHandle) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn denoise_tiles_cover_every_pixel_once() {
+        for len in [100, 256, 257, 700, 8256] {
+            let starts = tile_starts(len);
+            let mut seen = vec![0; len];
+            for (k, &p) in starts.iter().enumerate() {
+                let n = DN_TILE.min(len);
+                let (a, b) = tile_span(p, n, len);
+                // A later tile may redo pixels; it never leaves gaps.
+                let a = if k > 0 { a.max(tile_span(starts[k - 1], n, len).1) } else { a };
+                for s in &mut seen[a..b] {
+                    *s += 1;
+                }
+            }
+            assert!(seen.iter().all(|&s| s == 1), "len {len}");
+        }
+    }
 
     #[test]
     fn guided_filter_keeps_a_flat_mask_flat() {

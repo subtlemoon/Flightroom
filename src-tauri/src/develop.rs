@@ -11,6 +11,9 @@
 //     Part of the photo at full resolution (demosaiced with Malvar-He-Cutler),
 //     optionally averaged down to ow x oh. Used when zoomed in and for export.
 //
+// Both take &dn=<0-100>: how much of the photo's AI Denoise result to blend in
+// (once it has been worked out with develop_denoise).
+//
 // Both answer with a 16-byte header ("FRIM", width, height, 3) followed by
 // half-float RGB in sensor orientation, black = 0 and sensor white = 1.
 
@@ -21,8 +24,9 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 pub struct Raw {
     path: PathBuf,
@@ -167,7 +171,7 @@ impl Raw {
     }
 
     /// The whole photo with its long side at most `edge` pixels.
-    pub fn overview(&self, edge: usize) -> (usize, usize, Vec<u16>) {
+    pub fn overview(&self, edge: usize, dn: Option<(&[u16], f32)>) -> (usize, usize, Vec<u16>) {
         let (bw, bh) = (self.w / 2, self.h / 2);
         let s = (edge as f64 / bw.max(bh) as f64).min(1.0);
         let dw = ((bw as f64 * s).round() as usize).max(1);
@@ -180,7 +184,10 @@ impl Raw {
             let mut line = vec![[0f32; 3]; bw];
             for &(by, wy) in &yw[oy] {
                 for (bx, px) in line.iter_mut().enumerate() {
-                    *px = self.binned(bx, by);
+                    *px = match dn {
+                        Some((d, amt)) => mix(self.binned(bx, by), dn_block(d, self.w, bx, by), amt),
+                        None => self.binned(bx, by),
+                    };
                 }
                 for (ox, taps) in xw.iter().enumerate() {
                     for &(bx, wx) in taps {
@@ -200,13 +207,16 @@ impl Raw {
     }
 
     /// Full-resolution RGB of a region (Malvar-He-Cutler demosaicing).
-    pub fn demosaic(&self, x0: usize, y0: usize, w: usize, h: usize) -> Vec<f32> {
+    pub fn demosaic(&self, x0: usize, y0: usize, w: usize, h: usize, dn: Option<(&[u16], f32)>) -> Vec<f32> {
         let mut out = vec![0f32; w * h * 3];
         out.par_chunks_mut(w * 3).enumerate().for_each(|(ry, row)| {
-            let y = (y0 + ry) as isize;
+            let y = y0 + ry;
             for rx in 0..w {
-                let x = (x0 + rx) as isize;
-                let px = self.mhc(x, y);
+                let x = x0 + rx;
+                let mut px = self.mhc(x as isize, y as isize);
+                if let Some((d, amt)) = dn {
+                    px = mix(px, dn_at(d, (y * self.w + x) * 3), amt);
+                }
                 row[rx * 3..rx * 3 + 3].copy_from_slice(&px);
             }
         });
@@ -248,6 +258,29 @@ impl Raw {
         }
         px
     }
+}
+
+#[inline]
+fn dn_at(d: &[u16], k: usize) -> [f32; 3] {
+    [f16::from_bits(d[k]).to_f32(), f16::from_bits(d[k + 1]).to_f32(), f16::from_bits(d[k + 2]).to_f32()]
+}
+
+/// The denoised photo averaged over the 2x2 block that `Raw::binned` reads.
+#[inline]
+fn dn_block(d: &[u16], w: usize, bx: usize, by: usize) -> [f32; 3] {
+    let mut o = [0f32; 3];
+    for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+        let p = dn_at(d, ((2 * by + dy) * w + 2 * bx + dx) * 3);
+        for c in 0..3 {
+            o[c] += p[c] * 0.25;
+        }
+    }
+    o
+}
+
+#[inline]
+fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
 }
 
 #[inline]
@@ -329,6 +362,9 @@ pub struct Develop {
     decoding: Mutex<()>,
     overviews: Mutex<VecDeque<(PathBuf, String, usize, Arc<Vec<u8>>)>>,
     exports: Mutex<HashMap<String, Export>>,
+    /// The AI Denoise result of the photo being developed (cache file key, half floats).
+    denoised: Mutex<Option<(String, Arc<Vec<u16>>)>>,
+    cancel_denoise: AtomicBool,
 }
 
 impl Develop {
@@ -350,13 +386,14 @@ impl Develop {
         Ok(raw)
     }
 
-    fn overview(&self, p: &Path, edge: usize, keep: bool) -> Result<Arc<Vec<u8>>, String> {
-        let key = std::fs::metadata(p).map(|m| format!("{}:{:?}", m.len(), m.modified().ok())).map_err(|e| e.to_string())?;
+    fn overview(&self, app: &AppHandle, p: &Path, edge: usize, keep: bool, dn: usize) -> Result<Arc<Vec<u8>>, String> {
+        let key = std::fs::metadata(p).map(|m| format!("{}:{:?}:{dn}", m.len(), m.modified().ok())).map_err(|e| e.to_string())?;
         if let Some(hit) = self.overviews.lock().unwrap().iter().find(|o| o.0 == p && o.1 == key && o.2 == edge) {
             return Ok(hit.3.clone());
         }
         let raw = self.raw(p, keep)?;
-        let (w, h, data) = raw.overview(edge);
+        let d = if dn > 0 { self.denoised(app, &raw) } else { None };
+        let (w, h, data) = raw.overview(edge, d.as_deref().map(|d| (d.as_slice(), dn as f32 / 100.0)));
         let bytes = Arc::new(frame(w, h, data, w * h * 3));
         let mut ov = self.overviews.lock().unwrap();
         ov.retain(|o| o.0 != p);
@@ -365,10 +402,30 @@ impl Develop {
         Ok(bytes)
     }
 
+    /// The photo's AI Denoise result, if it has been worked out.
+    fn denoised(&self, app: &AppHandle, raw: &Raw) -> Option<Arc<Vec<u16>>> {
+        let path = denoise_file(app, raw);
+        let name = path.to_string_lossy().to_string();
+        let mut cur = self.denoised.lock().unwrap();
+        if let Some((k, d)) = cur.as_ref() {
+            if *k == name {
+                return Some(d.clone());
+            }
+        }
+        let bytes = std::fs::read(&path).ok()?;
+        if bytes.len() != 8 + raw.w * raw.h * 6 || bytes[..8] != [&(raw.w as u32).to_le_bytes()[..], &(raw.h as u32).to_le_bytes()[..]].concat() {
+            return None;
+        }
+        let d = Arc::new(bytes[8..].chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect::<Vec<u16>>());
+        *cur = Some((name, d.clone()));
+        Some(d)
+    }
+
     /// Frees the RAW data and cached overviews (leaving the Develop tab).
     pub fn release(&self) {
         *self.current.lock().unwrap() = None;
         self.overviews.lock().unwrap().clear();
+        *self.denoised.lock().unwrap() = None;
     }
 }
 
@@ -384,7 +441,7 @@ pub fn handle(app: &AppHandle, kind: &str, q: &HashMap<String, String>) -> HttpR
         "image" => {
             let edge = num(q, "edge").unwrap_or(2560).clamp(64, 8192);
             let keep = q.get("ahead").is_none();
-            match dev.overview(&p, edge, keep) {
+            match dev.overview(app, &p, edge, keep, num(q, "dn").unwrap_or(0).min(100)) {
                 Ok(b) => respond(200, "application/octet-stream", b.as_ref().clone()),
                 Err(e) => fail(e),
             }
@@ -403,7 +460,9 @@ pub fn handle(app: &AppHandle, kind: &str, q: &HashMap<String, String>) -> HttpR
             }
             let ow = num(q, "ow").unwrap_or(w).clamp(1, w);
             let oh = num(q, "oh").unwrap_or(h).clamp(1, h);
-            let mut rgb = raw.demosaic(x, y, w, h);
+            let dn = num(q, "dn").unwrap_or(0).min(100);
+            let d = if dn > 0 { dev.denoised(app, &raw) } else { None };
+            let mut rgb = raw.demosaic(x, y, w, h, d.as_deref().map(|d| (d.as_slice(), dn as f32 / 100.0)));
             if ow != w || oh != h {
                 rgb = shrink(&rgb, w, h, ow, oh);
             }
@@ -432,6 +491,8 @@ pub struct Opened {
     curves: HashMap<String, Vec<String>>,
     /// Flightroom's own values (fr: names), such as its masks.
     own: HashMap<String, String>,
+    /// AI Denoise has been worked out for this photo.
+    denoised: bool,
 }
 
 /// Decodes a RAW file for developing and reads its saved settings.
@@ -460,6 +521,7 @@ pub async fn develop_open(app: AppHandle, id: String, sidecar: Option<String>) -
                 })
                 .collect(),
             own: doc.all("fr"),
+            denoised: denoise_file(&app, &raw).exists(),
         })
     })
     .await
@@ -470,6 +532,76 @@ pub async fn develop_open(app: AppHandle, id: String, sidecar: Option<String>) -
 #[tauri::command]
 pub fn develop_close(app: AppHandle) {
     app.state::<Develop>().release();
+}
+
+// --- AI Denoise ------------------------------------------------------------------
+
+const DENOISE_KEPT: usize = 12;
+
+/// Where a photo's AI Denoise result is kept (about 6 bytes a pixel, so only the last few photos).
+fn denoise_file(app: &AppHandle, raw: &Raw) -> PathBuf {
+    use sha1::{Digest, Sha1};
+    let mut h = Sha1::new();
+    h.update(raw.path.to_string_lossy().as_bytes());
+    h.update(raw.key.as_bytes());
+    let dir = app.path().app_local_data_dir().unwrap_or_default().join("denoise");
+    dir.join(format!("{}.frdn", hex::encode(h.finalize())))
+}
+
+#[derive(Serialize, Clone)]
+struct DenoiseProgress {
+    done: usize,
+    total: usize,
+}
+
+/// Works out AI Denoise for a photo (reporting "ai:denoise" progress) and keeps the result.
+#[tauri::command]
+pub async fn develop_denoise(app: AppHandle, id: String) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let p = app.state::<Photos>().allowed(&id).ok_or("This photo's folder isn't open")?;
+        let dev = app.state::<Develop>();
+        let raw = dev.raw(&p, true)?;
+        if dev.denoised(&app, &raw).is_some() {
+            return Ok(true);
+        }
+        dev.cancel_denoise.store(false, Ordering::Relaxed);
+        let ai = app.state::<crate::ai::Ai>();
+        let out = crate::ai::denoise(&ai, (raw.w, raw.h), raw.wb, |x, y, w, h| raw.demosaic(x, y, w, h, None), &dev.cancel_denoise, |done, total| {
+            let _ = app.emit("ai:denoise", DenoiseProgress { done, total });
+        })?;
+        let file = denoise_file(&app, &raw);
+        let dir = file.parent().unwrap();
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        let mut bytes = Vec::with_capacity(8 + out.len() * 2);
+        bytes.extend((raw.w as u32).to_le_bytes());
+        bytes.extend((raw.h as u32).to_le_bytes());
+        for v in &out {
+            bytes.extend(v.to_le_bytes());
+        }
+        let part = file.with_extension("part");
+        std::fs::write(&part, bytes).map_err(|e| format!("Couldn't save the denoised photo: {e}"))?;
+        std::fs::rename(&part, &file).map_err(|e| e.to_string())?;
+        *dev.denoised.lock().unwrap() = Some((file.to_string_lossy().to_string(), Arc::new(out)));
+        dev.overviews.lock().unwrap().clear();
+        // Only the newest few results stay on disk.
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            let mut files: Vec<_> = rd.flatten().filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path()))).collect();
+            files.sort_by(|a, b| b.0.cmp(&a.0));
+            for (_, f) in files.into_iter().skip(DENOISE_KEPT) {
+                let _ = std::fs::remove_file(f);
+            }
+        }
+        // The model takes a lot of memory; it loads again next time.
+        ai.release();
+        Ok(true)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn develop_denoise_cancel(app: AppHandle) {
+    app.state::<Develop>().cancel_denoise.store(true, Ordering::Relaxed);
 }
 
 #[derive(Deserialize)]
@@ -704,11 +836,11 @@ mod tests {
         let raw = Raw::decode(Path::new(&p), String::new()).unwrap();
         println!("decode {:?} {}x{} cfa {:?} wb {:?} matrices {:?}", t.elapsed(), raw.w, raw.h, raw.cfa, raw.wb, raw.matrices.iter().map(|m| m.0).collect::<Vec<_>>());
         let t = std::time::Instant::now();
-        let (w, h, data) = raw.overview(2560);
+        let (w, h, data) = raw.overview(2560, None);
         println!("overview {:?} {w}x{h}", t.elapsed());
         assert_eq!(data.len(), w * h * 3);
         let t = std::time::Instant::now();
-        let reg = raw.demosaic(1000, 1000, 2560, 1440);
+        let reg = raw.demosaic(1000, 1000, 2560, 1440, None);
         println!("region {:?}", t.elapsed());
         let mean: f32 = reg.iter().sum::<f32>() / reg.len() as f32;
         assert!(mean > 0.0 && mean < 1.0);
@@ -716,8 +848,25 @@ mod tests {
             std::fs::write(&out, frame(w, h, data.iter().copied(), data.len())).unwrap();
             let info = serde_json::json!({ "width": raw.w, "height": raw.h, "orientation": 1, "asShot": raw.wb, "matrices": raw.matrices });
             std::fs::write(format!("{out}.json"), info.to_string()).unwrap();
-            let reg = raw.demosaic(3000, 2000, 1200, 800);
+            let reg = raw.demosaic(3000, 2000, 1200, 800, None);
             std::fs::write(format!("{out}.region"), frame(1200, 800, reg.iter().map(|v| f16::from_f32(*v).to_bits()), reg.len())).unwrap();
         }
+    }
+
+    /// FLIGHTROOM_NEF=<file> FLIGHTROOM_AI_TEST=<models> cargo test --release denoises -- --ignored --nocapture
+    /// Writes <models>/dn-before and dn-after: a 768 x 512 crop as frames.
+    #[test]
+    #[ignore]
+    fn denoises_a_real_nef() {
+        let raw = Raw::decode(Path::new(&std::env::var("FLIGHTROOM_NEF").unwrap()), String::new()).unwrap();
+        let dir = PathBuf::from(std::env::var("FLIGHTROOM_AI_TEST").unwrap());
+        let ai = crate::ai::Ai::new(dir.clone());
+        let (cx, cy, w, h) = (raw.w / 2 - 384, raw.h / 2 - 256, 768, 512);
+        let t = std::time::Instant::now();
+        let out = crate::ai::denoise(&ai, (w, h), raw.wb, |x, y, tw, th| raw.demosaic(cx + x, cy + y, tw, th, None), &AtomicBool::new(false), |_, _| {}).unwrap();
+        println!("denoise {w}x{h} in {:?}", t.elapsed());
+        let before = raw.demosaic(cx, cy, w, h, None);
+        std::fs::write(dir.join("dn-before"), frame(w, h, before.iter().map(|v| f16::from_f32(*v).to_bits()), before.len())).unwrap();
+        std::fs::write(dir.join("dn-after"), frame(w, h, out.iter().copied(), out.len())).unwrap();
     }
 }

@@ -133,6 +133,8 @@ pub fn run() {
             develop::export_tile,
             develop::export_finish,
             develop::save_text_file,
+            develop::develop_denoise,
+            develop::develop_denoise_cancel,
             ai::ai_status,
             ai::ai_install,
             ai::ai_masks,
