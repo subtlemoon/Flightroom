@@ -2,20 +2,22 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { bridge as app } from '../bridge.js';
 import { Dropdown, Icon, Modal, PanelHandle } from './ui.jsx';
 import { Slider } from './slider.jsx';
-import { BRUSH_DEFAULT, MaskAdjust, MaskOverlay, MaskPanel, OVERLAY_DEFAULT, maskActions, maskView, useStored } from './masks.jsx';
+import { CurveEditor } from './curve.jsx';
+import { BRUSH_DEFAULT, MASK_OPTIONS_DEFAULT, MaskAdjust, MaskOverlay, MaskPanel, OVERLAY_DEFAULT, maskActions, maskView, useStored } from './masks.jsx';
+import { AiDenoise, useAiInstall, useAiMasks } from './ai.jsx';
+import { MASK_EDGE, POINT_DEFAULT } from '../develop/masks.js';
 import { toggle, useLayout } from '../layout.js';
 import { Filmstrip, photoRating } from './cull.jsx';
 import { imgUrl, ROTATION } from '../cull/previews.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey } from '../cull/keys.js';
 import {
-  COLORS, COLOR_HUES, CURVE_PRESETS, LINEAR_CURVE, PROFILES, SECTIONS, SLIDER, VIGNETTE_STYLES, WB_PRESETS,
+  COLORS, COLOR_HUES, CURVE_PRESETS, PROFILES, SECTIONS, SLIDER, VIGNETTE_STYLES, WB_PRESETS,
   curveName, defaults, formatValue, fromXmp, isEdited, resetSection, sectionEdited, toXmp,
 } from '../develop/params.js';
 import { asShotTempTint, colorTransform, inv3, neutralToXy, xyToTempTint } from '../develop/color.js';
 import { Geometry, LOOKS, Renderer, ap, constrainedCrop, fitScale, mat, mm, outToFrame, parseFrame, sourceMap } from '../develop/renderer.js';
 import { exportPhoto, exportSize } from '../develop/export.js';
-import { monotoneCurve, parametric } from '../develop/luts.js';
 
 // The Develop tab: the full RAW file with Lightroom-style controls. Edits are
 // never written into the photo: they're saved, as Lightroom's own settings,
@@ -46,7 +48,7 @@ export function DevelopView({ store, onCull }) {
   const [toast, setToast] = useState('');
   const [exporting, setExporting] = useState(null); // modal state
   const [clipboard, setClipboard] = useState(null);
-  const [picking, setPicking] = useState(false); // white balance selector
+  const [picking, setPicking] = useState(false); // 'wb' (white balance selector) | 'point' (a mask's Point Color)
   const [sel, setSelState] = useState(null); // selected mask and part: { mask, part }
   const [overlay, setOverlay] = useStored('flightroom-mask-overlay-2', OVERLAY_DEFAULT);
   const [brush, setBrush] = useStored('flightroom-brush', BRUSH_DEFAULT);
@@ -185,6 +187,15 @@ export function DevelopView({ store, onCull }) {
   };
   const autoWb = () => wbFrom(stageApi.current.average?.(), 'Auto');
   const pick = (camRgb) => { setPicking(false); wbFrom(camRgb, 'Custom'); };
+  // Point Color: the colour clicked, as shown (hue in degrees, saturation and brightness 0-1).
+  const pickPoint = (rgb) => {
+    setPicking(false);
+    if (!selMask || !rgb) return;
+    const mx = Math.max(...rgb), mn = Math.min(...rgb), d = mx - mn;
+    let h = 0;
+    if (d > 1e-5) h = mx === rgb[0] ? ((rgb[1] - rgb[2]) / d + 6) % 6 : mx === rgb[1] ? (rgb[2] - rgb[0]) / d + 2 : (rgb[0] - rgb[1]) / d + 4;
+    acts.change(selMask.id, { point: { ...POINT_DEFAULT, ...selMask.point, h: h * 60, s: mx > 0 ? d / mx : 0, v: mx } });
+  };
   // Auto tone: exposure for a good middle, then pull in clipping highlights and lift crushed shadows.
   const autoTone = () => {
     const st = stageApi.current.stats?.(s);
@@ -232,8 +243,13 @@ export function DevelopView({ store, onCull }) {
 
   const selMask = sel && s?.masks?.find((m) => m.id === sel.mask);
   const selPart = selMask && (selMask.parts.find((p) => p.id === sel.part) || selMask.parts[0]);
-  const acts = maskActions(s, update, sel, setSel);
+  const [maskOptions, setMaskOptions] = useStored('flightroom-mask-options', MASK_OPTIONS_DEFAULT);
+  const acts = maskActions(s, update, sel, setSel, maskOptions);
+  const [ensureAi, aiDialog] = useAiInstall();
+  const aiMasks = useAiMasks({ photo, picture: () => stageApi.current.aiPicture?.(), acts, ensure: ensureAi, toast: setToast });
   const editing = selMask && !before && !crop;
+  const picker = picking === 'wb' ? { tip: 'Click something white or grey to set the white balance (Esc to cancel)', fn: pick }
+    : picking === 'point' && selMask ? { tip: 'Click a colour in the photo to change it with Point Color (Esc to cancel)', shown: true, fn: pickPoint } : null;
 
   // Keyboard, as in Lightroom where it makes sense.
   const stageApi = useRef({});
@@ -253,7 +269,7 @@ export function DevelopView({ store, onCull }) {
       if (e.target.type === 'range') e.target.blur();
       if (e.key === '\\') { e.preventDefault(); if (!e.repeat) setBefore((b) => !b); return; }
       if (k === 'j') { setClip((c) => !c); return; }
-      if (k === 'w' && ratingForKey(keys, e.key) === undefined) { if (s) setPicking((p) => !p); return; }
+      if (k === 'w' && ratingForKey(keys, e.key) === undefined) { if (s) setPicking((p) => (p === 'wb' ? false : 'wb')); return; }
       if (k === 'g' && onCull && ratingForKey(keys, e.key) === undefined) { onCull(); return; }
       if (k === 'r') { if (s) setCrop((c) => !c); return; }
       // Masks: K brush, M linear, Shift+M radial, O overlay, [ ] brush size.
@@ -300,6 +316,13 @@ export function DevelopView({ store, onCull }) {
   const info = photo && opened?.id === photo.id ? opened.info : null;
   const geo = info && (geoCache.current?.info === info ? geoCache.current.geo : (geoCache.current = { info, geo: new Geometry(info.width, info.height, info.orientation) }).geo);
   const shown = s && before && opened?.asShot ? { ...defaults(opened.asShot), crop: s.crop } : s;
+  // On the main photo: the mask overlay (when on) and Point Color's Visualize Range.
+  const pointView = !!(maskOptions.visualize && selMask?.point);
+  const mainMaskView = selMask && (overlay.show || pointView) ? { ...maskView(selMask, overlay), noOverlay: !overlay.show, point: pointView } : null;
+  const onDenoised = (amount) => {
+    setOpened((o) => (o?.info ? { ...o, info: { ...o.info, denoised: true } } : o));
+    update({ aiDenoise: amount });
+  };
   const curMeta = photo && meta[photo.id];
   const rating = photo ? photoRating(photo, curMeta) : 0;
 
@@ -325,7 +348,7 @@ export function DevelopView({ store, onCull }) {
       </header>
       <div className="dev-main">
         {layout.nav && <aside className="dev-left">
-          <MaskPanel s={s && info ? s : null} size={geo} sel={selMask ? sel : null} setSel={setSel} acts={acts} overlay={overlay} setOverlay={setOverlay} />
+          <MaskPanel s={s && info ? s : null} size={geo} sel={selMask ? sel : null} setSel={setSel} acts={acts} overlay={overlay} setOverlay={setOverlay} ai={aiMasks} />
         </aside>}
         <PanelHandle side="left" open={layout.nav} onClick={() => toggle('nav')} title={`${layout.nav ? 'Hide' : 'Show'} masks (F7)`} />
         <div className="dev-stage-col">
@@ -336,9 +359,9 @@ export function DevelopView({ store, onCull }) {
             </div>
           ) : photo ? (
             <DevelopStage key={photo.id} photo={photo} meta={curMeta} info={info} s={shown} cropMode={crop} cropOverlay={cropOverlay} clip={clip}
-              onCrop={(c) => update({ crop: c })} apiRef={stageApi} nextPhoto={photos[index + 1]} before={before} onPick={picking ? pick : null}
-              maskView={editing && overlay.show ? maskView(selMask, overlay) : null} previewView={layout.nav ? maskView(selMask, overlay) || 'none' : null}
-              maskTool={editing && selPart ? { part: selPart, brush, onPart: (patch) => acts.changePart(selMask.id, selPart.id, patch) } : null} />
+              onCrop={(c) => update({ crop: c })} apiRef={stageApi} nextPhoto={photos[index + 1]} before={before} picker={picker}
+              maskView={editing ? mainMaskView : null} previewView={layout.nav ? maskView(selMask, overlay) || 'none' : null}
+              maskTool={editing && selPart && !picker ? { part: selPart, brush, onPart: (patch) => acts.changePart(selMask.id, selPart.id, patch) } : null} />
           ) : (
             <div className="hero-empty dev-msg"><h2>{list?.loading ? 'Reading folder…' : filter !== 'all' && allPhotos.length ? 'No photos with those stars' : 'No photos in this folder'}</h2></div>
           )}
@@ -350,14 +373,17 @@ export function DevelopView({ store, onCull }) {
             <Panel s={s} info={info} geo={geo} asShot={opened.asShot} update={update} meta={curMeta} rating={rating} keys={keys}
               onRate={(r) => rate(photo, r)} onReset={reset} onCopy={copy} onPaste={clipboard ? paste : null}
               cropMode={crop} cropOverlay={cropOverlay} setCropOverlay={setCropOverlay} onCropClose={() => setCrop(false)}
-              override={selMask && <MaskAdjust m={selMask} part={selPart} acts={acts} brush={brush} setBrush={setBrush} onDone={() => setSel(null)} />}
-              edited={isEdited(s, opened.asShot)} picking={picking} onPick={() => setPicking((p) => !p)} onAutoWb={autoWb} onAutoTone={autoTone} />
+              override={selMask && <MaskAdjust m={selMask} part={selPart} acts={acts} brush={brush} setBrush={setBrush} options={maskOptions} setOptions={setMaskOptions}
+                ai={aiMasks} sampling={picking === 'point'} onSample={() => setPicking((p) => (p === 'point' ? false : 'point'))} onDone={() => setSel(null)} />}
+              photo={photo} ensureAi={ensureAi} onDenoised={onDenoised}
+              edited={isEdited(s, opened.asShot)} picking={picking === 'wb'} onPick={() => setPicking((p) => (p === 'wb' ? false : 'wb'))} onAutoWb={autoWb} onAutoTone={autoTone} />
           ) : (
             <div className="dev-panel-empty muted small">{opened?.loading ? 'Reading RAW data…' : ''}</div>
           )}
         </aside>}
       </div>
       {toast && <div className="cull-toast">{toast}</div>}
+      {aiDialog}
       {exporting && <ExportModal photo={photo} photos={allPhotos} folder={list?.folder} info={info} s={s} settingsCache={settingsCache.current}
         onClose={() => setExporting(null)} onDone={(msg) => { setExporting(null); setToast(msg); }} />}
     </div>
@@ -405,7 +431,7 @@ function sampleGrid(frame, edge = 320) {
   return { gw, gh, data: out };
 }
 
-function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCrop, apiRef, nextPhoto, before, onPick, maskView, previewView, maskTool }) {
+function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCrop, apiRef, nextPhoto, before, picker, maskView, previewView, maskTool }) {
   const wrapRef = useRef();
   const canvasRef = useRef();
   const rendererRef = useRef(null);
@@ -434,11 +460,21 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
     return () => { rendererRef.current?.dispose(); rendererRef.current = null; };
   }, []);
 
-  // The whole photo, decoded from the RAW; then the next photo, ahead of time.
+  // How much AI Denoise to show; slider moves are let settle before the photo is fetched again.
+  const dnWant = info?.denoised ? (s?.aiDenoise || 0) : 0;
+  const [dn, setDn] = useState(null);
   useEffect(() => {
     if (!info) return;
+    if (dn === null) { setDn(dnWant); return; }
+    const t = setTimeout(() => setDn(dnWant), 250);
+    return () => clearTimeout(t);
+  }, [!!info, dnWant]);
+
+  // The whole photo, decoded from the RAW; then the next photo, ahead of time.
+  useEffect(() => {
+    if (!info || dn === null) return;
     let live = true;
-    fetchFrame(app.develop.imageUrl(photo, fitEdge())).then((frame) => {
+    fetchFrame(app.develop.imageUrl(photo, fitEdge(), false, dn)).then((frame) => {
       if (!live || !rendererRef.current) return;
       rendererRef.current.setSource(frame);
       grid.current = sampleGrid(frame);
@@ -446,7 +482,7 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
       if (nextPhoto?.raw) fetch(app.develop.imageUrl(nextPhoto, fitEdge(), true)).catch(() => {});
     }, (err) => live && setError(String(err.message || err)));
     return () => { live = false; };
-  }, [info]);
+  }, [!!info, dn]);
 
   const geo = useMemo(() => info && new Geometry(info.width, info.height, info.orientation), [info]);
   // In crop mode the whole photo shows (turned by the straighten angle) with the crop on top.
@@ -495,7 +531,7 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
       const max = r.maxTex;
       const ow = Math.min(max, Math.round((x1 - x0) * k)), oh = Math.min(max, Math.round((y1 - y0) * k));
       try {
-        const f = await fetchFrame(app.develop.regionUrl(photo, { x: x0, y: y0, w: x1 - x0, h: y1 - y0, ow, oh }));
+        const f = await fetchFrame(app.develop.regionUrl(photo, { x: x0, y: y0, w: x1 - x0, h: y1 - y0, ow, oh }, dn));
         if (id !== hiReq.current || !rendererRef.current) return;
         const rect = [x0 / geo.sw, y0 / geo.sh, (x1 - x0) / geo.sw, (y1 - y0) / geo.sh];
         const inset = [3 / geo.sw, 3 / geo.sh];
@@ -504,7 +540,7 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
       } catch {}
     }, 120);
     return () => clearTimeout(t);
-  }, [ready, view, W, H, cropMode, frame, toSource]);
+  }, [ready, view, W, H, cropMode, frame, toSource, dn]);
 
   const draw = () => {
     const r = rendererRef.current;
@@ -578,6 +614,16 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
     return { median: at(0.5), p99: at(0.99), p02: at(0.02), spread: Math.log2(at(0.99) / at(0.02)) };
   };
   // Average camera colour of the parts that are neither clipped nor near black (grey world).
+  // The photo upright and uncropped, without Transform or masks, at mask size:
+  // what AI masks are worked out from (RGBA, bottom row first).
+  apiRef.current.aiPicture = () => {
+    const r = rendererRef.current;
+    if (!r || !ready || !s || !info) return null;
+    const k = MASK_EDGE / Math.max(geo.ow, geo.oh);
+    const w = Math.round(geo.ow * k), h = Math.round(geo.oh * k);
+    const flat = { ...s, crop: null, masks: [], ...Object.fromEntries(TRANSFORM_KEYS.map((key) => [key, SLIDER[key].def])) };
+    return { w, h, rgba: r.preview(info, flat, geo, geo.frame(null), w, h, null) };
+  };
   apiRef.current.average = () => {
     const g = grid.current;
     if (!g) return null;
@@ -628,9 +674,13 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
     const d = drag.current;
     drag.current = null;
     if (!d || d.moved) return;
-    if (onPick) {
+    if (picker) {
       const rect = canvasRef.current.getBoundingClientRect();
-      onPick(colorAt(e.clientX - rect.left, e.clientY - rect.top));
+      const [x, y] = [e.clientX - rect.left, e.clientY - rect.top];
+      if (!picker.shown) { picker.fn(colorAt(x, y)); return; }
+      // The colour as it looks: drawn now, then read back from the canvas.
+      draw();
+      picker.fn(rendererRef.current.readShown(Math.round(x * dpr), Math.round(H - y * dpr)));
       return;
     }
     if (view) setView(null);
@@ -655,8 +705,8 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
   const rot = ROTATION[meta?.orientation] || 0;
   const pct = Math.round(((view ? view.scale : fit / dpr) * dpr) * 100);
   return (
-    <div className={`stage dev-stage${view ? ' zoomed' : ''}${cropMode ? ' cropping' : ''}${onPick ? ' picking' : ''}`} ref={wrapRef} onWheel={onWheel}>
-      {onPick && <div className="dev-pick-tip">Click something white or grey to set the white balance (Esc to cancel)</div>}
+    <div className={`stage dev-stage${view ? ' zoomed' : ''}${cropMode ? ' cropping' : ''}${picker ? ' picking' : ''}`} ref={wrapRef} onWheel={onWheel}>
+      {picker && <div className="dev-pick-tip">{picker.tip}</div>}
       {!ready && (
         <img className="dev-placeholder" src={imgUrl('preview', photo.id)} alt="" draggable={false}
           style={rot ? { transform: `rotate(${rot}deg)`, maxWidth: rot % 180 ? size.h : undefined, maxHeight: rot % 180 ? size.w : undefined } : undefined} />
@@ -669,7 +719,7 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
         {clip && <span className="pill-mini clip">Clipping shown (J)</span>}
       </div>
       {error && <div className="stage-error"><b>Can't show the RAW here.</b> {error}. You're seeing the camera's preview instead.</div>}
-      {maskTool && !cropMode && ready && css2ori && maskTool.part.type !== 'luminance' && (
+      {maskTool && !cropMode && ready && css2ori && maskTool.part.type !== 'luminance' && maskTool.part.type !== 'ai' && (
         <MaskOverlay geo={geo} part={maskTool.part} brush={maskTool.brush} onPart={maskTool.onPart}
           toOri={(x, y) => ap(css2ori, x, y)} toCss={(x, y) => ap(ori2css, x, y)} />
       )}
@@ -821,7 +871,7 @@ function CropPanel({ s, geo, update, overlay, setOverlay, onClose }) {
 
 const PANELS_KEY = 'flightroom-develop-panels';
 
-function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onReset, onCopy, onPaste, edited, picking, onPick, onAutoWb, onAutoTone, cropMode, cropOverlay, setCropOverlay, onCropClose, override }) {
+function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onReset, onCopy, onPaste, edited, picking, onPick, onAutoWb, onAutoTone, cropMode, cropOverlay, setCropOverlay, onCropClose, override, photo, ensureAi, onDenoised }) {
   const [open, setOpen] = useState(() => {
     try { return JSON.parse(localStorage.getItem(PANELS_KEY)) || { basic: true }; } catch { return { basic: true }; }
   });
@@ -867,7 +917,7 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
     curve: () => <ToneCurve s={s} set={set} update={update} />,
     color: () => <ColorMixer s={s} set={set} />,
     grading: () => <><ColorGrading s={s} set={set} /><Groups sec={SECTION.grading} s={s} asShot={asShot} set={set} /></>,
-    detail: () => <Groups sec={SECTION.detail} s={s} asShot={asShot} set={set} />,
+    detail: () => <><AiDenoise photo={photo} info={info} s={s} set={set} ensure={ensureAi} onDenoised={onDenoised} /><Groups sec={SECTION.detail} s={s} asShot={asShot} set={set} /></>,
     lens: () => (
       <>
         <label className="dev-check"><input type="checkbox" checked={!!s.removeCA} onChange={(e) => update({ removeCA: e.target.checked })} />Remove chromatic aberration</label>
@@ -1018,90 +1068,6 @@ function ToneCurve({ s, set, update }) {
       )}
       <Groups sec={SECTION.curve} s={s} asShot={null} set={set} only={(g) => parametricMode || !g.parametric} />
     </>
-  );
-}
-
-const CH_CLASS = { curve: '', curveR: ' ch-r', curveG: ' ch-g', curveB: ' ch-b' };
-
-// Point curve: drag points, click to add, double-click a point (or drag it off) to remove it.
-function CurveEditor({ s, channel, readOnly, set }) {
-  const ref = useRef();
-  const drag = useRef(null);
-  const [read, setRead] = useState(null);
-  const SIZE = 236;
-  const pts = s[channel];
-  const toXY = ([x, y]) => [(x / 255) * SIZE, SIZE - (y / 255) * SIZE];
-  const fromEvent = (e) => {
-    const r = ref.current.getBoundingClientRect();
-    return [Math.round(Math.min(255, Math.max(0, ((e.clientX - r.left) / r.width) * 255))), Math.round(Math.min(255, Math.max(0, (1 - (e.clientY - r.top) / r.height) * 255)))];
-  };
-  const curve = useMemo(() => monotoneCurve(pts.map(([x, y]) => [x / 255, y / 255])), [pts]);
-  const isMaster = channel === 'curve';
-  const path = useMemo(() => {
-    let d = '';
-    for (let i = 0; i <= 96; i++) {
-      const x = i / 96;
-      const y = Math.min(1, Math.max(0, curve(isMaster ? parametric(s, x) : x)));
-      d += `${i ? 'L' : 'M'}${(x * SIZE).toFixed(1)},${(SIZE - y * SIZE).toFixed(1)}`;
-    }
-    return d;
-  }, [curve, isMaster, s.pShadows, s.pDarks, s.pLights, s.pHighlights, s.pSplitS, s.pSplitM, s.pSplitH]);
-
-  const near = (x, y) => pts.findIndex(([px, py]) => Math.hypot(px - x, py - y) < 10);
-  const down = (e) => {
-    if (readOnly) return;
-    const [x, y] = fromEvent(e);
-    let i = near(x, y);
-    let next = pts;
-    if (i < 0) {
-      next = [...pts, [x, y]].sort((a, b) => a[0] - b[0]);
-      i = next.findIndex((p) => p[0] === x && p[1] === y);
-      set(channel, next);
-    }
-    e.currentTarget.setPointerCapture(e.pointerId);
-    drag.current = { i, pts: next };
-    setRead([x, y]);
-  };
-  const move = (e) => {
-    const d = drag.current;
-    if (!d) {
-      if (!readOnly && ref.current) { const [x] = fromEvent(e); setRead([x, Math.round(Math.min(1, Math.max(0, curve(isMaster ? parametric(s, x / 255) : x / 255))) * 255)]); }
-      return;
-    }
-    let [x, y] = fromEvent(e);
-    const p = d.pts;
-    const lo = d.i > 0 ? p[d.i - 1][0] + 1 : 0, hi = d.i < p.length - 1 ? p[d.i + 1][0] - 1 : 255;
-    if (d.i === 0) x = Math.min(x, hi);
-    else if (d.i === p.length - 1) x = Math.max(x, lo);
-    else x = Math.min(hi, Math.max(lo, x));
-    const next = p.map((q, j) => (j === d.i ? [x, y] : q));
-    d.pts = next;
-    set(channel, next);
-    setRead([x, y]);
-  };
-  const remove = (e) => {
-    if (readOnly) return;
-    const [x, y] = fromEvent(e);
-    const i = near(x, y);
-    if (i > 0 && i < pts.length - 1) set(channel, pts.filter((_, j) => j !== i));
-  };
-  return (
-    <div className={`dev-curve${CH_CLASS[channel]}${readOnly ? ' readonly' : ''}`}>
-      {/* The handlers sit on a padded box so the corner points can be grabbed past the rounded edge. */}
-      <div className="dev-curve-pad" onPointerDown={down} onPointerMove={move} onPointerUp={() => { drag.current = null; }}
-        onPointerLeave={() => !drag.current && setRead(null)} onDoubleClick={remove}>
-      <svg ref={ref} viewBox={`0 0 ${SIZE} ${SIZE}`}>
-        {[1, 2, 3].map((i) => <g key={i}><line x1={(i * SIZE) / 4} y1={0} x2={(i * SIZE) / 4} y2={SIZE} /><line y1={(i * SIZE) / 4} x1={0} y2={(i * SIZE) / 4} x2={SIZE} /></g>)}
-        <line className="diag" x1={0} y1={SIZE} x2={SIZE} y2={0} />
-        <path d={path} />
-        {!readOnly && pts.map((p, i) => { const [x, y] = toXY(p); return <circle key={i} cx={x} cy={y} r={5} />; })}
-      </svg>
-      </div>
-      <div className="dev-curve-foot">
-        <span className="dev-curve-read">{read ? `Input ${read[0]}  ·  Output ${read[1]}` : readOnly ? 'Shape the curve with the sliders below' : 'Click to add a point, double-click to remove'}</span>
-        {!readOnly && <button className="btn btn-sm btn-ghost" onClick={() => set(channel, LINEAR_CURVE)}>Linear</button>}
-      </div>
-    </div>
   );
 }
 

@@ -4,7 +4,7 @@
 import { VERT, GUIDE_DOWN, BLUR, FINAL } from './shaders.js';
 import { colorTransform, inv3, mul3 } from './color.js';
 import { CURVE_SIZE, HUE_SIZE, calibrationMatrix, curveTable, gradeTints, hueTable } from './luts.js';
-import { MAX_MASKS, lumRange, maskRaster } from './masks.js';
+import { MAX_MASKS, POINT_DEFAULT, adjOf, lumRange, maskRaster } from './masks.js';
 
 const GUIDE_EDGE = 320;
 // The base rendering under the sliders, per profile (params.js PROFILES).
@@ -185,6 +185,14 @@ export function constrainedCrop(geo, s) {
 }
 
 // How the selected mask is shown on screen (uMaskStyle is the index).
+// A fully saturated colour of this hue (degrees), components summing to 1.
+function hueRgb(h) {
+  const f = (n) => { const k = (n + h / 60) % 6; return 1 - Math.max(0, Math.min(k, 4 - k, 1)); };
+  const c = [f(5), f(3), f(1)];
+  const sum = c[0] + c[1] + c[2];
+  return c.map((v) => v / sum);
+}
+
 export const MASK_STYLES = ['color', 'both', 'outline', 'matte', 'image'];
 
 export const fitScale = (W, H, f, margin = 0) => Math.min((W - margin * 2) / (2 * f.hw), (H - margin * 2) / (2 * f.hh));
@@ -272,6 +280,7 @@ export class Renderer {
     for (const t of this.guide || []) this.free(t);
     gl.deleteTexture(this.curveTex); gl.deleteTexture(this.hueTex); gl.deleteTexture(this.blank);
     for (const t of this.maskTex || []) gl.deleteTexture(t.tex);
+    if (this.maskCurveTex) gl.deleteTexture(this.maskCurveTex);
     // An offscreen (export) context is done for good; a page canvas may be
     // given a new renderer (React remounts), so its context must stay usable.
     if (typeof OffscreenCanvas !== 'undefined' && this.canvas instanceof OffscreenCanvas) gl.getExtension('WEBGL_lose_context')?.loseContext();
@@ -393,27 +402,54 @@ export class Renderer {
     }
   }
 
-  maskUniforms(view) {
+  /** Each mask's own curve (Curve section), one row per mask. */
+  updateMaskCurves() {
+    const gl = this.gl;
+    const key = this.masks.map((m) => (m.curve && !m.off?.curve ? m.curve : null));
+    if (this.maskCurveKey && key.length === this.maskCurveKey.length && key.every((c, i) => c === this.maskCurveKey[i])) return;
+    this.maskCurveKey = key;
+    this.maskCurveTex ||= this.texture(gl.RGBA16F, CURVE_SIZE, MAX_MASKS, gl.RGBA, gl.FLOAT, new Float32Array(CURVE_SIZE * MAX_MASKS * 4));
+    gl.bindTexture(gl.TEXTURE_2D, this.maskCurveTex);
+    key.forEach((c, i) => { if (c) gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, i, CURVE_SIZE, 1, gl.RGBA, gl.FLOAT, curveTable(c)); });
+  }
+
+  maskUniforms(view, geo) {
     const masks = this.masks || [];
-    const A = new Float32Array(MAX_MASKS * 4), B = new Float32Array(MAX_MASKS * 4), C = new Float32Array(MAX_MASKS * 4);
-    const D = new Float32Array(MAX_MASKS * 4), R = new Float32Array(MAX_MASKS * 4);
+    const arr = () => new Float32Array(MAX_MASKS * 4);
+    const [A, B, C, D, E, F, P, Q, R, S] = Array.from({ length: 10 }, arr);
+    const grainPx = (size) => (0.5 + (size / 100) * 3.5) * Math.max(1, Math.max(geo.ow, geo.oh) / 4000);
     masks.forEach((m, i) => {
-      const a = m.adj || {}, g = (k) => (a[k] || 0) / 100;
-      A.set([a.exposure || 0, g('contrast'), g('highlights'), g('shadows')], i * 4);
+      const a = (k) => adjOf(m, k), g = (k) => a(k) / 100;
+      A.set([a('exposure'), g('contrast'), g('highlights'), g('shadows')], i * 4);
       B.set([g('whites'), g('blacks'), g('texture'), g('clarity')], i * 4);
       C.set([g('dehaze'), g('saturation'), g('temp'), g('tint')], i * 4);
       D.set([g('hue'), g('sharpness'), g('noise'), (m.amount ?? 100) / 100], i * 4);
+      // Grain size and roughness are weighted by the amount, so masks blend sensibly.
+      E.set([g('grain'), g('grain') * grainPx(a('grainSize')), g('grain') * g('grainRough'), Math.max(0, g('moire'))], i * 4);
+      // Colour swatch: a tint with no brightness of its own.
+      const t = m.tint && !m.off?.color ? m.tint : null;
+      const tint = t ? hueRgb(t.hue).map((c) => (c - 1 / 3) * (t.sat / 100)) : [0, 0, 0];
+      F.set([g('defringe'), ...tint], i * 4);
+      const pc = m.point && !m.off?.point ? { ...POINT_DEFAULT, ...m.point } : null;
+      if (pc) {
+        P.set([pc.h, pc.s, pc.v, 1], i * 4);
+        Q.set([pc.hue * 0.6, pc.sat / 100, pc.lum / 100, 0.04 + (pc.range / 100) * 0.4], i * 4);
+      }
+      S.set([pc ? pc.variance / 100 : 0, m.curve && !m.off?.curve ? 1 : 0, (m.refineSat ?? 100) / 100, 0], i * 4);
       const lr = lumRange(m);
       R.set(lr ? [lr.lo / 100, lr.hi / 100, lr.smooth / 100, 1 + (m.invert ? 2 : 0)] : [0, 1, 0, m.invert ? 2 : 0], i * 4);
     });
     const sel = view ? masks.findIndex((m) => m.id === view.id) : -1;
     const tex = this.maskTex || [];
     return {
+      uME: E, uMF: F, uMP: P, uMQ: Q, uMS: S,
+      uMaskCurve: this.maskCurveTex || this.blank,
+      uPointView: view?.point ? sel : -1,
       uMaskN: masks.length,
       uMask0: masks.length ? tex[0].tex : this.blank,
       uMask1: masks.length > 4 ? tex[1].tex : this.blank,
       uMA: A, uMB: B, uMC: C, uMD: D, uMR: R,
-      uMaskView: sel,
+      uMaskView: view?.noOverlay ? -1 : sel,
       uMaskColor: view?.color || [1, 0.2, 0.3],
       uMaskOpacity: view ? view.opacity : 0,
       uMaskStyle: view ? MASK_STYLES.indexOf(view.style) : 0,
@@ -430,6 +466,7 @@ export class Renderer {
     this.updateGuide(info, s);
     this.updateLuts(s);
     this.updateMasks(s, geo);
+    if (this.masks.length) this.updateMaskCurves();
     if ((s.dehaze || this.masks.some((m) => m.adj?.dehaze)) && this.airY == null) this.measureAir();
     const out2ori = mm(geo.frameToOriented(frame), out2frame);
     const hi = this.hi;
@@ -501,7 +538,7 @@ export class Renderer {
       uVigFeather: s.vignetteFeather / 100,
       uShowClip: showClip ? 1 : 0,
       uOriSize: [geo.ow, geo.oh],
-      ...this.maskUniforms(maskView),
+      ...this.maskUniforms(maskView, geo),
     });
   }
 
@@ -539,6 +576,17 @@ export class Renderer {
     const px = new Uint8Array(w * h * 4);
     gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
     return px;
+  }
+
+  /** The colour on the canvas around (x, y) (canvas px, y up) as last drawn, 0-1. */
+  readShown(x, y) {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    const px = new Uint8Array(9 * 4);
+    gl.readPixels(Math.max(0, x - 1), Math.max(0, y - 1), 3, 3, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    const c = [0, 0, 0];
+    for (let i = 0; i < 9; i++) for (let k = 0; k < 3; k++) c[k] += px[i * 4 + k] / 255 / 9;
+    return c;
   }
 
   /** Renders a w x h tile into an 8-bit buffer and returns its pixels (bottom row first). */

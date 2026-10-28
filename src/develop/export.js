@@ -32,7 +32,8 @@ export async function exportPhoto(photo, info, s, opts) {
   const job = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   let begun = false;
   try {
-    r.setSource(await fetchFrame(dev.imageUrl(photo, 2048)));
+    const dn = info.denoised ? s.aiDenoise || 0 : 0;
+    r.setSource(await fetchFrame(dev.imageUrl(photo, 2048, false, dn)));
     const geo = new Geometry(info.width, info.height, info.orientation);
     const f = geo.frame(s.crop);
     const { scale, w: EW, h: EH } = exportSize(f, opts.longEdge);
@@ -63,7 +64,7 @@ export async function exportPhoto(photo, info, s, opts) {
       if (rw < 2 || rh < 2) r.clearHi();
       else {
         const ow = Math.max(1, Math.round(rw * Math.min(1, scale * 1.15))), oh = Math.max(1, Math.round(rh * Math.min(1, scale * 1.15)));
-        const region = await fetchFrame(dev.regionUrl(photo, { x: x0, y: y0, w: rw, h: rh, ow, oh }));
+        const region = await fetchFrame(dev.regionUrl(photo, { x: x0, y: y0, w: rw, h: rh, ow, oh }, dn));
         const rect = [x0 / geo.sw, y0 / geo.sh, rw / geo.sw, rh / geo.sh];
         r.setHi(region, rect, rect);
       }

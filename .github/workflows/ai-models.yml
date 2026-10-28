@@ -1,0 +1,40 @@
+name: AI models
+
+# Builds the on-device AI download (tools/ai-models/build.sh) and uploads it to
+# the ai-models-1 release, where Flightroom fetches it the first time an AI
+# feature is used (src-tauri/src/ai.rs). It is a prerelease, so it never
+# counts as the app's latest version. Runs when the build changes on main.
+
+on:
+  push:
+    branches: [main]
+    paths: ['tools/ai-models/**', '.github/workflows/ai-models.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install converters
+        run: |
+          pip install -r tools/ai-models/requirements.txt
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Build
+        run: tools/ai-models/build.sh out
+      - name: Upload to the ai-models-1 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view ai-models-1 >/dev/null 2>&1 || gh release create ai-models-1 --prerelease --title "AI models" \
+            --notes "On-device AI for Flightroom's Develop tab (masks and AI Denoise). The app downloads these itself; there's nothing to install by hand."
+          # The models first, the manifest last, so the app never sees a manifest for files that aren't up yet.
+          gh release upload ai-models-1 $(ls out/* | grep -v manifest.json) --clobber
+          gh release upload ai-models-1 out/manifest.json --clobber

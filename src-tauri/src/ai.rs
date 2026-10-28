@@ -332,6 +332,53 @@ fn refine(guide: &Img, rough: &Img) -> Img {
     clean(guided(guide, &up, r, 1e-3))
 }
 
+/// Sky edges: the scene model only knows sky roughly (a 129 x 129 grid), so
+/// where it isn't sure, each pixel goes by whether its colour is nearer the sky
+/// or the rest nearby (or in the whole photo, where nothing sure is nearby).
+/// That cuts out branches and leaves against the sky.
+fn sky_edges(rgb: &Img, guide: &Img, rough: &Img) -> Img {
+    let (w, h) = (guide.w, guide.h);
+    let up = rough.resize(w, h);
+    let r = (w.max(h) / 40).max(4);
+    let sure = |f: &dyn Fn(f32) -> bool| up.v.iter().map(|&p| if f(p) { 1.0 } else { 0.0 }).collect::<Vec<f32>>();
+    let (ss, sn) = (sure(&|p| p > 0.85), sure(&|p| p < 0.15));
+    let (ns, nn) = (box_mean(&ss, w, h, r), box_mean(&sn, w, h, r));
+    // Mean colour of the sure sky and sure non-sky, near each pixel and overall.
+    let means = |m: &[f32], n: &[f32]| -> (Vec<[f32; 3]>, [f32; 3]) {
+        let mut ch = Vec::new();
+        let mut all = [0f32; 3];
+        let total: f32 = m.iter().sum::<f32>().max(1.0);
+        for c in 0..3 {
+            let v: Vec<f32> = (0..w * h).map(|i| rgb.v[i * 3 + c] * m[i]).collect();
+            all[c] = v.iter().sum::<f32>() / total;
+            ch.push(box_mean(&v, w, h, r));
+        }
+        ((0..w * h).map(|i| [0, 1, 2].map(|c| ch[c][i] / n[i].max(1e-4))).collect(), all)
+    };
+    let ((cs, gs), (cn, gn)) = (means(&ss, &ns), means(&sn, &nn));
+    let unsure = sure(&|p| p > 0.03 && p < 0.97);
+    let band = box_mean(&unsure, w, h, 2);
+    let mut v = up.v.clone();
+    for i in 0..w * h {
+        if band[i] <= 0.0 {
+            continue;
+        }
+        let (ks, kn) = ((ns[i] / 0.05).min(1.0), (nn[i] / 0.05).min(1.0));
+        let (mut ds, mut dn) = (0f32, 0f32);
+        for c in 0..3 {
+            let x = rgb.v[i * 3 + c];
+            let s = cs[i][c] * ks + gs[c] * (1.0 - ks);
+            let n = cn[i][c] * kn + gn[c] * (1.0 - kn);
+            ds += (x - s) * (x - s);
+            dn += (x - n) * (x - n);
+        }
+        let p = up.v[i].clamp(1e-3, 1.0 - 1e-3);
+        let z = ((dn - ds) / 0.003 + 0.6 * (p / (1.0 - p)).ln()).clamp(-30.0, 30.0);
+        v[i] = 1.0 / (1.0 + (-z).exp());
+    }
+    clean(guided(guide, &Img { w, h, c: 1, v }, (w.max(h) / 640).max(2), 1e-4))
+}
+
 /// The guided filter leaves a faint haze away from edges; snap near-0 and near-1 flat.
 fn clean(mut m: Img) -> Img {
     for v in &mut m.v {
@@ -504,7 +551,8 @@ fn masks(ai: &Ai, task: &str, rgb: &Img) -> Result<Vec<(String, Img)>, String> {
                 if m.v.iter().filter(|&&v| v > 0.5).count() * 400 < m.v.len() {
                     continue;
                 }
-                out.push((name.to_string(), refine(&guide, &m)));
+                let m = if name == "sky" { sky_edges(rgb, &guide, &m) } else { refine(&guide, &m) };
+                out.push((name.to_string(), m));
             }
         }
         "people" => {
@@ -753,6 +801,32 @@ mod tests {
             }
             assert!(seen.iter().all(|&s| s == 1), "len {len}");
         }
+    }
+
+    /// FLIGHTROOM_AI_DIST=<built folder> cargo test installs -- --ignored --nocapture
+    /// Downloads every feature from the folder (as from the release) into an empty one, then uses them.
+    #[test]
+    #[ignore]
+    fn installs_from_a_release_folder() {
+        let dist = std::env::var("FLIGHTROOM_AI_DIST").unwrap();
+        std::env::set_var("FLIGHTROOM_AI_BASE", format!("file://{dist}/"));
+        let dir = std::env::temp_dir().join(format!("fr-ai-{}", std::process::id()));
+        let ai = Ai::new(dir.clone());
+        let m = ai.manifest().unwrap();
+        for feature in ["subject", "landscape", "people", "denoise"] {
+            for f in Ai::needs(&m, feature).unwrap() {
+                if !ai.have(&f) {
+                    ai.download(&f, |_| {}).unwrap();
+                }
+            }
+        }
+        let rgb = Img { w: 320, h: 240, c: 3, v: (0..320 * 240 * 3).map(|k| ((k / 3) % 320) as f32 / 320.0).collect() };
+        for task in ["subject", "landscape", "people"] {
+            println!("{task}: {} masks", masks(&ai, task, &rgb).unwrap().len());
+        }
+        let out = denoise(&ai, (300, 200), [2.0, 1.0, 1.5], |_, _, w, h| vec![0.2; w * h * 3], &std::sync::atomic::AtomicBool::new(false), |_, _| {}).unwrap();
+        assert_eq!(out.len(), 300 * 200 * 3);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
