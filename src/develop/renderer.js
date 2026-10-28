@@ -5,6 +5,7 @@ import { VERT, GUIDE_DOWN, BLUR, FINAL } from './shaders.js';
 import { colorTransform, inv3, mul3 } from './color.js';
 import { CURVE_SIZE, HUE_SIZE, calibrationMatrix, curveTable, gradeTints, hueTable } from './luts.js';
 import { MAX_MASKS, POINT_DEFAULT, adjOf, lumRange, maskRaster } from './masks.js';
+import { tonemapUniforms } from './tonemap.js';
 
 const GUIDE_EDGE = 320;
 // The base rendering under the sliders, per profile (params.js PROFILES).
@@ -518,7 +519,7 @@ export class Renderer {
       ...this.colorUniforms(info, s),
       uExposure: s.exposure + look.exposure,
       uContrast: look.contrast + (s.contrast / 100) * 0.75,
-      uAgx: look.agx ? 1 : 0,
+      ...tonemapUniforms(s),
       uHighlights: s.highlights / 100,
       uShadows: s.shadows / 100,
       uWhites: s.whites / 100,

@@ -79,7 +79,10 @@ uniform float uCropAspect;
 uniform vec3 uBg;
 uniform float uExposure;
 uniform float uContrast;
-uniform float uAgx;
+uniform float uToneMap;   // 0: standard shoulder, 1: sigmoid, 2: AgX, 3: filmic RGB
+uniform vec4 uTmA;        // tone mapper parameters A (precomputed in tonemap.js)
+uniform vec4 uTmB;        // tone mapper parameters B (filmic spline nodes)
+uniform float uTmHue;     // hue preservation factor (0..1)
 uniform float uHighlights, uShadows, uWhites, uBlacks;
 uniform float uTexture, uClarity, uDehaze, uVibrance, uSaturation;
 uniform float uAirY;
@@ -144,21 +147,92 @@ float shoulder1(float x) { return shoulder(vec3(x)).r; }
 vec3 encode(vec3 x) {
   return mix(x * 12.92, 1.055 * pow(max(x, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055, step(0.0031308, x));
 }
-// AgX (Troy Sobotka's, as in darktable and Blender): highlights roll off
-// smoothly and very bright colours fade toward white instead of clipping.
-vec3 agx(vec3 x) {
+
+// 1. Sigmoid: modified log-logistic curve around middle gray (0.18), per-channel
+// with optional order-preserving hue restoration.
+float sigmoid1(float x, float pf, float pp, float k) {
+  if (x <= 0.0) return 0.0;
+  const float g = 0.18;
+  if (x <= g) {
+    float u = pow(x / g, pf);
+    return pow(u / (u + k), pp);
+  }
+  float w = pow(g / x, pf);
+  return pow(1.0 / (1.0 + k * w), pp);
+}
+vec3 sigmoidMap(vec3 x) {
+  float pf = uTmA.x, pp = uTmA.y, k = uTmA.z, ph = uTmA.w;
+  vec3 c0 = max(x, vec3(0.0));
+  vec3 c = vec3(sigmoid1(c0.r, pf, pp, k), sigmoid1(c0.g, pf, pp, k), sigmoid1(c0.b, pf, pp, k));
+  if (ph > 0.0) {
+    float mx0 = max(c0.r, max(c0.g, c0.b)), mn0 = min(c0.r, min(c0.g, c0.b));
+    float mx1 = max(c.r, max(c.g, c.b)), mn1 = min(c.r, min(c.g, c.b));
+    if (mx0 - mn0 > 1e-6 && mx1 - mn1 > 1e-6) {
+      vec3 h = mn1 + clamp((c0 - mn0) / (mx0 - mn0), 0.0, 1.0) * (mx1 - mn1);
+      c = mix(c, h, ph);
+    }
+  }
+  return clamp(c, 0.0, 1.0);
+}
+
+// 2. AgX (Troy Sobotka's, as in darktable and Blender): wide-gamut inset matrix,
+// open-domain log2 transform, polynomial S-curve, outset, and highlight roll-off.
+vec3 agxMap(vec3 x) {
   const mat3 inset = mat3(0.842479062253094, 0.0423282422610123, 0.0423756549057051,
                           0.0784335999999992, 0.878468636469772, 0.0784336,
                           0.0792237451477643, 0.0791661274605434, 0.879142973793104);
   const mat3 outset = mat3(1.19687900512017, -0.0528968517574562, -0.0529716355144438,
                            -0.0980208811401368, 1.15190312990417, -0.0980434501171241,
                            -0.0990297440797205, -0.0989611768448433, 1.15107367264116);
-  const float lo = -12.47393, hi = 4.026069;
-  vec3 v = clamp((log2(max(inset * x, vec3(1e-10))) - lo) / (hi - lo), 0.0, 1.0);
+  const float lo = -12.47393, hi = 4.026069, mid = 0.6060606;
+  vec3 v = clamp((log2(max(inset * max(x, vec3(0.0)), vec3(1e-10))) - lo) / (hi - lo), 0.0, 1.0);
+  v = clamp(mid + (v - mid) * uTmA.x, 0.0, 1.0);
   vec3 v2 = v * v, v4 = v2 * v2;
   v = 15.5 * v4 * v2 - 40.14 * v4 * v + 31.96 * v4 - 6.868 * v2 * v + 0.4298 * v2 + 0.1191 * v - 0.00232;
-  return encode(max(outset * pow(max(v, vec3(0.0)), vec3(2.2)), vec3(0.0)));
+  vec3 lin = max(outset * pow(max(v, vec3(0.0)), vec3(2.2)), vec3(0.0));
+  float y = dot(lin, W709);
+  float roll = smoothstep(0.5, 1.0, y) * uTmA.z;
+  float sat = uTmA.y * (1.0 - roll);
+  return clamp(y + (lin - y) * sat, 0.0, 1.0);
 }
+
+// 3. Filmic RGB: parametric C1 spline over [blackEv, whiteEv] relative to
+// middle gray (0.18) with norm-based hue preservation.
+float filmic1(float x) {
+  if (x <= 0.0) return 0.0;
+  float ev = log2(max(x, 1e-10) / 0.18);
+  float t = clamp((ev - uTmA.x) * uTmA.y, 0.0, 1.0);
+  float s = uTmA.w;
+  float t1 = uTmB.x, y1 = uTmB.y, t2 = uTmB.z, y2 = uTmB.w;
+  if (t < t1) {
+    float u = t / max(t1, 1e-6), m1 = s * t1;
+    return u * u * ((3.0 * y1 - m1) + (m1 - 2.0 * y1) * u);
+  }
+  if (t <= t2) return y1 + s * (t - t1);
+  float v = (1.0 - t) / max(1.0 - t2, 1e-6), d2 = 1.0 - y2, m2 = s * (1.0 - t2);
+  return 1.0 - v * v * ((3.0 * d2 - m2) + (m2 - 2.0 * d2) * v);
+}
+vec3 filmicMap(vec3 x) {
+  vec3 c = max(x, vec3(0.0));
+  float yIn = dot(c, W709);
+  if (yIn <= 1e-10) return vec3(0.0);
+  float yOut = filmic1(yIn);
+  float ev = log2(yIn / 0.18);
+  float t = clamp((ev - uTmA.x) * uTmA.y, 0.0, 1.0);
+  float sh = smoothstep(uTmB.z, 1.0, t);
+  float lat = 1.0 - sh * sh * 0.65;
+  vec3 d = (c - yIn) * (yOut / yIn) * lat;
+  vec3 h = yOut + d;
+  float mx = max(h.r, max(h.g, h.b));
+  if (mx > 1.0) d *= (1.0 - yOut) / max(mx - yOut, 1e-6);
+  float mn = min(yOut + d.r, min(yOut + d.g, yOut + d.b));
+  if (mn < 0.0) d *= yOut / max(yOut - mn, 1e-6);
+  vec3 normRgb = clamp(yOut + d, 0.0, 1.0);
+  if (uTmHue >= 0.999) return normRgb;
+  vec3 perCh = vec3(filmic1(c.r), filmic1(c.g), filmic1(c.b));
+  return clamp(mix(perCh, normRgb, uTmHue), 0.0, 1.0);
+}
+
 float disp(float y) { return encode(vec3(shoulder1(max(y, 0.0)))).r; }
 
 vec3 hsv(vec3 c) {
@@ -325,7 +399,8 @@ void main() {
 
   if (whites != 0.0) lin *= exp2(whites * 0.8 * smoothstep(0.55, 1.0, disp(dot(lin, W709))));
 
-  vec3 d = uAgx > 0.5 ? agx(lin) : encode(shoulder(lin));
+  vec3 mapped = uToneMap < 0.5 ? shoulder(lin) : uToneMap < 1.5 ? sigmoidMap(lin) : uToneMap < 2.5 ? agxMap(lin) : filmicMap(lin);
+  vec3 d = encode(mapped);
   float bp = -blacks * 0.06;
   d = (d - bp) / (1.0 - bp);
   d = clamp(d, 0.0, 1.0);
