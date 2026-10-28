@@ -38,13 +38,15 @@ pub struct Ai {
     dir: PathBuf,
     manifest: Mutex<Option<Manifest>>,
     sessions: Mutex<HashMap<String, Arc<Mutex<ort::session::Session>>>>,
+    /// Models the graphics card couldn't run; they run on the processor.
+    on_cpu: Mutex<std::collections::HashSet<String>>,
     device: Mutex<Option<String>>,
     installing: Mutex<()>,
 }
 
 impl Ai {
     pub fn new(dir: PathBuf) -> Self {
-        Ai { dir, manifest: Mutex::new(None), sessions: Mutex::new(HashMap::new()), device: Mutex::new(None), installing: Mutex::new(()) }
+        Ai { dir, manifest: Mutex::new(None), sessions: Mutex::new(HashMap::new()), on_cpu: Mutex::default(), device: Mutex::new(None), installing: Mutex::new(()) }
     }
 
     fn base() -> String {
@@ -161,25 +163,56 @@ impl Ai {
         if !path.exists() {
             return Err(format!("{model} isn't downloaded"));
         }
-        let err = |e: ort::Error| format!("Couldn't load {model}: {e}");
-        let mut b = ort::session::Session::builder().map_err(err)?;
-        #[cfg(windows)]
-        {
-            // DirectML wants these; if it can't start, ONNX Runtime falls back to the CPU.
-            b = b.with_memory_pattern(false).map_err(|e| e.to_string())?;
-            b = b.with_parallel_execution(false).map_err(|e| e.to_string())?;
-            b = b.with_execution_providers([ort::ep::DirectML::default().build()]).map_err(|e| e.to_string())?;
+        let gpu = cfg!(windows) && !self.on_cpu.lock().unwrap().contains(model);
+        let s = match open(&path, gpu) {
+            Ok(s) => Ok(s),
+            // Some graphics drivers reject a model DirectML would otherwise run.
+            Err(e) if gpu => {
+                eprintln!("[ai] {model} on the graphics card: {e}; using the processor");
+                self.on_cpu.lock().unwrap().insert(model.to_string());
+                open(&path, false)
+            }
+            Err(e) => Err(e),
         }
-        b = b.with_intra_threads(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)).map_err(|e| e.to_string())?;
-        let s = Arc::new(Mutex::new(b.commit_from_file(&path).map_err(err)?));
+        .map_err(|e| format!("Couldn't load {model}: {e}"))?;
+        let s = Arc::new(Mutex::new(s));
         self.sessions.lock().unwrap().insert(model.to_string(), s.clone());
         Ok(s)
+    }
+
+    /// Runs a model on one input. When the graphics card fails at it, the model
+    /// moves to the processor for good (this run included).
+    fn infer(&self, model: &str, shape: Vec<i64>, data: Vec<f32>) -> Result<(Vec<i64>, Vec<f32>), String> {
+        let s = self.session(model)?;
+        if !cfg!(windows) || self.on_cpu.lock().unwrap().contains(model) {
+            return run(&s, shape, data);
+        }
+        match run(&s, shape.clone(), data.clone()) {
+            Ok(r) => Ok(r),
+            Err(e) => {
+                eprintln!("[ai] {model} failed on the graphics card: {e}; using the processor");
+                self.on_cpu.lock().unwrap().insert(model.to_string());
+                self.sessions.lock().unwrap().remove(model);
+                run(&*self.session(model)?, shape, data)
+            }
+        }
     }
 
     /// Frees the models (they take a lot of memory); they load again when needed.
     pub fn release(&self) {
         self.sessions.lock().unwrap().clear();
     }
+}
+
+fn open(path: &Path, gpu: bool) -> Result<ort::session::Session, ort::Error> {
+    let mut b = ort::session::Session::builder()?;
+    if gpu {
+        // DirectML wants these.
+        b = b.with_memory_pattern(false)?.with_parallel_execution(false)?;
+        b = b.with_execution_providers([ort::ep::DirectML::default().build()])?;
+    }
+    b = b.with_intra_threads(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4))?;
+    b.commit_from_file(path)
 }
 
 fn run(s: &Mutex<ort::session::Session>, shape: Vec<i64>, data: Vec<f32>) -> Result<(Vec<i64>, Vec<f32>), String> {
@@ -391,7 +424,6 @@ fn clean(mut m: Img) -> Img {
 
 /// Subject: IS-Net (general use), 1024 x 1024.
 fn subject(ai: &Ai, rgb: &Img) -> Result<Img, String> {
-    let s = ai.session("isnet.onnx")?;
     let small = rgb.resize(1024, 1024);
     let mut x = vec![0.0f32; 3 * 1024 * 1024];
     for (k, px) in small.v.chunks_exact(3).enumerate() {
@@ -399,7 +431,7 @@ fn subject(ai: &Ai, rgb: &Img) -> Result<Img, String> {
             x[ch * 1024 * 1024 + k] = px[ch] - 0.5;
         }
     }
-    let (_, y) = run(&s, vec![1, 3, 1024, 1024], x)?;
+    let (_, y) = ai.infer("isnet.onnx", vec![1, 3, 1024, 1024], x)?;
     let (lo, hi) = y.iter().fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
     let v = y.iter().map(|&v| (v - lo) / (hi - lo).max(1e-6)).collect();
     Ok(Img { w: 1024, h: 1024, c: 1, v })
@@ -409,7 +441,6 @@ const ADE: usize = 513;
 /// Scene parsing: DeepLab v3+ trained on ADE20K (150 kinds of things). Returns
 /// per-class probabilities (129 x 129 grid) and the part of the grid the photo fills.
 fn scene(ai: &Ai, rgb: &Img) -> Result<(Img, usize, usize), String> {
-    let s = ai.session("ade20k.onnx")?;
     let k = ADE as f32 / rgb.w.max(rgb.h) as f32;
     let (w, h) = (((rgb.w as f32 * k).round() as usize).clamp(1, ADE), ((rgb.h as f32 * k).round() as usize).clamp(1, ADE));
     let small = rgb.resize(w, h);
@@ -421,7 +452,7 @@ fn scene(ai: &Ai, rgb: &Img) -> Result<(Img, usize, usize), String> {
             }
         }
     }
-    let (shape, logits) = run(&s, vec![1, ADE as i64, ADE as i64, 3], x)?;
+    let (shape, logits) = ai.infer("ade20k.onnx", vec![1, ADE as i64, ADE as i64, 3], x)?;
     let (gh, gw, c) = (shape[1] as usize, shape[2] as usize, shape[3] as usize);
     // Softmax per cell.
     let mut p = logits;
@@ -465,10 +496,9 @@ fn class_map(probs: &Img, used_w: usize, used_h: usize, classes: &[usize]) -> Im
 /// Parts of a person: MediaPipe's multiclass selfie segmenter, 256 x 256.
 /// Returns background, hair, body skin, face skin, clothes, accessories.
 fn person_parts(ai: &Ai, crop: &Img) -> Result<Img, String> {
-    let s = ai.session("selfie_multiclass.onnx")?;
     let small = crop.resize(256, 256);
     let x = small.v.iter().map(|v| v * 2.0 - 1.0).collect();
-    let (_, y) = run(&s, vec![1, 256, 256, 3], x)?;
+    let (_, y) = ai.infer("selfie_multiclass.onnx", vec![1, 256, 256, 3], x)?;
     // Scores to probabilities.
     let mut p = y;
     for cell in p.chunks_exact_mut(6) {
@@ -630,7 +660,7 @@ pub fn denoise(
     cancel: &std::sync::atomic::AtomicBool,
     mut progress: impl FnMut(usize, usize),
 ) -> Result<Vec<u16>, String> {
-    let s = ai.session("scunet.onnx")?;
+    ai.session("scunet.onnx")?; // loads it up front, so a failure shows before any work
     let gain = [wb[0] / wb[1], 1.0, wb[2] / wb[1]];
     let (xs, ys) = (tile_starts(w), tile_starts(h));
     let total = xs.len() * ys.len();
@@ -653,7 +683,7 @@ pub fn denoise(
                     }
                 }
             }
-            let (_, y) = run(&s, vec![1, 3, DN_TILE as i64, DN_TILE as i64], x)?;
+            let (_, y) = ai.infer("scunet.onnx", vec![1, 3, DN_TILE as i64, DN_TILE as i64], x)?;
             let (wx0, wx1) = tile_span(x0, tw, w);
             let (wy0, wy1) = tile_span(y0, th, h);
             for py in wy0..wy1 {

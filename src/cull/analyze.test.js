@@ -42,7 +42,7 @@ describe('auto-rate suggestions', () => {
   const m = (sharp, hash, extra = {}) => ({ sharp, hash, clipHi: 0, clipLo: 0, mean: 120, ...extra });
   const h1 = '0'.repeat(64), h2 = '1'.repeat(64);
 
-  it('keeps the sharpest of a burst and marks the rest as likely rejects', () => {
+  it('rates the sharpest of a burst highest and the rest one star lower, as keepers', () => {
     const items = [
       { id: 'a', name: 'A', m: m(500, h1), takenAt: '2026:10:17 13:05:45' },
       { id: 'b', name: 'B', m: m(900, h1), takenAt: '2026:10:17 13:05:45' },
@@ -50,11 +50,19 @@ describe('auto-rate suggestions', () => {
       { id: 'd', name: 'D', m: m(700, h2), takenAt: '2026:10:17 13:09:00' },
     ];
     const s = suggest(items);
-    expect(s.b.stars).toBeGreaterThan(1);
-    expect(s.a.stars).toBe(1);
-    expect(s.c.stars).toBe(1);
+    expect(s.b.stars).toBe(4);
+    expect(s.a.stars).toBe(3);
+    expect(s.c.stars).toBe(3);
     expect(s.a.reasons[0]).toMatch(/Similar to B/);
     expect(s.d.stars).toBeGreaterThan(1);
+  });
+
+  it('gives most sharp, well-exposed photos 3 or 4 stars', () => {
+    const items = Array.from({ length: 20 }, (_, i) => ({ id: `p${i}`, name: `P${i}`, m: m(500 + i * 20, i % 2 ? h1 : h2), takenAt: `2026:10:17 13:${10 + i}:00` }));
+    const s = suggest(items);
+    const good = Object.values(s).filter((x) => x.stars >= 3).length;
+    expect(good).toBe(16);
+    expect(Object.values(s).every((x) => x.stars >= 2)).toBe(true);
   });
 
   it('marks blurry shots as likely rejects and never suggests 5 stars', () => {
