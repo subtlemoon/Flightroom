@@ -535,7 +535,25 @@ fn main_subject(mut m: Img) -> Img {
     let (x0, y0, x1, y1) = bounds(&parts[best]);
     let (mx, my) = ((x1 - x0) / 20 + 2, (y1 - y0) / 20 + 2);
     let inside = |(a, b, c, d): (usize, usize, usize, usize)| a + mx >= x0 && b + my >= y0 && c <= x1 + mx && d <= y1 + my;
-    let keep: Vec<bool> = parts.iter().enumerate().map(|(i, r)| i == best || inside(bounds(r))).collect();
+    // Next to it, a sure piece of a good size that juts out of its box counts
+    // too (a kart's front wheel); specks are dropped.
+    let mut on_best = vec![false; w * h];
+    for &k in &parts[best] {
+        on_best[k] = true;
+    }
+    let by_best = dilate(&on_best, w, h, mx.max(my));
+    let n = parts[best].len();
+    let keep: Vec<bool> = parts
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let sure = r.iter().map(|&k| m.v[k]).sum::<f32>() >= 0.8 * r.len() as f32;
+            let (a, _, c, _) = bounds(r);
+            i == best
+                || (r.len() * 500 >= n && inside(bounds(r)))
+                || (r.len() * 50 >= n && sure && (c - a) * 2 <= x1 - x0 && r.iter().any(|&k| by_best[k]))
+        })
+        .collect();
     let kept: Vec<bool> = label.iter().map(|&l| l > 0 && keep[l as usize - 1]).collect();
     // Soft edge values stay only right next to what's kept (faint spill onto
     // things nearby, like a barrier beside a kart, goes).
