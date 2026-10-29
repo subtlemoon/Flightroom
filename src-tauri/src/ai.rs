@@ -447,32 +447,9 @@ fn salient(ai: &Ai, rgb: &Img) -> Result<Img, String> {
     Ok(Img { w: 1024, h: 1024, c: 1, v: y.iter().map(|v| v.clamp(0.0, 1.0)).collect() })
 }
 
-/// Subject, at the picture's size. A subject that fills only part of the
-/// frame gets a second, closer look at just its square, so thin parts (a
-/// kart's cage) come out as themselves with the background between them.
+/// Subject, at the picture's size: one BiRefNet pass, cleaned up.
 fn subject(ai: &Ai, rgb: &Img) -> Result<Img, String> {
-    let (w, h) = (rgb.w, rgb.h);
-    let m = main_subject(salient(ai, rgb)?).resize(w, h);
-    let on: Vec<usize> = (0..w * h).filter(|&k| m.v[k] >= 0.5).collect();
-    let Some(&first) = on.first() else { return Ok(m) };
-    let (x0, y0, x1, y1) = on.iter().fold((first % w, first / w, first % w, first / w), |(a, b, c, d), &k| {
-        (a.min(k % w), b.min(k / w), c.max(k % w), d.max(k / w))
-    });
-    let side = (x1 - x0).max(y1 - y0) as f32 * 1.2;
-    let (cx, cy) = ((x0 + x1) as f32 / 2.0, (y0 + y1) as f32 / 2.0);
-    let (bx0, by0) = ((cx - side / 2.0).max(0.0) as usize, (cy - side / 2.0).max(0.0) as usize);
-    let (bx1, by1) = (((cx + side / 2.0) as usize + 1).min(w), ((cy + side / 2.0) as usize + 1).min(h));
-    let (cw, ch) = (bx1 - bx0, by1 - by0);
-    if cw * ch * 10 >= w * h * 6 || cw < 16 || ch < 16 {
-        return Ok(m);
-    }
-    let crop = rgb.crop_resize(bx0 as f32, by0 as f32, cw as f32, ch as f32, cw, ch);
-    let near = salient(ai, &crop)?.resize(cw, ch);
-    let mut v = vec![0.0f32; w * h];
-    for y in 0..ch {
-        v[(by0 + y) * w + bx0..(by0 + y) * w + bx1].copy_from_slice(&near.v[y * cw..(y + 1) * cw]);
-    }
-    Ok(main_subject(Img { w, h, c: 1, v }))
+    Ok(main_subject(salient(ai, rgb)?).resize(rgb.w, rgb.h))
 }
 
 /// Connected regions of `on` cells (8-neighbours): a label per cell (0 = off) and each region's cells.
@@ -898,6 +875,8 @@ pub struct Status {
     /// Feature -> bytes still to download.
     sizes: HashMap<String, u64>,
     device: Option<String>,
+    /// Features with a model the graphics card rejected, so they run on the processor.
+    on_cpu: Vec<String>,
     error: Option<String>,
 }
 
@@ -905,7 +884,8 @@ pub struct Status {
 pub async fn ai_status(app: AppHandle) -> Status {
     tauri::async_runtime::spawn_blocking(move || {
         let ai = app.state::<Ai>();
-        let mut st = Status { features: HashMap::new(), sizes: HashMap::new(), device: ai.device.lock().unwrap().clone(), error: None };
+        let mut st = Status { features: HashMap::new(), sizes: HashMap::new(), device: ai.device.lock().unwrap().clone(), on_cpu: Vec::new(), error: None };
+        let cpu = ai.on_cpu.lock().unwrap().clone();
         match ai.manifest() {
             Ok(m) => {
                 for f in m.features.keys() {
@@ -913,6 +893,9 @@ pub async fn ai_status(app: AppHandle) -> Status {
                         let missing: u64 = files.iter().filter(|x| !ai.have(x)).map(|x| x.size).sum();
                         st.features.insert(f.clone(), missing == 0);
                         st.sizes.insert(f.clone(), missing);
+                        if files.iter().any(|x| cpu.contains(&x.name)) {
+                            st.on_cpu.push(f.clone());
+                        }
                     }
                 }
             }
@@ -921,7 +904,7 @@ pub async fn ai_status(app: AppHandle) -> Status {
         st
     })
     .await
-    .unwrap_or(Status { features: HashMap::new(), sizes: HashMap::new(), device: None, error: Some("AI status failed".into()) })
+    .unwrap_or(Status { features: HashMap::new(), sizes: HashMap::new(), device: None, on_cpu: Vec::new(), error: Some("AI status failed".into()) })
 }
 
 #[derive(Serialize, Clone)]
@@ -1071,6 +1054,19 @@ mod tests {
         let w = u32::from_le_bytes(pic[0..4].try_into().unwrap()) as usize;
         let h = u32::from_le_bytes(pic[4..8].try_into().unwrap()) as usize;
         let rgb = Img { w, h, c: 3, v: pic[8..].iter().map(|&b| b as f32 / 255.0).collect() };
+        let t = std::time::Instant::now();
+        let _ = ai.session("birefnet.onnx");
+        eprintln!("load {:?}", t.elapsed());
+        let t = std::time::Instant::now();
+        let sal = salient(&ai, &rgb).unwrap();
+        eprintln!("salient {:?}", t.elapsed());
+        let t = std::time::Instant::now();
+        let m = main_subject(sal).resize(rgb.w, rgb.h);
+        eprintln!("main_subject {:?}", t.elapsed());
+        let t = std::time::Instant::now();
+        let guide = rgb.gray();
+        let _ = crisp(clean(guided(&guide, &m, (guide.w.max(guide.h) / 512).max(2), 1e-3)));
+        eprintln!("post {:?}", t.elapsed());
         for task in ["subject", "landscape", "people"] {
             let t = std::time::Instant::now();
             let m = masks(&ai, task, &rgb).unwrap();
