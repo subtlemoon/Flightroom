@@ -68,7 +68,7 @@ export function CurveEditor({ s, channel, readOnly, set }) {
     if (i > 0 && i < pts.length - 1) set(channel, pts.filter((_, j) => j !== i));
   };
   return (
-    <div className={`dev-curve${CH_CLASS[channel]}${readOnly ? ' readonly' : ''}`}>
+    <div className={`dev-curve${CH_CLASS[channel] || ''}${readOnly ? ' readonly' : ''}`}>
       {/* The handlers sit on a padded box so the corner points can be grabbed past the rounded edge. */}
       <div className="dev-curve-pad" onPointerDown={down} onPointerMove={move} onPointerUp={() => { drag.current = null; }}
         onPointerLeave={() => !drag.current && setRead(null)} onDoubleClick={remove}>

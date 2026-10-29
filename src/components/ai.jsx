@@ -136,8 +136,26 @@ export function useAiMasks({ photo, picture, acts, ensure, toast }) {
     }
   };
 
+  /** For Retouch's Select menu: the AI mask itself, { w, h, data } (0-255, top row first), or null. */
+  const get = async (type) => {
+    try {
+      if (!(await ensure(FEATURE[type]))) return null;
+      setBusy(AI_TYPES.find(([k]) => k === type)[1]);
+      const { r } = await results(TASK[type]);
+      const named = (n) => r.find((x) => x.name === n);
+      if (type === 'sky') { if (!named('sky')) toast('No sky found in this photo'); return named('sky') || null; }
+      const sub = named('subject');
+      return sub && (type === 'background' ? { ...sub, data: sub.data.map((v) => 255 - v) } : sub);
+    } catch (err) {
+      toast(`AI selection didn't work: ${err.message || err}`);
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const picker = pick && <AiPicker {...pick} onClose={() => setPick(null)} onCreate={(items, separate) => { setPick(null); make(items, pick.target, separate); }} />;
-  return { run, busy, picker, warm };
+  return { run, get, busy, picker, warm };
 }
 
 // People: each person and their parts. Landscape: what was found.

@@ -7,6 +7,7 @@ import { CURVE_SIZE, HUE_SIZE, calibrationMatrix, curveTable, gradeTints, hueTab
 import { MAX_MASKS, POINT_DEFAULT, adjOf, lumRange, maskRaster } from './masks.js';
 import { tonemapUniforms } from './tonemap.js';
 import { Composer } from './compose.js';
+import { renderLayers } from './retouch.js';
 
 const GUIDE_EDGE = 320;
 // The base rendering under the sliders, per profile (params.js PROFILES).
@@ -338,7 +339,6 @@ export class Renderer {
   updateGuide(info, s) {
     const key = `${s.temp}|${s.tint}|${s.redHue}|${s.redSat}|${s.greenHue}|${s.greenSat}|${s.blueHue}|${s.blueSat}`;
     if (this.guide && key === this.guideKey) return;
-    const gl = this.gl;
     const scale = GUIDE_EDGE / Math.max(this.src.w, this.src.h);
     const gw = Math.max(8, Math.round(this.src.w * scale)), gh = Math.max(8, Math.round(this.src.h * scale));
     if (!this.guide || this.guide[0].w !== gw || this.guide[0].h !== gh) {
@@ -487,11 +487,11 @@ export class Renderer {
     if ((s.dehaze || this.masks.some((m) => m.adj?.dehaze)) && this.airY == null) this.measureAir();
     const out2ori = mm(geo.frameToOriented(frame), out2frame);
     // Retouch layers on top (compose.js); `live` is a stroke still being painted.
-    const layers = (s.layers || []).filter((l) => !l.hidden && l.opacity > 0 && (l.ops.length || l.id === live?.layerId));
+    const layers = renderLayers(s.layers || [], live?.layerId);
     if (!layers.length) { this.drawPhoto(info, s, geo, frame, out2frame, out2ori, target, showClip, maskView, null); return; }
     this.composer ||= new Composer(this);
     this.composer.render((t, extra) => (extra
-      ? this.drawPhoto(info, s, geo, frame, out2frame, mm(mat(1, 0, extra.shift[0], 0, 1, extra.shift[1]), out2ori), t, false, null, this.opHi?.get(extra.op.id))
+      ? this.drawPhoto(info, s, geo, frame, out2frame, mm(mat(1, 0, extra.shift[0], 0, 1, extra.shift[1]), extra.out2ori || out2ori), t, false, null, extra.op && this.opHi?.get(extra.op.id))
       : this.drawPhoto(info, s, geo, frame, out2frame, out2ori, t, showClip, maskView, null)), layers, geo, out2ori, target, live,
     [s, info, frame, this.src, this.hi, this.opHi, showClip, maskView && JSON.stringify(maskView)]);
   }

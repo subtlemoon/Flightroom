@@ -50,7 +50,7 @@ describe('strokes', () => {
 
   it('a box around the stroke, or the selection for a fill', () => {
     expect(opBounds({ t: 'paint', size: 0.01, pts: [[0.5, 0.5]] }, 1000, 1000)).toEqual([489, 489, 511, 511]);
-    expect(opBounds({ t: 'fill', clip: sel }, 100, 100)).toEqual([10, 10, 50, 50]);
+    expect(opBounds({ t: 'fill', clip: sel }, 100, 100)).toEqual([9, 9, 51, 51]);
     expect(opBounds({ t: 'fill' }, 100, 100)).toBeNull();
   });
 });

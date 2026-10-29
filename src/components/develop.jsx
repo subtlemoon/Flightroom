@@ -21,7 +21,10 @@ import { asShotTempTint, colorTransform, inv3, neutralToXy, xyToTempTint } from 
 import { Geometry, LOOKS, Renderer, ap, constrainedCrop, fitScale, mat, mm, outToFrame, parseFrame, sourceMap } from '../develop/renderer.js';
 import { exportPhoto, exportSize } from '../develop/export.js';
 import { activeToneMap } from '../develop/tonemap.js';
-import { LayersPanel, RETOUCH_DEFAULT, RetouchOptions, RetouchOverlay, RetouchTools, retouchActions } from './retouch.jsx';
+import { useRetouch } from './retouch.jsx';
+import { RetouchStage } from './rtstage.jsx';
+import { OptionsBar, RetouchPanels, ToolRail } from './rtpanels.jsx';
+import { MenuBar, RetouchDialogs } from './rtmenus.jsx';
 import { findSpotSource, sourceRegions, visibleLayers } from '../develop/retouch.js';
 
 // The Develop tab: the full RAW file with Lightroom-style controls. Edits are
@@ -65,14 +68,12 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const [sel, setSelState] = useState(null); // selected mask and part: { mask, part }
   const [overlay, setOverlay] = useStored('flightroom-mask-overlay-2', OVERLAY_DEFAULT);
   const [brush, setBrush] = useStored('flightroom-brush', BRUSH_DEFAULT);
-  // Retouch: tool settings, the layer being painted, the selection and the clone source.
-  const [rt, setRt] = useStored('flightroom-retouch', RETOUCH_DEFAULT);
-  const [activeLayer, setActiveLayer] = useState(null);
-  const [selection, setSelection] = useState(null);
-  const [cloneSrc, setCloneSrc] = useState(null);
   const pendingMeta = useRef(new Set());
+  const stageApi = useRef({});
+  const geoCache = useRef(null);
+  const rxRef = useRef(null);
   const settingsCache = useRef(new Map()); // id -> settings (this session)
-  const history = useRef(new Map()); // id -> { past, future, lastPush }
+  const history = useRef(new Map()); // id -> { past, future, pastL, futureL, last }: settings, and what each step was called
   const dirty = useRef(false);
   const positions = useRef();
   positions.current = state.cull?.positions || {};
@@ -143,8 +144,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
     if (!photo) return;
     setCrop(false);
     setSelState(null);
-    setSelection(null);
-    setCloneSrc(null);
+    rxRef.current?.reset();
     if (!isRaw(photo)) { setOpened({ id: photo.id, error: 'notRaw' }); setS(null); return; }
     let live = true;
     setOpened((o) => (o?.id === photo.id ? o : { id: photo.id, loading: true }));
@@ -156,7 +156,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
       dirty.current = false;
       const st = settingsCache.current.get(photo.id) || fromXmp(info.settings, info.curves, asShot, info.own);
       setS(st);
-      setActiveLayer(st.layers?.at(-1)?.id ?? null);
+      rxRef.current?.reset(st.layers);
     });
     return () => { live = false; };
   }, [photo?.id]);
@@ -174,15 +174,19 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
     return () => clearTimeout(t);
   }, [s]);
 
-  // Changes settings. Rapid changes (dragging a slider) share one undo step.
-  const update = useCallback((patch) => {
+  // Changes settings. Rapid changes of the same thing (dragging a slider) share
+  // one undo step; `label` names it in Retouch's History panel.
+  const update = useCallback((patch, label = 'Develop Settings') => {
     if (!photo) return;
     setS((old) => {
       if (!old) return old;
-      const h = history.current.get(photo.id) || { past: [], future: [], last: 0 };
-      if (Date.now() - h.last > 600) { h.past.push(old); if (h.past.length > 100) h.past.shift(); }
+      const h = history.current.get(photo.id) || { past: [], future: [], pastL: [], futureL: [], last: 0 };
+      if (Date.now() - h.last > 600 || h.pastL.at(-1) !== label) {
+        h.past.push(old); h.pastL.push(label);
+        if (h.past.length > 100) { h.past.shift(); h.pastL.shift(); }
+      }
       h.last = Date.now();
-      h.future = [];
+      h.future = []; h.futureL = [];
       history.current.set(photo.id, h);
       dirty.current = true;
       return typeof patch === 'function' ? patch(old) : { ...old, ...patch };
@@ -193,8 +197,24 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
     const h = history.current.get(photo?.id);
     if (!h) return;
     const from = redo ? h.future : h.past, to = redo ? h.past : h.future;
+    const fromL = redo ? h.futureL : h.pastL, toL = redo ? h.pastL : h.futureL;
     if (!from.length) return;
-    setS((cur) => { to.push(cur); dirty.current = true; h.last = 0; return from.pop(); });
+    setS((cur) => { if (!from.length) return cur; to.push(cur); toL.push(fromL.pop()); dirty.current = true; h.last = 0; return from.pop(); });
+  };
+  // History: every state of this photo, oldest first; jump(i) goes to one.
+  const hist = history.current.get(photo?.id);
+  const historyView = hist && {
+    states: [hist.past.length >= 100 ? 'Earlier' : 'Open', ...hist.pastL, ...[...hist.futureL].reverse()],
+    at: hist.past.length,
+    jump: (i) => setS((cur) => {
+      const all = [...hist.past, cur, ...[...hist.future].reverse()], labels = [...hist.pastL, ...[...hist.futureL].reverse()];
+      if (i < 0 || i >= all.length) return cur;
+      hist.past = all.slice(0, i); hist.pastL = labels.slice(0, i);
+      hist.future = all.slice(i + 1).reverse(); hist.futureL = labels.slice(i).reverse();
+      hist.last = 0;
+      dirty.current = true;
+      return all[i];
+    }),
   };
 
   // Develop's reset leaves Retouch layers alone (they're a separate piece of work).
@@ -313,66 +333,35 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const picker = picking === 'wb' ? { tip: 'Click something white or grey to set the white balance (Esc to cancel)', fn: pick }
     : picking === 'point' && selMask ? { tip: 'Click a colour in the photo to change it with Point Color (Esc to cancel)', shown: true, fn: pickPoint } : null;
 
-  // Retouch: layers, selection commands and Photoshop's keys.
-  const rtActs = retouchActions(s, update, activeLayer, setActiveLayer);
-  const fillSel = (color) => {
-    if (!s) return;
-    const id = rtActs.target();
-    rtActs.addOp(id, { id: newId(), t: 'fill', color, opacity: 100, ...(selection ? { clip: selection } : {}) });
-  };
-  const selActs = {
-    fill: () => fillSel(rt.fg),
-    clear: () => { if (selection) rtActs.addOp(rtActs.target(), { id: newId(), t: 'clear', clip: selection }); },
-    invert: () => selection && setSelection({ ...selection, invert: !selection.invert }),
-    deselect: () => setSelection(null),
-  };
-  const setTool = (tool) => setRt({ tool });
+  // Retouch: Photoshop's tools, layers, selections, menus and keys (retouch.jsx).
+  const info = photo && opened?.id === photo.id ? opened.info : null;
+  const geo = info && (geoCache.current?.info === info ? geoCache.current.geo : (geoCache.current = { info, geo: new Geometry(info.width, info.height, info.orientation) }).geo);
+  const rx = useRetouch({
+    s, update, undo, info, geo, photo, stage: stageApi, toast: setToast, onMode, setCrop, autoTone,
+    aiMasks,
+    exportNow: () => s && setExporting({}),
+    revert: () => update((old) => ({ ...old, layers: [] }), 'Revert'),
+    cropTo: (b) => {
+      if (!b || !geo) return;
+      update({ crop: geo.toCrop({ cx: ((b[0] + b[2]) / 2) * geo.ow, cy: ((b[1] + b[3]) / 2) * geo.oh, hw: ((b[2] - b[0]) / 2) * geo.ow, hh: ((b[3] - b[1]) / 2) * geo.oh, angle: 0 }) }, 'Crop');
+    },
+  });
+  rxRef.current = rx;
   useEffect(() => { if (retouch) { setCrop(false); setSelState(null); setPicking(false); } }, [retouch]);
-  const TOOL_KEYS = { b: 'brush', e: 'eraser', s: 'clone', l: 'lasso', i: 'dropper', h: 'hand' };
-  const retouchKey = (e, ctrl, k) => {
-    if (!s) return false;
-    if (ctrl && k === 'd') { e.preventDefault(); selActs.deselect(); return true; }
-    if (ctrl && e.shiftKey && k === 'i') { e.preventDefault(); selActs.invert(); return true; }
-    if (ctrl && k === 'a') { e.preventDefault(); setSelection({ shapes: [{ kind: 'rect', mode: 'add', x0: 0, y0: 0, x1: 1, y1: 1 }], invert: false, feather: 0 }); return true; }
-    if (ctrl && k === 'j') { e.preventDefault(); if (activeLayer) rtActs.duplicate(activeLayer); return true; }
-    if (ctrl && e.shiftKey && k === 'n') { e.preventDefault(); rtActs.add(); return true; }
-    if (e.altKey && (e.key === 'Backspace' || e.key === 'Delete')) { e.preventDefault(); selActs.fill(); return true; }
-    if (ctrl && e.key === 'Backspace') { e.preventDefault(); fillSel(rt.bg); return true; }
-    if (ctrl || e.altKey) return false;
-    if ((e.key === 'Delete' || e.key === 'Backspace') && selection) { e.preventDefault(); selActs.clear(); return true; }
-    if (e.key === 'Escape' && selection) { selActs.deselect(); return true; }
-    const t = rt[rt.tool];
-    if (['[', ']', '{', '}'].includes(e.key)) {
-      if (t?.size) {
-        const up = e.key === ']' || e.key === '}';
-        if (e.shiftKey || e.key === '{' || e.key === '}') setRt({ [rt.tool]: { ...t, hard: Math.min(100, Math.max(0, t.hard + (up ? 25 : -25))) } });
-        else setRt({ [rt.tool]: { ...t, size: Math.min(0.3, Math.max(0.0002, t.size * (up ? 1.2 : 1 / 1.2))) } });
-      }
-      return true;
-    }
-    if (k === 'x') { setRt({ fg: rt.bg, bg: rt.fg }); return true; }
-    if (k === 'd') { setRt({ fg: RETOUCH_DEFAULT.fg, bg: RETOUCH_DEFAULT.bg }); return true; }
-    if (k === 'j') { setTool(e.shiftKey ? 'heal' : 'spot'); return true; }
-    if (k === 'm') { setTool(e.shiftKey ? 'ellipse' : 'marquee'); return true; }
-    if (TOOL_KEYS[k] && ratingForKey(keys, e.key) === undefined) { setTool(TOOL_KEYS[k]); return true; }
-    // Space is the hand here (tapped, it still zooms: see RetouchOverlay); Develop-only keys do nothing.
-    if ((e.key === ' ' && zKey === ' ') || ['r', 'w', 'k', 'o'].includes(k)) return true;
-    return false;
-  };
 
   // Keyboard, as in Lightroom where it makes sense.
-  const stageApi = useRef({});
-  const geoCache = useRef(null);
   useEffect(() => {
     const onKey = (e) => {
-      if (exporting || dialog) return;
+      if (exporting || dialog || (retouch && rx.dialog)) return;
       const typing = e.target.closest?.('input[type=text], input[type=number], textarea, select, [contenteditable]');
       if (typing) return;
       const ctrl = e.ctrlKey || e.metaKey;
       const k = e.key.toLowerCase();
       // Ctrl+E: Develop <-> Retouch (Lightroom's "Edit in Photoshop").
       if (ctrl && k === 'e') { e.preventDefault(); if (s) onMode?.(retouch ? 'develop' : 'retouch'); return; }
-      if (retouch && retouchKey(e, ctrl, k)) return;
+      if (retouch && rx.onKey(e)) return;
+      if (retouch && ctrl && (k === 'c' || k === 'v')) return;
+      if (retouch && !ctrl && !e.altKey && (k.length === 1 || e.key === 'Delete') && !/^\d$/.test(e.key) && e.key !== '\\' && normKey(e.key) !== zKey) return;
       if (ctrl && k === 'z') { e.preventDefault(); undo(e.shiftKey); return; }
       if (ctrl && k === 'y') { e.preventDefault(); undo(true); return; }
       if (ctrl && k === 'c') { e.preventDefault(); copy(); return; }
@@ -400,7 +389,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
       }
       if (e.key === 'Escape') { if (picking) { setPicking(false); return; } if (selMask) { setSel(null); return; } setCrop(false); stageApi.current.unzoom?.(); return; }
       if (e.key === 'Enter' && crop) { setCrop(false); return; }
-      if (normKey(e.key) === zKey) { e.preventDefault(); if (!e.repeat) stageApi.current.toggleZoom?.(); return; }
+      if (normKey(e.key) === zKey) { e.preventDefault(); if (!e.repeat && !(retouch && e.key === ' ')) stageApi.current.toggleZoom?.(); return; }
       const r = ratingForKey(keys, e.key);
       if (r !== undefined && !RESERVED_KEYS.includes(e.key)) { e.preventDefault(); if (!e.repeat) rate(photo, r); return; }
       const moves = { ArrowRight: 1, ArrowLeft: -1 };
@@ -427,8 +416,6 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
     );
   }
 
-  const info = photo && opened?.id === photo.id ? opened.info : null;
-  const geo = info && (geoCache.current?.info === info ? geoCache.current.geo : (geoCache.current = { info, geo: new Geometry(info.width, info.height, info.orientation) }).geo);
   const shown = s && before && opened?.asShot ? { ...defaults(opened.asShot), crop: s.crop }
     : s && hoverPreset && opened?.asShot ? applyTo(s, hoverPreset.part, opened.asShot) : s;
   // On the main photo: the mask overlay (when on) and Point Color's Visualize Range.
@@ -467,8 +454,9 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
           <button className="btn btn-sm btn-primary" onClick={() => setExporting({})} disabled={!s}><Icon name="export" size={14} />Export</button>
         </div>
       </header>
+      {retouch && s && info && <div className="rt-top"><MenuBar menus={rx.menus} /><OptionsBar rx={rx} /></div>}
       <div className="dev-main">
-        {retouch && <aside className="rt-left"><RetouchTools tool={rt.tool} setTool={setTool} fg={rt.fg} bg={rt.bg} setColors={setRt} /></aside>}
+        {retouch && <aside className="rt-left">{s && info && <ToolRail rx={rx} />}</aside>}
         {!retouch && layout.nav && <aside className="dev-left">
           <MaskPanel presets={(
             <PresetPanel presets={presets.list} open={presets.open} setOpen={(open) => setPresets({ open })} disabled={!s || !info}
@@ -478,7 +466,6 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
         </aside>}
         {!retouch && <PanelHandle side="left" open={layout.nav} onClick={() => toggle('nav')} title={`${layout.nav ? 'Hide' : 'Show'} masks (F7)`} />}
         <div className="dev-stage-col">
-          {retouch && s && info && <RetouchOptions tool={rt.tool} opts={rt} setOpts={setRt} longEdge={Math.max(info.width, info.height)} selection={selection} sel={selActs} />}
           {photo && opened?.id === photo.id && opened.error ? (
             <div className="hero-empty dev-msg">
               <h2>{opened.error === 'notRaw' ? 'Develop edits RAW files' : "This photo can't be developed"}</h2>
@@ -489,7 +476,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
               onCrop={(c) => update({ crop: c })} apiRef={stageApi} nextPhoto={photos[index + 1]} before={before} picker={picker}
               maskView={editing && !retouch ? mainMaskView : null} previewView={layout.nav && !retouch ? maskView(selMask, overlay) || 'none' : null}
               maskTool={editing && selPart && !picker && !retouch ? { part: selPart, brush, onPart: (patch) => acts.changePart(selMask.id, selPart.id, patch) } : null}
-              retouch={retouch && s ? { tool: rt.tool, opts: rt, selection, setSelection, cloneSrc, setCloneSrc, target: rtActs.target, commit: rtActs.addOp, toast: setToast, setFg: (fg) => setRt({ fg }) } : null} />
+              retouch={retouch && s ? { rx, toast: setToast } : null} />
           ) : (
             <div className="hero-empty dev-msg"><h2>{list?.loading ? 'Reading folder…' : filter !== 'all' && allPhotos.length ? 'No photos with those stars' : 'No photos in this folder'}</h2></div>
           )}
@@ -498,7 +485,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
         <PanelHandle side="right" open={layout.panel} onClick={() => toggle('panel')} title={`${layout.panel ? 'Hide' : 'Show'} adjustments (F8)`} />
         {layout.panel && <aside className="dev-panel">
           {s && info && retouch ? (
-            <LayersPanel layers={s.layers || []} active={activeLayer} setActive={setActiveLayer} acts={rtActs} onDevelop={() => onMode('develop')} />
+            <RetouchPanels rx={rx} history={historyView} onDevelop={() => onMode('develop')} />
           ) : s && info ? (
             <Panel s={s} info={info} geo={geo} asShot={opened.asShot} update={update} meta={curMeta} rating={rating} keys={keys}
               onRate={(r) => rate(photo, r)} onReset={reset} onCopy={copy} onPaste={clipboard ? paste : null}
@@ -513,6 +500,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
         </aside>}
       </div>
       {toast && <div className="cull-toast">{toast}</div>}
+      {retouch && s && info && <RetouchDialogs rx={rx} />}
       {aiDialog}
       {dialog === 'copy' && s && (
         <CopyDialog groups={copyGroups.groups} onClose={() => setDialog(null)} onDone={(groups) => {
@@ -697,7 +685,8 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
     if (c.width !== W) c.width = W;
     if (c.height !== H) c.height = H;
     let live = liveRef.current;
-    if (live && s.layers?.some((l) => l.ops.includes(live.op))) live = liveRef.current = null;
+    // Dropped once the settings hold the stroke (or the moved layer's place).
+    if (live && s.layers?.some((l) => (live.op ? l.ops.includes(live.op) || l.mask?.ops.includes(live.op) : l.id === live.layerId && l.tf === live.tf))) live = liveRef.current = null;
     r.render(info, s, geo, frame, outToFrame(W, H, frame, v), { showClip: clip, maskView, live });
   };
 
@@ -731,20 +720,30 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
     const w = Math.round(geo.ow * k), h = Math.round(geo.oh * k);
     return { w, h, data: r.preview(info, { ...s, crop: null, layers: [] }, geo, geo.frame(null), w, h, null) };
   };
-  const commitOp = (layerId, op) => {
+  const commitOp = (layerId, op, mask, label) => {
     let o = op;
     if (op.t === 'spot') {
       const pic = basePicture();
       o = { ...op, t: 'heal', ...(pic ? findSpotSource(op, pic, pic.w, pic.h) : { dx: op.size * 3, dy: 0 }) };
     }
-    setLive({ layerId, op: o }); // shown until the settings have it, so nothing flickers
-    retouch.commit(layerId, o);
+    setLive({ layerId, op: o, target: mask ? 'mask' : undefined }); // shown until the settings have it, so nothing flickers
+    retouch.rx.acts.addOp(layerId, o, mask, label);
   };
+  // The colour under a point (css px) as shown, 0-1.
   const pickColor = (cssX, cssY) => {
     const r = rendererRef.current;
-    if (!r) return;
+    if (!r) return null;
     draw();
-    retouch.setFg(r.readShown(Math.round(cssX * dpr), Math.round(H - cssY * dpr)));
+    return r.readShown(Math.round(cssX * dpr), Math.round(H - cssY * dpr));
+  };
+  apiRef.current.basePicture = basePicture;
+  // The photo upright and uncropped as it looks, layers and all (RGBA, bottom row first): what selections by colour read.
+  apiRef.current.picture = (edge = 2048) => {
+    const r = rendererRef.current;
+    if (!r || !ready || !s || !info) return null;
+    const k = Math.min(1, edge / Math.max(geo.ow, geo.oh));
+    const w = Math.max(8, Math.round(geo.ow * k)), h = Math.max(8, Math.round(geo.oh * k));
+    return { w, h, rgba: r.preview(info, { ...s, crop: null }, geo, geo.frame(null), w, h, null) };
   };
   // Zoomed in: sharp copies of what visible clones and heals copy from.
   const layersNow = s?.layers;
@@ -806,6 +805,14 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
   };
   apiRef.current.toggleZoom = () => (view ? setView(null) : zoomTo(size.w / 2, size.h / 2, 1 / dpr));
   apiRef.current.unzoom = () => setView(null);
+  // Zooms by `f` about a point (css px), down to fitting the screen.
+  const zoomAt = (cssX, cssY, f) => {
+    const next = Math.min(32, (view ? view.scale : fit / dpr) * f);
+    if (next <= (fit / dpr) * 1.001) setView(null);
+    else zoomTo(cssX, cssY, next);
+  };
+  apiRef.current.zoomBy = (f) => zoomAt(size.w / 2, size.h / 2, f);
+  apiRef.current.zoom100 = () => zoomTo(size.w / 2, size.h / 2, 1 / dpr);
   // Brightness spread at this white balance (linear, before the sliders).
   apiRef.current.stats = (st) => {
     const g = grid.current;
@@ -901,7 +908,7 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
     if (cropMode || !ready || !frame) return;
     const rect = canvasRef.current.getBoundingClientRect();
     const cur = view ? view.scale : fit / dpr;
-    const next = Math.min(4, Math.max(fit / dpr, cur * Math.exp(-e.deltaY * 0.0015)));
+    const next = Math.min(32, Math.max(fit / dpr, cur * Math.exp(-e.deltaY * 0.0015)));
     if (next <= fit / dpr * 1.001) { setView(null); return; }
     zoomTo(e.clientX - rect.left, e.clientY - rect.top, next);
   };
@@ -928,10 +935,8 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
       </div>
       {error && <div className="stage-error"><b>Can't show the RAW here.</b> {error}. You're seeing the camera's preview instead.</div>}
       {retouch && !cropMode && ready && css2ori && (
-        <RetouchOverlay geo={geo} toOri={(x, y) => ap(css2ori, x, y)} toCss={(x, y) => ap(ori2css, x, y)} tool={retouch.tool} opts={retouch.opts}
-          selection={retouch.selection} setSelection={retouch.setSelection} cloneSrc={retouch.cloneSrc} setCloneSrc={retouch.setCloneSrc}
-          target={retouch.target} live={setLive} commit={commitOp} pickColor={pickColor} toast={retouch.toast}
-          onSpaceTap={() => apiRef.current.toggleZoom?.()} />
+        <RetouchStage rx={retouch.rx} geo={geo} toOri={(x, y) => ap(css2ori, x, y)} toCss={(x, y) => ap(ori2css, x, y)}
+          live={setLive} commit={commitOp} pickColor={pickColor} zoomAt={zoomAt} toast={retouch.toast} onSpaceTap={() => apiRef.current.toggleZoom?.()} />
       )}
       {maskTool && !cropMode && ready && css2ori && maskTool.part.type !== 'luminance' && maskTool.part.type !== 'ai' && (
         <MaskOverlay geo={geo} part={maskTool.part} brush={maskTool.brush} onPart={maskTool.onPart}
