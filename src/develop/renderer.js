@@ -8,6 +8,7 @@ import { MAX_MASKS, POINT_DEFAULT, adjOf, lumRange, maskRaster } from './masks.j
 import { tonemapUniforms } from './tonemap.js';
 import { Composer } from './compose.js';
 import { renderLayers } from './retouch.js';
+import { ROTATION } from '../cull/rotation.js';
 
 const GUIDE_EDGE = 320;
 // The base rendering under the sliders, per profile (params.js PROFILES).
@@ -50,9 +51,6 @@ function program(gl, frag) {
   return { p, loc };
 }
 
-// Rotation (clockwise degrees) for an EXIF orientation.
-const ROT = { 1: 0, 2: 0, 3: 180, 4: 180, 5: 90, 6: 90, 7: 270, 8: 270 };
-
 // 3x3 affine matrices, row-major [a b c; d e f; 0 0 1] as arrays of 9.
 const mat = (a, b, c, d, e, f) => [a, b, c, d, e, f, 0, 0, 1];
 const mm = (A, B) => {
@@ -72,7 +70,7 @@ const glMat = (M) => new Float32Array([M[0], M[3], M[6], M[1], M[4], M[7], M[2],
 export class Geometry {
   constructor(sw, sh, orientation) {
     this.sw = sw; this.sh = sh;
-    this.rot = ROT[orientation] || 0;
+    this.rot = ROTATION[orientation] || 0;
     this.ow = this.rot % 180 ? sh : sw;
     this.oh = this.rot % 180 ? sw : sh;
     // oriented pixel -> sensor pixel

@@ -12,7 +12,7 @@ import { toggle, useLayout } from '../layout.js';
 import { Filmstrip, photoRating } from './cull.jsx';
 import { imgUrl, ROTATION } from '../cull/previews.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
-import { cachedFolder, keepFolder, latestOnly, sameList } from '../cull/folder.js';
+import { cachedFolder, startAt, useFolder, usePosition } from '../cull/folder.js';
 import { keepSettings, session } from '../develop/session.js';
 import { createSaver } from '../develop/saver.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey } from '../cull/keys.js';
@@ -61,9 +61,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
 
   // Coming from Culling: its photo list, at once (open() reads the folder again quietly).
   const [seen] = useState(() => cachedFolder(folder));
-  const [list, setList] = useState(seen?.list || null);
   const [currentId, setCurrentId] = useState(() => seen?.list.photos[state.cull?.positions?.[seen.list.folder] || 0]?.id ?? null);
-  const [meta, setMeta] = useState(seen?.meta || {});
   const [opened, setOpened] = useState(null); // { id, info, asShot } | { id, error }
   const [s, setS] = useState(null);
   const [crop, setCrop] = useState(false);
@@ -83,21 +81,17 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const [sel, setSelState] = useState(null); // selected mask and part: { mask, part }
   const [overlay, setOverlay] = useStored('flightroom-mask-overlay-2', OVERLAY_DEFAULT);
   const [brush, setBrush] = useStored('flightroom-brush', BRUSH_DEFAULT);
-  const pendingMeta = useRef();
-  pendingMeta.current ||= new Set(Object.keys(meta));
-  const [scans] = useState(latestOnly);
-  const [loads] = useState(latestOnly);
   const stageApi = useRef({});
   const geoCache = useRef(null);
   const rxRef = useRef(null);
   const settingsCache = useRef(session.settings);
   const history = useRef(session.history);
   const dirty = useRef(false);
-  const positions = useRef();
-  positions.current = state.cull?.positions || {};
 
   // Shared with Culling; its "Likely rejects" is Culling's own.
   const [filter, setFilter] = useState(() => (seen?.filter && seen.filter !== 'rejects' ? seen.filter : 'all')); // see inFilter
+  // Same folder and position as the Culling tab.
+  const { list, setList, meta, requestMeta } = useFolder(bridge, folder, seen, filter, (res) => setCurrentId(res.photos[startAt(res, state.cull?.positions)]?.id ?? null));
   const layout = useLayout();
   // The crop tool lives in the right panel, so cropping shows the panel.
   useEffect(() => { if (crop && !layout.panel) toggle('panel'); }, [crop]);
@@ -118,49 +112,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   lastIndex.current = index;
   const photo = photos[index];
 
-  // Same folder and position as the Culling tab.
-  const open = useCallback(async (dir) => {
-    if (!bridge || !dir) return;
-    // Only the newest scan counts: an older folder's answer arriving late is dropped.
-    const latest = scans.next();
-    if (cachedFolder(dir)) {
-      const res = await bridge.scan(dir);
-      if (latest() && !res.error) setList((l) => (l?.photos && sameList(l.photos, res.photos) ? l : res));
-      return;
-    }
-    setList({ loading: true, folder: dir });
-    loads.next(); // metadata still coming for the folder before is dropped
-    const res = await bridge.scan(dir);
-    if (!latest()) return;
-    if (res.error) { setList({ error: res.error, folder: dir }); return; }
-    setMeta({});
-    pendingMeta.current = new Set();
-    const pos = Math.min(positions.current[res.folder] || 0, Math.max(0, res.photos.length - 1));
-    setCurrentId(res.photos[pos]?.id ?? null);
-    setList(res);
-  }, [bridge]);
-  useEffect(() => { if (folder) open(folder); }, [folder, open]);
-  useEffect(() => { if (list?.photos && list.folder) keepFolder(folder, { list, meta, filter }); }, [list, meta, filter]);
-
-  const lastPos = useRef(null);
-  useEffect(() => {
-    const pos = photo ? allPhotos.findIndex((p) => p.id === photo.id) : -1;
-    if (list?.folder && pos >= 0) {
-      lastPos.current = [list.folder, pos];
-      const t = setTimeout(() => actions.setCullPosition(list.folder, pos), 400);
-      return () => clearTimeout(t);
-    }
-  }, [photo?.id, list?.folder]);
-  // Leaving for Culling right after moving: hand over the position at once.
-  useEffect(() => () => { if (lastPos.current) actions.setCullPosition(...lastPos.current); }, []);
-
-  const requestMeta = useCallback((ids) => {
-    const want = ids.filter((id) => id && !pendingMeta.current.has(id));
-    if (!want.length || !bridge) return;
-    want.forEach((id) => pendingMeta.current.add(id));
-    const latest = loads.current();
-    bridge.meta(want).then((m) => { if (latest() && !m.error) setMeta((old) => ({ ...old, ...m })); });
-  }, [bridge]);
+  usePosition(actions, list?.folder, photo ? allPhotos.findIndex((p) => p.id === photo.id) : -1);
   useEffect(() => {
     if (!photo) return;
     requestMeta([photo.id, ...photos.slice(Math.max(0, index - 3), index + META_WINDOW).map((p) => p.id)]);

@@ -88,8 +88,6 @@ export function rasterize(l, ow, oh, scale, maxSide) {
   return { canvas: c, rect: [box[0], box[1], w / k, h / k] };
 }
 
-export const SHAPES = [['rect', 'Rectangle'], ['ellipse', 'Ellipse'], ['triangle', 'Triangle'], ['polygon', 'Polygon'], ['line', 'Line']];
-
 export function shapePath(ctx, sh, ow, oh) {
   const x0 = Math.min(sh.x0, sh.x1) * ow, y0 = Math.min(sh.y0, sh.y1) * oh, x1 = Math.max(sh.x0, sh.x1) * ow, y1 = Math.max(sh.y0, sh.y1) * oh;
   ctx.beginPath();

@@ -50,8 +50,8 @@ publish nothing. Installed copies check for a new release on launch and every ho
 download it in the background (checking its SHA-256 from `latest.json`), and
 install it when the app closes. Each release also carries `latest.yml`, which
 GearCheck 1.x's updater reads, so old GearCheck installs update into Flightroom.
-CI also tests that hand-over on Windows: it installs GearCheck 1.5.0, runs the
-new installer the way GearCheck's updater does, and checks the result.
+(CI tested that hand-over on Windows until 2.0.2; it was dropped once the last
+GearCheck install had moved to Flightroom.)
 
 (Releases up to v1.1.10 were numbered 1.1.<build number> automatically.)
 

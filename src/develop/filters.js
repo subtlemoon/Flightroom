@@ -51,7 +51,6 @@ export const FILTERS = [
   ['Other', 'minimum', 'Minimum…', [P('radius', 'Radius', 1, 500, 1, 1, 'px')]],
 ];
 export const FILTER_DEF = Object.fromEntries(FILTERS.map(([menu, type, label, params]) => [type, { menu, type, label, params }]));
-export const FILTER_MENUS = [...new Set(FILTERS.map((f) => f[0]))];
 export const filterName = (f) => FILTER_DEF[f.type]?.label.replace('…', '') || f.type;
 
 export function newFilter(type, extra = {}) {

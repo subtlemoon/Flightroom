@@ -50,7 +50,6 @@ export const SNAPSHOT = new Set(['dodge', 'burn', 'sponge', 'blur', 'sharpen', '
 // Ops whose area is their selection rather than a brush.
 export const REGION = new Set(['patch', 'redeye']);
 
-export const LAYER_KINDS = { pixel: 'Layer', photo: 'Photo copy', stamp: 'Merged', adjust: 'Adjustment', fill: 'Fill', text: 'Type', shape: 'Shape', group: 'Group' };
 export const kindOf = (l) => l.kind || 'pixel';
 // Layers you can paint on directly (others are painted through their mask).
 export const PAINTABLE = new Set(['pixel', 'photo', 'stamp']);

@@ -6,7 +6,7 @@ import { clearPreviews, decodeThumb, drawPhoto, geometry, imgUrl, loadFit, loadF
 import { loadAnalysis, measure, saveAnalysis, suggest, upright } from '../cull/analyze.js';
 import { measurePool } from '../cull/measure-pool.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
-import { cachedFolder, keepFolder, latestOnly, sameList } from '../cull/folder.js';
+import { cachedFolder, startAt, useFolder, usePosition } from '../cull/folder.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zoomLevel } from '../cull/keys.js';
 
 // A photo in the culling view, as listed by the desktop side:
@@ -35,10 +35,8 @@ export function CullView({ store, onDevelop }) {
 
   // Back from Develop: the folder as it was left, at once (open() reads it again quietly).
   const [seen] = useState(() => cachedFolder(folder));
-  const [list, setList] = useState(seen?.list || null); // { folder, photos } | { error }
   const [currentId, setCurrentId] = useState(() => seen?.list.photos[state.cull?.positions?.[seen.list.folder] || 0]?.id ?? null);
   const [filter, setFilter] = useState(seen?.filter || 'all'); // see inFilter
-  const [meta, setMeta] = useState(seen?.meta || {});
   const [zoom, setZoom] = useState(null); // null | { cx, cy }
   const [toast, setToast] = useState('');
   // Auto-rating: saved measurements and which stars it wrote, the run in progress,
@@ -49,12 +47,15 @@ export function CullView({ store, onDevelop }) {
   const [showSubject, setShowSubject] = useState(false); // while the pointer is on the suggestion
   const [exporting, setExporting] = useState(false);
   const autoCancel = useRef(false);
-  const pendingMeta = useRef();
-  pendingMeta.current ||= new Set(Object.keys(meta));
-  const [scans] = useState(latestOnly);
-  const [loads] = useState(latestOnly);
-  const positions = useRef();
-  positions.current = state.cull?.positions || {};
+  const lastIndex = useRef(0);
+  // A folder read anew starts where you left it, showing every photo.
+  const { list, setList, meta, setMeta, open, requestMeta } = useFolder(bridge, folder, seen, filter, (res) => {
+    const pos = startAt(res, state.cull?.positions);
+    lastIndex.current = pos;
+    setCurrentId(res.photos[pos]?.id ?? null);
+    setFilter('all');
+    setAuto(loadAnalysis(res.folder));
+  });
 
   const allPhotos = list?.photos || [];
   const isRated = (p) => photoRating(p, meta[p.id]) > 0;
@@ -76,39 +77,11 @@ export function CullView({ store, onDevelop }) {
   // The current photo is tracked by id so it stays put when the filter changes.
   // If it drops out of the filter (say, rated while showing Unrated), the photo
   // that slid into its place becomes current.
-  const lastIndex = useRef(0);
   let index = photos.findIndex((p) => p.id === currentId);
   if (index < 0) index = Math.min(lastIndex.current, photos.length - 1);
   if (index >= 0) lastIndex.current = index;
   const photo = photos[index];
   useEffect(() => { if (photo && photo.id !== currentId) setCurrentId(photo.id); }, [photo?.id]);
-
-  const open = useCallback(async (dir, reload) => {
-    if (!bridge || !dir) return;
-    // Only the newest scan counts: an older folder's answer arriving late is dropped.
-    const latest = scans.next();
-    if (!reload && cachedFolder(dir)) {
-      const res = await bridge.scan(dir);
-      if (latest() && !res.error) setList((l) => (l?.photos && sameList(l.photos, res.photos) ? l : res));
-      return;
-    }
-    setList({ loading: true, folder: dir });
-    loads.next(); // metadata still coming for the folder before is dropped
-    const res = await bridge.scan(dir);
-    if (!latest()) return;
-    if (res.error) { setList({ error: res.error, folder: dir }); return; }
-    setMeta({});
-    pendingMeta.current = new Set();
-    const pos = Math.min(positions.current[res.folder] || 0, Math.max(0, res.photos.length - 1));
-    lastIndex.current = pos;
-    setCurrentId(res.photos[pos]?.id ?? null);
-    setFilter('all');
-    setAuto(loadAnalysis(res.folder));
-    setList(res);
-  }, [bridge]);
-
-  useEffect(() => { if (folder) open(folder); }, [folder, open]);
-  useEffect(() => { if (list?.photos && list.folder) keepFolder(folder, { list, meta, filter }); }, [list, meta, filter]);
 
   const pick = async () => {
     const dir = await bridge.pickFolder();
@@ -118,17 +91,8 @@ export function CullView({ store, onDevelop }) {
     }
   };
 
-  // Remember where you were in each folder (Develop opens the same photo).
-  const lastPos = useRef(null);
-  useEffect(() => {
-    const pos = allPhotos.findIndex((p) => p.id === photo?.id);
-    if (list?.folder && pos >= 0) {
-      lastPos.current = [list.folder, pos];
-      const t = setTimeout(() => actions.setCullPosition(list.folder, pos), 400);
-      return () => clearTimeout(t);
-    }
-  }, [photo?.id, list?.folder]);
-  useEffect(() => () => { if (lastPos.current) actions.setCullPosition(...lastPos.current); clearPreviews(); }, []);
+  usePosition(actions, list?.folder, allPhotos.findIndex((p) => p.id === photo?.id));
+  useEffect(() => clearPreviews, []);
 
   // Photo and rated counts for the folder list.
   const ratedCount = allPhotos.filter(isRated).length;
@@ -137,14 +101,6 @@ export function CullView({ store, onDevelop }) {
     const t = setTimeout(() => actions.setCullStats(list.folder, { photos: allPhotos.length, rated: ratedCount }), 600);
     return () => clearTimeout(t);
   }, [list, ratedCount]);
-
-  const requestMeta = useCallback((ids) => {
-    const want = ids.filter((id) => id && !pendingMeta.current.has(id));
-    if (!want.length || !bridge) return;
-    want.forEach((id) => pendingMeta.current.add(id));
-    const latest = loads.current();
-    bridge.meta(want).then((m) => { if (latest() && !m.error) setMeta((old) => ({ ...old, ...m })); });
-  }, [bridge]);
 
   useEffect(() => {
     if (!photo) return;
