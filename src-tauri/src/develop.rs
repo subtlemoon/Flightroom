@@ -352,12 +352,15 @@ fn frame(w: usize, h: usize, data: impl IntoIterator<Item = u16>, len: usize) ->
 
 // --- state ------------------------------------------------------------------
 
-const OVERVIEWS_KEPT: usize = 2; // this photo and the next, decoded ahead
+/// RAW files kept decoded: the photo on screen and its neighbours, decoded
+/// ahead so the next arrow press doesn't wait for a decode (about 90 MB each for 45 MP).
+const RAWS_KEPT: usize = 3;
+const OVERVIEWS_KEPT: usize = 3;
 
 #[derive(Default)]
 pub struct Develop {
-    /// The RAW data of the photo being developed (only one: about 90 MB for 45 MP).
-    current: Mutex<Option<Arc<Raw>>>,
+    /// Decoded RAW files, the photo on screen first.
+    raws: Mutex<VecDeque<Arc<Raw>>>,
     /// One decode at a time, so looking ahead never slows down the photo on screen.
     decoding: Mutex<()>,
     overviews: Mutex<VecDeque<(PathBuf, String, usize, Arc<Vec<u8>>)>>,
@@ -368,21 +371,29 @@ pub struct Develop {
 }
 
 impl Develop {
-    /// The decoded RAW for `p`. With `keep`, it becomes the photo kept in memory.
+    /// The decoded RAW for `p`. With `keep` it is the photo on screen; without,
+    /// one decoded ahead, kept behind it.
     fn raw(&self, p: &Path, keep: bool) -> Result<Arc<Raw>, String> {
         let key = std::fs::metadata(p).map(|m| format!("{}:{:?}", m.len(), m.modified().ok())).map_err(|e| e.to_string())?;
-        let hit = |cur: &Option<Arc<Raw>>| cur.as_ref().filter(|r| r.path == p && r.key == key).cloned();
-        if let Some(r) = hit(&self.current.lock().unwrap()) {
+        let take = || {
+            let mut raws = self.raws.lock().unwrap();
+            let i = raws.iter().position(|r| r.path == p && r.key == key)?;
+            let r = raws.remove(i)?;
+            raws.insert(if keep { 0 } else { i.min(1) }, r.clone());
+            Some(r)
+        };
+        if let Some(r) = take() {
             return Ok(r);
         }
         let _g = self.decoding.lock().unwrap();
-        if let Some(r) = hit(&self.current.lock().unwrap()) {
+        if let Some(r) = take() {
             return Ok(r);
         }
         let raw = Arc::new(Raw::decode(p, key)?);
-        if keep {
-            *self.current.lock().unwrap() = Some(raw.clone());
-        }
+        let mut raws = self.raws.lock().unwrap();
+        let at = if keep { 0 } else { raws.len().min(1) };
+        raws.insert(at, raw.clone());
+        raws.truncate(RAWS_KEPT);
         Ok(raw)
     }
 
@@ -421,9 +432,9 @@ impl Develop {
         Some(d)
     }
 
-    /// Frees the RAW data and cached overviews (leaving the Develop tab).
+    /// Frees the RAW data and cached overviews (a while after leaving the Develop tab).
     pub fn release(&self) {
-        *self.current.lock().unwrap() = None;
+        self.raws.lock().unwrap().clear();
         self.overviews.lock().unwrap().clear();
         *self.denoised.lock().unwrap() = None;
     }

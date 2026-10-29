@@ -91,8 +91,19 @@ so sliders update live.
 Edits are never written into the RAW file. They are saved as Lightroom
 (Camera Raw) settings in the photo's `.xmp` sidecar (`crs:Exposure2012`,
 `crs:Contrast2012`, tone curve, HSL, crop, and so on), the same file Lightroom
-reads, alongside the star rating. Export renders the full-resolution photo in
-tiles and saves sRGB JPEGs with the camera's Exif.
+reads, alongside the star rating. Export (Ctrl+Shift+E, also from Culling)
+renders the full-resolution photo in tiles and saves sRGB JPEGs with the
+camera's Exif: the current photo, the filmstrip selection, what the star filter
+shows, the rated or the edited photos.
+
+Moving between photos and tabs never waits on work already done: the RAW
+files on either side of the current one stay decoded (decoded ahead in the
+direction you're going), Culling and Develop share the folder's photo list,
+star filter and position, each photo keeps its edits and undo history while
+the app runs, and the RAW data is freed only two minutes after leaving
+Develop. The histogram and mask preview are read back from the graphics card
+without waiting on it, and Develop/Retouch load on their own after the app
+starts.
 
 The panels follow Lightroom's: Basic (profile, treatment, white balance presets
 and selector, Auto), Tone Curve (parametric with splits, point and RGB curves,

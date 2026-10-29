@@ -1,11 +1,12 @@
 import { bridge as app, FILES } from '../bridge.js';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Dropdown, Icon, Modal, PanelHandle } from './ui.jsx';
 import { toggle, useLayout } from '../layout.js';
 import { clearPreviews, decodeThumb, drawPhoto, geometry, imgUrl, loadFit, loadFull, loadThumb, prune, ROTATION, thumbFallbackUrl } from '../cull/previews.js';
 import { loadAnalysis, measure, saveAnalysis, suggest, upright } from '../cull/analyze.js';
 import { measurePool } from '../cull/measure-pool.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
+import { cachedFolder, keepFolder, sameList } from '../cull/folder.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zoomLevel } from '../cull/keys.js';
 
 // A photo in the culling view, as listed by the desktop side:
@@ -14,6 +15,8 @@ import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zo
 // inside the file arrives later with the photo's meta. Later features (exported,
 // sent to client) add fields to this record rather than a new list.
 export const photoRating = (p, meta) => p.rating ?? meta?.fileRating ?? 0;
+// Export brings the RAW renderer, so it loads when first opened.
+const ExportModal = lazy(() => import('./export.jsx').then((m) => ({ default: m.ExportModal })));
 
 const filterName = (f) => ({ all: '', rated: 'rated', unrated: 'unrated', rejects: 'likely reject' })[f] ?? STAR_FILTERS.find(([k]) => k === f)?.[1].replace('Only ', '');
 
@@ -30,20 +33,24 @@ export function CullView({ store, onDevelop }) {
   const zoomPct = zoomLevel(state.settings);
   const folder = state.cull?.folder;
 
-  const [list, setList] = useState(null); // { folder, photos } | { error }
-  const [currentId, setCurrentId] = useState(null);
-  const [filter, setFilter] = useState('all'); // see inFilter
-  const [meta, setMeta] = useState({});
+  // Back from Develop: the folder as it was left, at once (open() reads it again quietly).
+  const [seen] = useState(() => cachedFolder(folder));
+  const [list, setList] = useState(seen?.list || null); // { folder, photos } | { error }
+  const [currentId, setCurrentId] = useState(() => seen?.list.photos[state.cull?.positions?.[seen.list.folder] || 0]?.id ?? null);
+  const [filter, setFilter] = useState(seen?.filter || 'all'); // see inFilter
+  const [meta, setMeta] = useState(seen?.meta || {});
   const [zoom, setZoom] = useState(null); // null | { cx, cy }
   const [toast, setToast] = useState('');
   // Auto-rating: saved measurements and which stars it wrote, the run in progress,
   // and whether its panel is open.
-  const [auto, setAuto] = useState({ measured: {}, applied: {} });
+  const [auto, setAuto] = useState(() => (seen ? loadAnalysis(seen.list.folder) : { measured: {}, applied: {} }));
   const [autoRun, setAutoRun] = useState(null); // { kind: 'analyze' | 'apply', done, total }
   const [autoOpen, setAutoOpen] = useState(false);
   const [showSubject, setShowSubject] = useState(false); // while the pointer is on the suggestion
+  const [exporting, setExporting] = useState(false);
   const autoCancel = useRef(false);
-  const pendingMeta = useRef(new Set());
+  const pendingMeta = useRef();
+  pendingMeta.current ||= new Set(Object.keys(meta));
   const positions = useRef();
   positions.current = state.cull?.positions || {};
 
@@ -74,8 +81,13 @@ export function CullView({ store, onDevelop }) {
   const photo = photos[index];
   useEffect(() => { if (photo && photo.id !== currentId) setCurrentId(photo.id); }, [photo?.id]);
 
-  const open = useCallback(async (dir) => {
+  const open = useCallback(async (dir, reload) => {
     if (!bridge || !dir) return;
+    if (!reload && cachedFolder(dir)) {
+      const res = await bridge.scan(dir);
+      if (!res.error) setList((l) => (l?.photos && sameList(l.photos, res.photos) ? l : res));
+      return;
+    }
     setList({ loading: true, folder: dir });
     const res = await bridge.scan(dir);
     if (res.error) { setList({ error: res.error, folder: dir }); return; }
@@ -90,6 +102,7 @@ export function CullView({ store, onDevelop }) {
   }, [bridge]);
 
   useEffect(() => { if (folder) open(folder); }, [folder, open]);
+  useEffect(() => { if (list?.photos && list.folder) keepFolder(folder, { list, meta, filter }); }, [list, meta, filter]);
 
   const pick = async () => {
     const dir = await bridge.pickFolder();
@@ -230,7 +243,10 @@ export function CullView({ store, onDevelop }) {
   // Keyboard: arrows move, Home/End jump; rating and zoom keys come from Settings.
   useEffect(() => {
     const onKey = (e) => {
-      if (e.target.closest?.('input, textarea, select, [contenteditable]') || e.ctrlKey || e.altKey || e.metaKey) return;
+      if (e.target.closest?.('input, textarea, select, [contenteditable]') || exporting) return;
+      // Ctrl+Shift+E: Export, as in Lightroom.
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'e' && allPhotos.length && !autoOpen) { e.preventDefault(); setExporting(true); return; }
+      if (e.ctrlKey || e.altKey || e.metaKey) return;
       if (!photos.length || autoOpen) return;
       if (e.key === 'Enter') {
         // Accept the auto-rating suggestion for this photo.
@@ -268,7 +284,7 @@ export function CullView({ store, onDevelop }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [photos, photo, index, keys, zKey, advance, filter, go, rate, autoOpen, suggestions, auto]);
+  }, [photos, photo, index, keys, zKey, advance, filter, go, rate, autoOpen, suggestions, auto, exporting]);
 
   if (!bridge) {
     return <div className="view"><div className="hero-empty"><div className="hero-icon"><Icon name="photo" size={40} /></div><h2>Culling runs in the desktop app</h2><p className="muted">Open Flightroom on your PC to link a photo folder.</p></div></div>;
@@ -311,8 +327,9 @@ export function CullView({ store, onDevelop }) {
         <label className="toggle-row cull-advance" title="Go to the next photo after rating">
           <input type="checkbox" checked={advance} onChange={() => actions.setCullSettings({ cullAdvance: !advance })} />Auto-advance
         </label>
-        <button className="btn btn-sm" onClick={() => open(folder)} title="Look for new files"><Icon name="refresh" size={14} />Reload</button>
+        <button className="btn btn-sm" onClick={() => open(folder, true)} title="Look for new files"><Icon name="refresh" size={14} />Reload</button>
         {onDevelop && <button className="btn btn-sm" onClick={onDevelop} disabled={!photo} title="Edit this photo (D)"><Icon name="develop" size={14} />Develop</button>}
+        <button className="btn btn-sm" onClick={() => setExporting(true)} disabled={!allPhotos.length} title="Export JPEGs of this photo, the rated ones or the ones shown (Ctrl+Shift+E)"><Icon name="export" size={14} />Export</button>
         <button className={`btn btn-sm${measuredCount ? '' : ' btn-primary'}`} onClick={() => setAutoOpen(true)} disabled={!allPhotos.length}>
           <Icon name="spark" size={14} />
           {autoRun ? `${autoRun.kind === 'apply' ? 'Rating' : 'Analyzing'} ${autoRun.done}/${autoRun.total}` : 'Auto-rate'}
@@ -345,6 +362,8 @@ export function CullView({ store, onDevelop }) {
         </div>
       )}
       {toast && <div className="cull-toast">{toast}</div>}
+      {exporting && <Suspense fallback={null}><ExportModal photo={photo} photos={allPhotos} shown={filter === 'rejects' ? allPhotos : photos} meta={meta} folder={list.folder}
+        onClose={() => setExporting(false)} onDone={(msg) => { setExporting(false); setToast(msg); }} /></Suspense>}
       {autoOpen && (
         <AutoRatePanel photos={allPhotos} measuredCount={measuredCount} suggestions={suggestions} run={autoRun}
           applicable={allPhotos.filter((p) => suggestions[p.id] && autoMayRate(p) && photoRating(p, meta[p.id]) !== suggestions[p.id].stars).length}
