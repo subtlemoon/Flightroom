@@ -432,19 +432,19 @@ fn crisp(mut m: Img) -> Img {
 
 // --- the models -----------------------------------------------------------------
 
-/// IS-Net (general use) on a picture, at 1024 x 1024: how sure it is each spot is the subject.
-fn isnet(ai: &Ai, rgb: &Img) -> Result<Img, String> {
+/// BiRefNet (general use) on a picture, at 1024 x 1024: how sure it is each spot is the subject.
+fn salient(ai: &Ai, rgb: &Img) -> Result<Img, String> {
+    const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
+    const STD: [f32; 3] = [0.229, 0.224, 0.225];
     let small = rgb.resize(1024, 1024);
     let mut x = vec![0.0f32; 3 * 1024 * 1024];
     for (k, px) in small.v.chunks_exact(3).enumerate() {
         for ch in 0..3 {
-            x[ch * 1024 * 1024 + k] = px[ch] - 0.5;
+            x[ch * 1024 * 1024 + k] = (px[ch] - MEAN[ch]) / STD[ch];
         }
     }
-    let (_, y) = ai.infer("isnet.onnx", vec![1, 3, 1024, 1024], x)?;
-    let (lo, hi) = y.iter().fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
-    let v = y.iter().map(|&v| (v - lo) / (hi - lo).max(1e-6)).collect();
-    Ok(Img { w: 1024, h: 1024, c: 1, v })
+    let (_, y) = ai.infer("birefnet.onnx", vec![1, 3, 1024, 1024], x)?;
+    Ok(Img { w: 1024, h: 1024, c: 1, v: y.iter().map(|v| v.clamp(0.0, 1.0)).collect() })
 }
 
 /// Subject, at the picture's size. A subject that fills only part of the
@@ -452,7 +452,7 @@ fn isnet(ai: &Ai, rgb: &Img) -> Result<Img, String> {
 /// kart's cage) come out as themselves with the background between them.
 fn subject(ai: &Ai, rgb: &Img) -> Result<Img, String> {
     let (w, h) = (rgb.w, rgb.h);
-    let m = main_subject(isnet(ai, rgb)?).resize(w, h);
+    let m = main_subject(salient(ai, rgb)?).resize(w, h);
     let on: Vec<usize> = (0..w * h).filter(|&k| m.v[k] >= 0.5).collect();
     let Some(&first) = on.first() else { return Ok(m) };
     let (x0, y0, x1, y1) = on.iter().fold((first % w, first / w, first % w, first / w), |(a, b, c, d), &k| {
@@ -467,7 +467,7 @@ fn subject(ai: &Ai, rgb: &Img) -> Result<Img, String> {
         return Ok(m);
     }
     let crop = rgb.crop_resize(bx0 as f32, by0 as f32, cw as f32, ch as f32, cw, ch);
-    let near = isnet(ai, &crop)?.resize(cw, ch);
+    let near = salient(ai, &crop)?.resize(cw, ch);
     let mut v = vec![0.0f32; w * h];
     for y in 0..ch {
         v[(by0 + y) * w + bx0..(by0 + y) * w + bx1].copy_from_slice(&near.v[y * cw..(y + 1) * cw]);

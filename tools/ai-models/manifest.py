@@ -10,7 +10,7 @@ import sys
 d = sys.argv[1]
 RUNTIME = {'windows': ['onnxruntime.dll', 'DirectML.dll'], 'linux': ['libonnxruntime.so']}
 FEATURES = {
-    'subject': ['isnet.onnx'],
+    'subject': ['birefnet.onnx'],
     'landscape': ['ade20k.onnx'],
     'people': ['ade20k.onnx', 'selfie_multiclass.onnx'],
     'denoise': ['scunet.onnx'],

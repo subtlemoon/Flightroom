@@ -4,7 +4,7 @@
 # and ship: Apache-2.0 / MIT). Run by .github/workflows/ai-models.yml, which
 # uploads the result to the ai-models-1 release that the app downloads from.
 #
-#   isnet.onnx              Subject (IS-Net general use, via rembg)
+#   birefnet.onnx           Subject (BiRefNet general, Swin-tiny backbone, via rembg)
 #   ade20k.onnx             Sky, landscape and where people are (DeepLab v3+ Xception, ADE20K)
 #   selfie_multiclass.onnx  People's parts: face and body skin, hair, clothes (MediaPipe)
 #   scunet.onnx             AI Denoise (SCUNet, real-noise PSNR weights)
@@ -18,7 +18,7 @@ mkdir -p "$SRC"
 get() { [ -f "$SRC/$2" ] || curl -fsSL --retry 4 -o "$SRC/$2" "$1"; }
 
 ORT=1.24.4 DML=1.15.4
-get "https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx" isnet.onnx
+get "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx" birefnet.onnx
 get "https://storage.googleapis.com/download.tensorflow.org/models/deeplabv3_xception_ade20k_train_2018_05_29.tar.gz" deeplab.tar.gz
 get "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite" selfie.tflite
 get "https://github.com/cszn/KAIR/releases/download/v1.0/scunet_color_real_psnr.pth" scunet.pth
@@ -39,7 +39,7 @@ python -m tf2onnx.convert --graphdef "$SRC/deeplabv3_xception_ade20k_train/froze
 python "$HERE/fixscales.py" "$SRC/ade20k.raw.onnx" "$SRC/ade20k.onnx"
 python -m tf2onnx.convert --tflite "$SRC/selfie.tflite" --opset 17 --output "$OUT/selfie_multiclass.onnx"
 python "$HERE/scunet_export.py" "$SRC/scunet.pth" "$SRC/scunet.onnx" 256
-for m in isnet ade20k scunet; do
+for m in birefnet ade20k scunet; do
   python "$HERE/halve.py" "$SRC/$m.onnx" "$OUT/$m.onnx"
   python "$HERE/check.py" "$SRC/$m.onnx" "$OUT/$m.onnx"
 done
