@@ -146,7 +146,7 @@ impl Photos {
             }
         }
         let ext = lib::ext_of(&p.to_string_lossy());
-        let info = self.io.run(|| fs::File::open(p).map(|f| lib::read_photo_info(&f, &ext)))?;
+        let info = self.io.run(|| lib::FileSource::open(p).map(|f| lib::read_photo_info(&f, &ext)))?;
         self.info.lock().unwrap().insert(p.to_path_buf(), Cached { key: key.clone(), info: info.clone() });
         Ok((key, info))
     }
@@ -179,7 +179,7 @@ pub fn read_part(p: &Path, part: &lib::JpegPart) -> std::io::Result<Vec<u8>> {
     if len > lib::MAX_PART {
         return Err(bad("is too large"));
     }
-    let buf = lib::Source::get(&f, part.offset, len as usize);
+    let buf = lib::read_at(&f, part.offset, len as usize);
     if buf.len() as u64 != len {
         return Err(bad("couldn't be read in full"));
     }

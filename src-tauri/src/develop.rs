@@ -140,37 +140,18 @@ impl Raw {
         })
     }
 
-    /// Normalized sensor value at (x, y) of the cropped image, mirrored at the edges.
+    /// Normalized values of row y of the cropped image at columns `xs` (all inside it).
     #[inline]
-    fn at(&self, x: isize, y: isize) -> f32 {
-        let x = mirror(x, self.w);
-        let y = mirror(y, self.h);
-        let v = self.data[(y + self.oy) * self.stride + x + self.ox] as f32;
-        ((v - self.black[y & 1][x & 1]) * self.scale[y & 1][x & 1]).max(-0.02)
-    }
-
-    #[inline]
-    fn color(&self, x: usize, y: usize) -> u8 {
-        self.cfa[y & 1][x & 1]
-    }
-
-    /// One RGB value per 2x2 sensor block (top-left at 2bx, 2by).
-    #[inline]
-    fn binned(&self, bx: usize, by: usize) -> [f32; 3] {
-        let mut out = [0f32; 3];
-        let mut n = [0f32; 3];
-        for dy in 0..2 {
-            for dx in 0..2 {
-                let (x, y) = (2 * bx + dx, 2 * by + dy);
-                let c = self.color(x, y) as usize;
-                out[c] += self.at(x as isize, y as isize);
-                n[c] += 1.0;
-            }
+    fn norm_row(&self, y: usize, xs: &[usize], out: &mut [f32]) {
+        let line = &self.data[(y + self.oy) * self.stride + self.ox..];
+        let (b, s) = (self.black[y & 1], self.scale[y & 1]);
+        for (o, &x) in out.iter_mut().zip(xs) {
+            *o = ((line[x] as f32 - b[x & 1]) * s[x & 1]).max(-0.02);
         }
-        [out[0] / n[0].max(1.0), out[1] / n[1].max(1.0), out[2] / n[2].max(1.0)]
     }
 
-    /// The whole photo with its long side at most `edge` pixels.
+    /// The whole photo with its long side at most `edge` pixels. Each 2x2 block
+    /// of sensor pixels becomes one RGB pixel.
     pub fn overview(&self, edge: usize, dn: Option<(&[u16], f32)>) -> (usize, usize, Vec<u16>) {
         let (bw, bh) = (self.w / 2, self.h / 2);
         let s = (edge as f64 / bw.max(bh) as f64).min(1.0);
@@ -178,15 +159,32 @@ impl Raw {
         let dh = ((bh as f64 * s).round() as usize).max(1);
         let xw = weights(bw, dw);
         let yw = weights(bh, dh);
+        // The colour of each of a block's 4 pixels, and how many of each colour it has.
+        let col = [self.cfa[0][0], self.cfa[0][1], self.cfa[1][0], self.cfa[1][1]].map(|c| c as usize);
+        let mut n = [0f32; 3];
+        for c in col {
+            n[c] += 1.0;
+        }
+        let n = n.map(|v| v.max(1.0));
+        let xs: Vec<usize> = (0..2 * bw).collect();
         let mut out = vec![0u16; dw * dh * 3];
         out.par_chunks_mut(dw * 3).enumerate().for_each(|(oy, row)| {
             let mut acc = vec![0f32; dw * 3];
             let mut line = vec![[0f32; 3]; bw];
+            let (mut top, mut bottom) = (vec![0f32; 2 * bw], vec![0f32; 2 * bw]);
             for &(by, wy) in &yw[oy] {
+                self.norm_row(2 * by, &xs, &mut top);
+                self.norm_row(2 * by + 1, &xs, &mut bottom);
                 for (bx, px) in line.iter_mut().enumerate() {
+                    let mut v = [0f32; 3];
+                    v[col[0]] += top[2 * bx];
+                    v[col[1]] += top[2 * bx + 1];
+                    v[col[2]] += bottom[2 * bx];
+                    v[col[3]] += bottom[2 * bx + 1];
+                    let v = [v[0] / n[0], v[1] / n[1], v[2] / n[2]];
                     *px = match dn {
-                        Some((d, amt)) => mix(self.binned(bx, by), dn_block(d, self.w, bx, by), amt),
-                        None => self.binned(bx, by),
+                        Some((d, amt)) => mix(v, dn_block(d, self.w, bx, by), amt),
+                        None => v,
                     };
                 }
                 for (ox, taps) in xw.iter().enumerate() {
@@ -206,58 +204,72 @@ impl Raw {
         (dw, dh, out)
     }
 
-    /// Full-resolution RGB of a region (Malvar-He-Cutler demosaicing).
+    /// Full-resolution RGB of a region (Malvar-He-Cutler demosaicing). Rows are
+    /// done in bands, each normalizing its sensor values once (with the 2 rows
+    /// and columns around it the 5x5 filter reads, mirrored at the photo's edges).
     pub fn demosaic(&self, x0: usize, y0: usize, w: usize, h: usize, dn: Option<(&[u16], f32)>) -> Vec<f32> {
+        const BAND: usize = 32;
+        let pw = w + 4;
+        let xs: Vec<usize> = (0..pw).map(|i| mirror((x0 + i) as isize - 2, self.w)).collect();
         let mut out = vec![0f32; w * h * 3];
-        out.par_chunks_mut(w * 3).enumerate().for_each(|(ry, row)| {
-            let y = y0 + ry;
-            for rx in 0..w {
-                let x = x0 + rx;
-                let mut px = self.mhc(x as isize, y as isize);
-                if let Some((d, amt)) = dn {
-                    px = mix(px, dn_at(d, (y * self.w + x) * 3), amt);
+        out.par_chunks_mut(w * 3 * BAND).enumerate().for_each(|(band, chunk)| {
+            let rows = chunk.len() / (w * 3);
+            let top = y0 + band * BAND;
+            let mut norm = vec![0f32; pw * (rows + 4)];
+            for (i, line) in norm.chunks_exact_mut(pw).enumerate() {
+                self.norm_row(mirror((top + i) as isize - 2, self.h), &xs, line);
+            }
+            for (r, row) in chunk.chunks_exact_mut(w * 3).enumerate() {
+                let y = top + r;
+                let cfa = self.cfa[y & 1];
+                for (rx, px) in row.chunks_exact_mut(3).enumerate() {
+                    let x = x0 + rx;
+                    let mut v = mhc(&norm, (r + 2) * pw + rx + 2, pw, cfa[x & 1], cfa[(x + 1) & 1]);
+                    if let Some((d, amt)) = dn {
+                        v = mix(v, dn_at(d, (y * self.w + x) * 3), amt);
+                    }
+                    px.copy_from_slice(&v);
                 }
-                row[rx * 3..rx * 3 + 3].copy_from_slice(&px);
             }
         });
         out
     }
+}
 
-    #[inline]
-    fn mhc(&self, x: isize, y: isize) -> [f32; 3] {
-        let f = |dx: isize, dy: isize| self.at(x + dx, y + dy);
-        let c = f(0, 0);
-        let col = self.color(mirror(x, self.w), mirror(y, self.h));
-        let cross = f(0, -1) + f(0, 1) + f(-1, 0) + f(1, 0);
-        let far = f(0, -2) + f(0, 2) + f(-2, 0) + f(2, 0);
-        let diag = f(-1, -1) + f(1, -1) + f(-1, 1) + f(1, 1);
-        let mut px = [0f32; 3];
-        if col == 1 {
-            // Green pixel: red and blue come from its row or column neighbours.
-            let horiz = f(-1, 0) + f(1, 0);
-            let vert = f(0, -1) + f(0, 1);
-            let hfar = f(-2, 0) + f(2, 0);
-            let vfar = f(0, -2) + f(0, 2);
-            let along_row = (5.0 * c + 4.0 * horiz - hfar - diag + 0.5 * vfar) / 8.0;
-            let along_col = (5.0 * c + 4.0 * vert - vfar - diag + 0.5 * hfar) / 8.0;
-            let row_color = self.color(mirror(x + 1, self.w), mirror(y, self.h));
-            px[1] = c;
-            if row_color == 0 {
-                px[0] = along_row;
-                px[2] = along_col;
-            } else {
-                px[2] = along_row;
-                px[0] = along_col;
-            }
+/// Malvar-He-Cutler at index `i` of normalized sensor values `n` (rows `pw` long,
+/// 2 pixels of room around it): `col` is its colour, `next` the colour right of it.
+#[inline]
+fn mhc(n: &[f32], i: usize, pw: usize, col: u8, next: u8) -> [f32; 3] {
+    let (up, down, up2, down2) = (i - pw, i + pw, i - 2 * pw, i + 2 * pw);
+    let c = n[i];
+    let cross = n[up] + n[down] + n[i - 1] + n[i + 1];
+    let far = n[up2] + n[down2] + n[i - 2] + n[i + 2];
+    let diag = n[up - 1] + n[up + 1] + n[down - 1] + n[down + 1];
+    let mut px = [0f32; 3];
+    if col == 1 {
+        // Green pixel: red and blue come from its row or column neighbours.
+        let horiz = n[i - 1] + n[i + 1];
+        let vert = n[up] + n[down];
+        let hfar = n[i - 2] + n[i + 2];
+        let vfar = n[up2] + n[down2];
+        let along_row = (5.0 * c + 4.0 * horiz - hfar - diag + 0.5 * vfar) / 8.0;
+        let along_col = (5.0 * c + 4.0 * vert - vfar - diag + 0.5 * hfar) / 8.0;
+        px[1] = c;
+        if next == 0 {
+            px[0] = along_row;
+            px[2] = along_col;
         } else {
-            let g = (4.0 * c + 2.0 * cross - far) / 8.0;
-            let other = (6.0 * c + 2.0 * diag - 1.5 * far) / 8.0;
-            px[1] = g;
-            px[col as usize] = c;
-            px[2 - col as usize] = other;
+            px[2] = along_row;
+            px[0] = along_col;
         }
-        px
+    } else {
+        let g = (4.0 * c + 2.0 * cross - far) / 8.0;
+        let other = (6.0 * c + 2.0 * diag - 1.5 * far) / 8.0;
+        px[1] = g;
+        px[col as usize] = c;
+        px[2 - col as usize] = other;
     }
+    px
 }
 
 #[inline]
@@ -338,15 +350,28 @@ pub fn shrink(src: &[f32], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<f3
     out
 }
 
-fn frame(w: usize, h: usize, data: impl IntoIterator<Item = u16>, len: usize) -> Vec<u8> {
-    let mut out = Vec::with_capacity(16 + len * 2);
-    out.extend_from_slice(b"FRIM");
-    out.extend_from_slice(&(w as u32).to_le_bytes());
-    out.extend_from_slice(&(h as u32).to_le_bytes());
-    out.extend_from_slice(&3u32.to_le_bytes());
-    for v in data {
-        out.extend_from_slice(&v.to_le_bytes());
+/// The answer to an image request: header, then the half floats (little-endian).
+fn frame(w: usize, h: usize, data: &[u16]) -> Vec<u8> {
+    const CHUNK: usize = 1 << 16;
+    let mut out = vec![0u8; 16 + data.len() * 2];
+    for (i, v) in [u32::from_le_bytes(*b"FRIM"), w as u32, h as u32, 3].into_iter().enumerate() {
+        out[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
     }
+    out[16..].par_chunks_mut(2 * CHUNK).zip(data.par_chunks(CHUNK)).for_each(|(o, d)| {
+        for (b, v) in o.chunks_exact_mut(2).zip(d) {
+            b.copy_from_slice(&v.to_le_bytes());
+        }
+    });
+    out
+}
+
+/// Floats as half-float bits, converted in parallel (and with the CPU's own
+/// conversion instructions where it has them).
+fn f16_bits(data: &[f32]) -> Vec<u16> {
+    use half::slice::{HalfBitsSliceExt, HalfFloatSliceExt};
+    const CHUNK: usize = 1 << 16;
+    let mut out = vec![0u16; data.len()];
+    out.par_chunks_mut(CHUNK).zip(data.par_chunks(CHUNK)).for_each(|(o, d)| o.reinterpret_cast_mut::<f16>().convert_from_f32_slice(d));
     out
 }
 
@@ -405,7 +430,7 @@ impl Develop {
         let raw = self.raw(p, keep)?;
         let d = if dn > 0 { self.denoised(app, &raw) } else { None };
         let (w, h, data) = raw.overview(edge, d.as_deref().map(|d| (d.as_slice(), dn as f32 / 100.0)));
-        let bytes = Arc::new(frame(w, h, data, w * h * 3));
+        let bytes = Arc::new(frame(w, h, &data));
         let mut ov = self.overviews.lock().unwrap();
         ov.retain(|o| o.0 != p);
         ov.push_front((p.to_path_buf(), key, edge, bytes.clone()));
@@ -477,8 +502,7 @@ pub fn handle(app: &AppHandle, kind: &str, q: &HashMap<String, String>) -> HttpR
             if ow != w || oh != h {
                 rgb = shrink(&rgb, w, h, ow, oh);
             }
-            let len = rgb.len();
-            respond(200, "application/octet-stream", frame(ow, oh, rgb.into_iter().map(|v| f16::from_f32(v).to_bits()), len))
+            respond(200, "application/octet-stream", frame(ow, oh, &f16_bits(&rgb)))
         }
         _ => photos::not_found(),
     }
@@ -808,7 +832,7 @@ pub async fn export_finish(app: AppHandle, job: String, cancel: Option<bool>) ->
 /// The Exif block of the camera's own preview, marked upright (exports are
 /// already rotated), so exports keep the camera, lens and exposure details.
 fn camera_exif(p: &Path) -> Option<Vec<u8>> {
-    let f = std::fs::File::open(p).ok()?;
+    let f = lib::FileSource::open(p).ok()?;
     let info = lib::read_photo_info(&f, &lib::ext_of(&p.to_string_lossy()));
     let part = info.preview?;
     let head = lib::Source::get(&f, part.offset, (part.length.unwrap_or(256 * 1024) as usize).min(256 * 1024));
@@ -892,6 +916,198 @@ mod tests {
         assert!(check_tile(0, 0, 1 << 33, 1 << 31, usize::MAX, usize::MAX, 0).is_err());
     }
 
+    /// A w x h Bayer sensor image of made-up values, cropped at (ox, oy) inside a bigger one.
+    fn synthetic(w: usize, h: usize, ox: usize, oy: usize) -> Raw {
+        let stride = w + ox + 3;
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let data = (0..stride * (h + oy + 2))
+            .map(|i| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                // Smooth gradients with noise and a few clipped and below-black values.
+                let (x, y) = ((i % stride) as u64, (i / stride) as u64);
+                ((x * 7 + y * 3) % 12000 + seed % 2000 + if seed % 97 == 0 { 16000 } else { 0 }) as u16
+            })
+            .collect();
+        Raw {
+            path: PathBuf::new(),
+            key: String::new(),
+            data,
+            stride,
+            ox,
+            oy,
+            w,
+            h,
+            cfa: if (ox + oy) % 2 == 0 { [[0, 1], [1, 2]] } else { [[1, 0], [2, 1]] },
+            black: [[600.0, 601.0], [599.0, 600.5]],
+            scale: [[1.0 / 15000.0, 1.0 / 15001.0], [1.0 / 14999.0, 1.0 / 15000.5]],
+            wb: [2.0, 1.0, 1.5],
+            matrices: Vec::new(),
+            make: String::new(),
+            model: String::new(),
+        }
+    }
+
+    // --- the straightforward versions, to check the fast ones against ---------
+
+    fn ref_at(r: &Raw, x: isize, y: isize) -> f32 {
+        let x = mirror(x, r.w);
+        let y = mirror(y, r.h);
+        let v = r.data[(y + r.oy) * r.stride + x + r.ox] as f32;
+        ((v - r.black[y & 1][x & 1]) * r.scale[y & 1][x & 1]).max(-0.02)
+    }
+
+    fn ref_binned(r: &Raw, bx: usize, by: usize) -> [f32; 3] {
+        let mut out = [0f32; 3];
+        let mut n = [0f32; 3];
+        for dy in 0..2 {
+            for dx in 0..2 {
+                let (x, y) = (2 * bx + dx, 2 * by + dy);
+                let c = r.cfa[y & 1][x & 1] as usize;
+                out[c] += ref_at(r, x as isize, y as isize);
+                n[c] += 1.0;
+            }
+        }
+        [out[0] / n[0].max(1.0), out[1] / n[1].max(1.0), out[2] / n[2].max(1.0)]
+    }
+
+    fn ref_overview(r: &Raw, edge: usize, dn: Option<(&[u16], f32)>) -> (usize, usize, Vec<u16>) {
+        let (bw, bh) = (r.w / 2, r.h / 2);
+        let s = (edge as f64 / bw.max(bh) as f64).min(1.0);
+        let dw = ((bw as f64 * s).round() as usize).max(1);
+        let dh = ((bh as f64 * s).round() as usize).max(1);
+        let (xw, yw) = (weights(bw, dw), weights(bh, dh));
+        let mut out = vec![0u16; dw * dh * 3];
+        for (oy, row) in out.chunks_mut(dw * 3).enumerate() {
+            let mut acc = vec![0f32; dw * 3];
+            let mut line = vec![[0f32; 3]; bw];
+            for &(by, wy) in &yw[oy] {
+                for (bx, px) in line.iter_mut().enumerate() {
+                    *px = match dn {
+                        Some((d, amt)) => mix(ref_binned(r, bx, by), dn_block(d, r.w, bx, by), amt),
+                        None => ref_binned(r, bx, by),
+                    };
+                }
+                for (ox, taps) in xw.iter().enumerate() {
+                    for &(bx, wx) in taps {
+                        let w = wx * wy;
+                        let p = line[bx];
+                        acc[ox * 3] += p[0] * w;
+                        acc[ox * 3 + 1] += p[1] * w;
+                        acc[ox * 3 + 2] += p[2] * w;
+                    }
+                }
+            }
+            for (o, a) in row.iter_mut().zip(acc) {
+                *o = f16::from_f32(a).to_bits();
+            }
+        }
+        (dw, dh, out)
+    }
+
+    fn ref_mhc(r: &Raw, x: isize, y: isize) -> [f32; 3] {
+        let f = |dx: isize, dy: isize| ref_at(r, x + dx, y + dy);
+        let c = f(0, 0);
+        let col = r.cfa[mirror(y, r.h) & 1][mirror(x, r.w) & 1];
+        let cross = f(0, -1) + f(0, 1) + f(-1, 0) + f(1, 0);
+        let far = f(0, -2) + f(0, 2) + f(-2, 0) + f(2, 0);
+        let diag = f(-1, -1) + f(1, -1) + f(-1, 1) + f(1, 1);
+        let mut px = [0f32; 3];
+        if col == 1 {
+            let horiz = f(-1, 0) + f(1, 0);
+            let vert = f(0, -1) + f(0, 1);
+            let hfar = f(-2, 0) + f(2, 0);
+            let vfar = f(0, -2) + f(0, 2);
+            let along_row = (5.0 * c + 4.0 * horiz - hfar - diag + 0.5 * vfar) / 8.0;
+            let along_col = (5.0 * c + 4.0 * vert - vfar - diag + 0.5 * hfar) / 8.0;
+            let row_color = r.cfa[mirror(y, r.h) & 1][mirror(x + 1, r.w) & 1];
+            px[1] = c;
+            if row_color == 0 {
+                px[0] = along_row;
+                px[2] = along_col;
+            } else {
+                px[2] = along_row;
+                px[0] = along_col;
+            }
+        } else {
+            let g = (4.0 * c + 2.0 * cross - far) / 8.0;
+            let other = (6.0 * c + 2.0 * diag - 1.5 * far) / 8.0;
+            px[1] = g;
+            px[col as usize] = c;
+            px[2 - col as usize] = other;
+        }
+        px
+    }
+
+    fn ref_demosaic(r: &Raw, x0: usize, y0: usize, w: usize, h: usize, dn: Option<(&[u16], f32)>) -> Vec<f32> {
+        let mut out = vec![0f32; w * h * 3];
+        for ry in 0..h {
+            for rx in 0..w {
+                let (x, y) = (x0 + rx, y0 + ry);
+                let mut px = ref_mhc(r, x as isize, y as isize);
+                if let Some((d, amt)) = dn {
+                    px = mix(px, dn_at(d, (y * r.w + x) * 3), amt);
+                }
+                out[(ry * w + rx) * 3..][..3].copy_from_slice(&px);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn frames_carry_exact_half_floats() {
+        let mut vals: Vec<f32> = (0..200_003).map(|i| (i as f32 - 1000.0) * 0.000_731).collect();
+        vals.extend([0.0, -0.0, 1e-8, 65504.0, 70000.0, -70000.0, f32::INFINITY, f32::NEG_INFINITY, 0.333_333_34, 6.1e-5]);
+        let bits = f16_bits(&vals);
+        assert!(bits.iter().zip(&vals).all(|(&b, &v)| b == f16::from_f32(v).to_bits()));
+        let f = frame(7, 3, &bits);
+        assert_eq!(&f[..16], [b"FRIM".as_slice(), &7u32.to_le_bytes(), &3u32.to_le_bytes(), &3u32.to_le_bytes()].concat());
+        assert!(f[16..].chunks_exact(2).zip(&bits).all(|(b, &v)| u16::from_le_bytes([b[0], b[1]]) == v));
+    }
+
+    #[test]
+    fn fast_overview_and_demosaic_match_the_straightforward_ones() {
+        let same = |a: &[f32], b: &[f32]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits());
+        // Every CFA phase, odd sizes, photos smaller than the filter and regions at every edge.
+        for (w, h, ox, oy) in [(97, 61, 0, 0), (96, 64, 1, 0), (64, 33, 0, 1), (35, 51, 1, 1), (5, 4, 2, 1), (3, 3, 0, 0)] {
+            let r = synthetic(w, h, ox, oy);
+            let dn: Vec<u16> = (0..w * h * 3).map(|i| f16::from_f32((i % 251) as f32 / 251.0).to_bits()).collect();
+            for d in [None, Some((dn.as_slice(), 0.4))] {
+                for edge in [8, 33, 64, 4096] {
+                    assert_eq!(r.overview(edge, d), ref_overview(&r, edge, d), "overview {w}x{h} +{ox},{oy} edge {edge}");
+                }
+                for (x0, y0, rw, rh) in [(0, 0, w, h), (1, 2, w - 1, h - 2), (w - 2, h - 3, 2, 3), (0, h - 1, w, 1), (w / 2, 0, w - w / 2, h)] {
+                    assert!(same(&r.demosaic(x0, y0, rw, rh, d), &ref_demosaic(&r, x0, y0, rw, rh, d)), "demosaic {w}x{h} +{ox},{oy} at {x0},{y0} {rw}x{rh}");
+                }
+            }
+        }
+        // Several bands in parallel, on a bigger photo.
+        let r = synthetic(301, 207, 1, 1);
+        assert!(same(&r.demosaic(3, 5, 290, 199, None), &ref_demosaic(&r, 3, 5, 290, 199, None)));
+    }
+
+    /// cargo test --release --lib bench_develop -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn bench_develop() {
+        let raw = synthetic(8256, 5504, 2, 1);
+        for _ in 0..2 {
+            let t = std::time::Instant::now();
+            let (w, h, ov) = raw.overview(2560, None);
+            println!("overview 2560: {:?} ({w}x{h})", t.elapsed());
+            let t = std::time::Instant::now();
+            let f = frame(w, h, &ov);
+            println!("frame: {:?} ({} bytes)", t.elapsed(), f.len());
+            let t = std::time::Instant::now();
+            let rgb = raw.demosaic(1000, 1000, 4096, 4096, None);
+            println!("demosaic 4096^2: {:?}", t.elapsed());
+            let t = std::time::Instant::now();
+            let f = frame(4096, 4096, &f16_bits(&rgb));
+            println!("region frame (f16): {:?} ({} bytes)", t.elapsed(), f.len());
+        }
+    }
+
     #[test]
     fn mirror_stays_inside() {
         assert_eq!(mirror(-1, 10), 1);
@@ -919,11 +1135,11 @@ mod tests {
         let mean: f32 = reg.iter().sum::<f32>() / reg.len() as f32;
         assert!(mean > 0.0 && mean < 1.0);
         if let Ok(out) = std::env::var("FLIGHTROOM_DUMP") {
-            std::fs::write(&out, frame(w, h, data.iter().copied(), data.len())).unwrap();
+            std::fs::write(&out, frame(w, h, &data)).unwrap();
             let info = serde_json::json!({ "width": raw.w, "height": raw.h, "orientation": 1, "asShot": raw.wb, "matrices": raw.matrices });
             std::fs::write(format!("{out}.json"), info.to_string()).unwrap();
             let reg = raw.demosaic(3000, 2000, 1200, 800, None);
-            std::fs::write(format!("{out}.region"), frame(1200, 800, reg.iter().map(|v| f16::from_f32(*v).to_bits()), reg.len())).unwrap();
+            std::fs::write(format!("{out}.region"), frame(1200, 800, &f16_bits(&reg))).unwrap();
         }
     }
 
@@ -940,7 +1156,7 @@ mod tests {
         let out = crate::ai::denoise(&ai, (w, h), raw.wb, |x, y, tw, th| raw.demosaic(cx + x, cy + y, tw, th, None), &AtomicBool::new(false), |_, _| {}).unwrap();
         println!("denoise {w}x{h} in {:?}", t.elapsed());
         let before = raw.demosaic(cx, cy, w, h, None);
-        std::fs::write(dir.join("dn-before"), frame(w, h, before.iter().map(|v| f16::from_f32(*v).to_bits()), before.len())).unwrap();
-        std::fs::write(dir.join("dn-after"), frame(w, h, out.iter().copied(), out.len())).unwrap();
+        std::fs::write(dir.join("dn-before"), frame(w, h, &f16_bits(&before))).unwrap();
+        std::fs::write(dir.join("dn-after"), frame(w, h, &out)).unwrap();
     }
 }

@@ -9,6 +9,7 @@
 // uncropped, at the size of its mask images) and come back as 8-bit images of
 // that same size, their edges traced against the picture with a guided filter.
 
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -811,6 +812,43 @@ fn tile_span(p: usize, n: usize, len: usize) -> (usize, usize) {
     (if p == 0 { 0 } else { p + DN_MARGIN }, if p + n >= len { len } else { p + n - DN_MARGIN })
 }
 
+/// The model's input for a tw x th tile of linear camera RGB: planar, white
+/// balanced with a display gamma, edge pixels repeated out to the tile size.
+fn dn_input(src: &[f32], tw: usize, th: usize, gain: [f32; 3]) -> Vec<f32> {
+    let n = DN_TILE * DN_TILE;
+    let mut x = vec![0f32; 3 * n];
+    let (r, gb) = x.split_at_mut(n);
+    let (g, b) = gb.split_at_mut(n);
+    r.par_chunks_mut(DN_TILE).zip(g.par_chunks_mut(DN_TILE)).zip(b.par_chunks_mut(DN_TILE)).enumerate().for_each(|(ty, ((r, g), b))| {
+        for tx in 0..DN_TILE {
+            let k = (ty.min(th - 1) * tw + tx.min(tw - 1)) * 3;
+            for (c, plane) in [&mut *r, &mut *g, &mut *b].into_iter().enumerate() {
+                plane[tx] = (src[k + c] * gain[c]).clamp(0.0, 1.0).powf(1.0 / 2.2);
+            }
+        }
+    });
+    x
+}
+
+/// Writes the model's answer `y` for the tile at (x0, y0) into `out` (w wide):
+/// columns wx0..wx1 of rows wy0..wy1, back to linear camera RGB as half floats.
+fn dn_output(out: &mut [u16], w: usize, (x0, y0, tw): (usize, usize, usize), (wx0, wx1, wy0, wy1): (usize, usize, usize, usize), src: &[f32], y: &[f32], gain: [f32; 3]) {
+    let n = DN_TILE * DN_TILE;
+    out[wy0 * w * 3..wy1 * w * 3].par_chunks_mut(w * 3).enumerate().for_each(|(i, row)| {
+        let ty = wy0 + i - y0;
+        for px in wx0..wx1 {
+            let tx = px - x0;
+            let k = (ty * tw + tx) * 3;
+            // Clipped highlights carry no noise worth removing; keep them exact.
+            let bright = (0..3).any(|c| src[k + c] * gain[c] > 0.98);
+            for c in 0..3 {
+                let v = if bright { src[k + c] } else { y[c * n + ty * DN_TILE + tx].clamp(0.0, 1.0).powf(2.2) / gain[c] };
+                row[px * 3 + c] = half::f16::from_f32(v).to_bits();
+            }
+        }
+    });
+}
+
 /// AI Denoise (SCUNet) over a whole photo. `tile(x, y, w, h)` gives linear camera
 /// RGB; the model sees it white balanced with a display gamma, as it was trained.
 /// Answers half floats (w x h x 3, linear camera RGB like the input).
@@ -827,7 +865,6 @@ pub fn denoise(
     let (xs, ys) = (tile_starts(w), tile_starts(h));
     let total = xs.len() * ys.len();
     let mut out = vec![0u16; w * h * 3];
-    let n = DN_TILE * DN_TILE;
     for (j, &y0) in ys.iter().enumerate() {
         for (i, &x0) in xs.iter().enumerate() {
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
@@ -835,31 +872,9 @@ pub fn denoise(
             }
             let (tw, th) = (DN_TILE.min(w), DN_TILE.min(h));
             let src = tile(x0, y0, tw, th);
-            // Planar input, edge pixels repeated out to the tile size.
-            let mut x = vec![0f32; 3 * n];
-            for ty in 0..DN_TILE {
-                for tx in 0..DN_TILE {
-                    let k = (ty.min(th - 1) * tw + tx.min(tw - 1)) * 3;
-                    for c in 0..3 {
-                        x[c * n + ty * DN_TILE + tx] = (src[k + c] * gain[c]).clamp(0.0, 1.0).powf(1.0 / 2.2);
-                    }
-                }
-            }
-            let (_, y) = ai.infer(DN_MODEL, vec![1, 3, DN_TILE as i64, DN_TILE as i64], x)?;
-            let (wx0, wx1) = tile_span(x0, tw, w);
-            let (wy0, wy1) = tile_span(y0, th, h);
-            for py in wy0..wy1 {
-                for px in wx0..wx1 {
-                    let (tx, ty) = (px - x0, py - y0);
-                    let k = (ty * tw + tx) * 3;
-                    // Clipped highlights carry no noise worth removing; keep them exact.
-                    let bright = (0..3).any(|c| src[k + c] * gain[c] > 0.98);
-                    for c in 0..3 {
-                        let v = if bright { src[k + c] } else { y[c * n + ty * DN_TILE + tx].clamp(0.0, 1.0).powf(2.2) / gain[c] };
-                        out[(py * w + px) * 3 + c] = half::f16::from_f32(v).to_bits();
-                    }
-                }
-            }
+            let (_, y) = ai.infer(DN_MODEL, vec![1, 3, DN_TILE as i64, DN_TILE as i64], dn_input(&src, tw, th, gain))?;
+            let ((wx0, wx1), (wy0, wy1)) = (tile_span(x0, tw, w), tile_span(y0, th, h));
+            dn_output(&mut out, w, (x0, y0, tw), (wx0, wx1, wy0, wy1), &src, &y, gain);
             progress(j * xs.len() + i + 1, total);
         }
     }
@@ -1007,6 +1022,43 @@ mod tests {
         // Sizes whose product overflows are refused, not wrapped around.
         assert!(mask_picture_bytes(usize::MAX, usize::MAX, 16).is_err());
         assert!(mask_picture_bytes(1 << 33, 1 << 31, 0).is_err());
+    }
+
+    #[test]
+    fn denoise_tiles_go_in_and_out_as_before() {
+        let n = DN_TILE * DN_TILE;
+        let gain = [2.1, 1.0, 1.6];
+        for (w, h, x0, y0, tw, th) in [(700, 500, 208, 0, 256, 256), (120, 90, 0, 0, 120, 90), (300, 256, 44, 0, 256, 256)] {
+            let src: Vec<f32> = (0..tw * th * 3).map(|i| ((i * 7919) % 1000) as f32 / 900.0).collect();
+            // As written before: one pixel at a time.
+            let mut want = vec![0f32; 3 * n];
+            for ty in 0..DN_TILE {
+                for tx in 0..DN_TILE {
+                    let k = (ty.min(th - 1) * tw + tx.min(tw - 1)) * 3;
+                    for c in 0..3 {
+                        want[c * n + ty * DN_TILE + tx] = (src[k + c] * gain[c]).clamp(0.0, 1.0).powf(1.0 / 2.2);
+                    }
+                }
+            }
+            assert!(dn_input(&src, tw, th, gain).iter().zip(&want).all(|(a, b)| a.to_bits() == b.to_bits()));
+            let y: Vec<f32> = (0..3 * n).map(|i| ((i * 104_729) % 1000) as f32 / 999.0).collect();
+            let ((wx0, wx1), (wy0, wy1)) = (tile_span(x0, tw, w), tile_span(y0, th, h));
+            let mut expect = vec![7u16; w * h * 3];
+            for py in wy0..wy1 {
+                for px in wx0..wx1 {
+                    let (tx, ty) = (px - x0, py - y0);
+                    let k = (ty * tw + tx) * 3;
+                    let bright = (0..3).any(|c| src[k + c] * gain[c] > 0.98);
+                    for c in 0..3 {
+                        let v = if bright { src[k + c] } else { y[c * n + ty * DN_TILE + tx].clamp(0.0, 1.0).powf(2.2) / gain[c] };
+                        expect[(py * w + px) * 3 + c] = half::f16::from_f32(v).to_bits();
+                    }
+                }
+            }
+            let mut got = vec![7u16; w * h * 3];
+            dn_output(&mut got, w, (x0, y0, tw), (wx0, wx1, wy0, wy1), &src, &y, gain);
+            assert_eq!(got, expect, "{w}x{h} tile at {x0},{y0}");
+        }
     }
 
     #[test]
