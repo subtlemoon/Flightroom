@@ -13,18 +13,26 @@ const HEADER_BYTES: usize = 256 * 1024;
 /// Random access to a file's bytes. `get` returns fewer bytes at the end of the file.
 pub trait Source {
     fn get(&self, offset: u64, length: usize) -> Vec<u8>;
+    /// Total size in bytes (None if unknown).
+    fn size(&self) -> Option<u64>;
 }
 
 impl Source for [u8] {
     fn get(&self, offset: u64, length: usize) -> Vec<u8> {
-        let start = (offset as usize).min(self.len());
+        let start = usize::try_from(offset).unwrap_or(usize::MAX).min(self.len());
         let end = start.saturating_add(length).min(self.len());
         self[start..end].to_vec()
+    }
+    fn size(&self) -> Option<u64> {
+        Some(self.len() as u64)
     }
 }
 
 impl Source for std::fs::File {
     fn get(&self, offset: u64, length: usize) -> Vec<u8> {
+        // Lengths come from the file's own metadata: never allocate past its end.
+        let left = self.size().map_or(0, |n| n.saturating_sub(offset));
+        let length = length.min(usize::try_from(left).unwrap_or(usize::MAX));
         let mut buf = vec![0u8; length];
         let mut done = 0;
         while done < length {
@@ -39,6 +47,9 @@ impl Source for std::fs::File {
         }
         buf.truncate(done);
         buf
+    }
+    fn size(&self) -> Option<u64> {
+        self.metadata().ok().map(|m| m.len())
     }
 }
 
@@ -181,6 +192,9 @@ impl<'a, S: Source + ?Sized> Tiff<'a, S> {
     }
 }
 
+/// Embedded previews are a few MB; a bigger one is a damaged or crafted file.
+pub const MAX_PART: u64 = 256 * 1024 * 1024;
+
 #[derive(Clone, Copy, Debug, Serialize, PartialEq)]
 pub struct JpegPart {
     pub offset: u64,
@@ -224,7 +238,7 @@ fn collect_tiff_jpegs<S: Source + ?Sized>(tiff: &Tiff<S>, ifd: &Ifd, out: &mut V
     let b = tiff.base;
     if t.contains_key(&0x201) && t.contains_key(&0x202) {
         if let (Some(o), Some(l)) = (tiff.num(ifd, 0x201), tiff.num(ifd, 0x202)) {
-            out.push((b + o as u64, l as u64));
+            out.extend(b.checked_add(o as u64).map(|o| (o, l as u64)));
         }
     }
     let compression = tiff.num(ifd, 0x103);
@@ -234,14 +248,14 @@ fn collect_tiff_jpegs<S: Source + ?Sized>(tiff: &Tiff<S>, ifd: &Ifd, out: &mut V
     if let (Some(so), Some(_)) = (t.get(&0x111), t.get(&0x117)) {
         if so.n == 1 && !is_raw_data && (compression == Some(6.0) || (compression == Some(7.0) && subfile == Some(1.0))) {
             if let (Some(o), Some(l)) = (tiff.num(ifd, 0x111), tiff.num(ifd, 0x117)) {
-                out.push((b + o as u64, l as u64));
+                out.extend(b.checked_add(o as u64).map(|o| (o, l as u64)));
             }
         }
     }
     // Panasonic RW2 keeps its preview as a blob in tag 0x2E.
     if let Some(p) = t.get(&0x2e) {
         if p.inline.is_none() && p.offset > 0 {
-            out.push((b + p.offset as u64, p.bytes as u64));
+            out.extend(b.checked_add(p.offset as u64).map(|o| (o, p.bytes as u64)));
         }
     }
 }
@@ -459,8 +473,10 @@ pub fn read_photo_info<S: Source + ?Sized>(src: &S, ext: &str) -> PhotoInfo {
     }
 
     let mut found: Vec<JpegPart> = Vec::new();
+    let size = src.size().unwrap_or(0);
     for (offset, length) in jpegs {
-        if length < 1000 {
+        // Offsets and lengths are the file's own word: keep only parts inside it.
+        if !(1000..=MAX_PART).contains(&length) || offset.checked_add(length).map_or(true, |end| end > size) {
             continue;
         }
         if let Some((width, height)) = jpeg_size(&src.get(offset, (length as usize).min(65536))) {
@@ -524,6 +540,20 @@ pub fn new_xmp(rating: i32) -> String {
     )
 }
 
+/// An XMP packet's bytes as text Flightroom can edit in place. None: blank, so a
+/// new packet may be written. Anything else (not UTF-8, no rdf:Description) is an
+/// error, so metadata Flightroom can't read is never replaced with a new packet.
+pub fn xmp_text(bytes: Vec<u8>) -> Result<Option<String>, String> {
+    let text = String::from_utf8(bytes).map_err(|_| "its XMP isn't UTF-8 text, so Flightroom leaves it unchanged".to_string())?;
+    if text.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}' || c == '\0').is_empty() {
+        return Ok(None);
+    }
+    if !text.contains("<rdf:Description") {
+        return Err("its XMP has no rdf:Description Flightroom can edit, so it is left unchanged".into());
+    }
+    Ok(Some(text))
+}
+
 /// Sets xmp:Rating in an existing XMP packet and leaves everything else untouched
 /// (Lightroom keeps edits, keywords and labels in the same file).
 pub fn set_rating(xmp: Option<&str>, rating: i32) -> String {
@@ -537,7 +567,10 @@ pub fn set_rating(xmp: Option<&str>, rating: i32) -> String {
 pub fn set_jpeg_rating(buf: &[u8], rating: i32) -> Result<Vec<u8>, String> {
     let segs = jpeg_segments(buf);
     let old = segs.iter().find(|s| is_xmp(buf, s));
-    let old_packet = old.map(|s| String::from_utf8_lossy(&buf[(s.data_start + XMP_SIG.len()).min(s.end)..s.end]).into_owned());
+    let old_packet = match old {
+        Some(s) => xmp_text(buf[(s.data_start + XMP_SIG.len()).min(s.end)..s.end].to_vec()).map_err(|e| format!("This JPEG can't be rated: {e}"))?,
+        None => None,
+    };
     let packet = set_rating(old_packet.as_deref(), rating);
     let wrapped = if packet.contains("<?xpacket begin") {
         packet
@@ -698,6 +731,60 @@ mod tests {
     }
 
     const JPEG: [u8; 25] = [0xff, 0xd8, 0xff, 0xe0, 0, 6, 0x4a, 0x46, 0x49, 0x46, 0xff, 0xc0, 0, 11, 8, 0, 200, 1, 44, 1, 1, 0x11, 0, 0xff, 0xd9];
+
+    /// A little-endian TIFF whose IFD0 points at a JPEG `claimed` bytes long (`real` of them in the file).
+    fn tiff_with_jpeg(offset: u32, claimed: u32, real: usize) -> Vec<u8> {
+        let mut t = b"II*\0".to_vec();
+        t.extend(8u32.to_le_bytes());
+        t.extend(2u16.to_le_bytes());
+        for (tag, v) in [(0x201u16, offset), (0x202, claimed)] {
+            t.extend(tag.to_le_bytes());
+            t.extend(4u16.to_le_bytes());
+            t.extend(1u32.to_le_bytes());
+            t.extend(v.to_le_bytes());
+        }
+        t.extend(0u32.to_le_bytes());
+        t.resize(offset as usize, 0);
+        t.extend(JPEG);
+        t.resize(offset as usize + real, 0);
+        t
+    }
+
+    #[test]
+    fn previews_must_lie_inside_the_file() {
+        let ok = tiff_with_jpeg(64, 5000, 5000);
+        let p = read_photo_info(&ok[..], ".nef").preview.unwrap();
+        assert_eq!((p.offset, p.length, p.width), (64, Some(5000), 300));
+        // Claims 4 GB, or runs past the end: no preview rather than a huge read.
+        assert!(read_photo_info(&tiff_with_jpeg(64, u32::MAX, 5000)[..], ".nef").preview.is_none());
+        assert!(read_photo_info(&tiff_with_jpeg(64, 5001, 5000)[..], ".nef").preview.is_none());
+        // The same through a file, whose reads never allocate past its end.
+        let path = std::env::temp_dir().join(format!("flightroom-test-preview-{}.nef", std::process::id()));
+        std::fs::write(&path, tiff_with_jpeg(64, u32::MAX, 5000)).unwrap();
+        let f = std::fs::File::open(&path).unwrap();
+        assert!(read_photo_info(&f, ".nef").preview.is_none());
+        assert_eq!(f.get(64, usize::MAX).len(), 5000);
+        assert!(f.get(u64::MAX, 10).is_empty());
+        drop(f);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn xmp_it_cant_read_is_never_replaced() {
+        assert_eq!(xmp_text(b" \n".to_vec()), Ok(None));
+        assert!(xmp_text(LR_SIDECAR.as_bytes().to_vec()).unwrap().is_some());
+        assert!(xmp_text(vec![0xff, 0xfe, b'<', 0]).is_err());
+        assert!(xmp_text(b"<x:xmpmeta/>".to_vec()).is_err());
+        // A JPEG whose XMP isn't UTF-8 keeps it: rating it is refused.
+        let mut body = XMP_SIG.to_vec();
+        body.extend([0xc3, 0x28, b'<']);
+        let mut j = JPEG[..2].to_vec();
+        j.extend([0xff, 0xe1]);
+        j.extend(((body.len() + 2) as u16).to_be_bytes());
+        j.extend(&body);
+        j.extend(&JPEG[2..]);
+        assert!(set_jpeg_rating(&j, 3).is_err());
+    }
 
     #[test]
     fn reads_jpeg_size() {

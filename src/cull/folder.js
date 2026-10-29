@@ -15,3 +15,14 @@ export function keepFolder(folder, part) {
 
 // Same photos with the same stars: nothing to update.
 export const sameList = (a, b) => a.length === b.length && a.every((p, i) => p.id === b[i].id && p.rating === b[i].rating);
+
+/**
+ * For answers that can arrive out of order (folder scans): next() starts a new
+ * request and current() joins the latest; each returns a check that stays true
+ * only until another request starts.
+ */
+export function latestOnly() {
+  let n = 0;
+  const check = (id) => () => id === n;
+  return { next: () => check(++n), current: () => check(n) };
+}

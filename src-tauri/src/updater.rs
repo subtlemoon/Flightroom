@@ -15,8 +15,8 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
-const LATEST_URL: &str = "https://github.com/subtlemoon/gearcheck/releases/latest/download/latest.json";
-const RELEASE_URL: &str = "https://github.com/subtlemoon/gearcheck/releases/download";
+const LATEST_URL: &str = "https://github.com/subtlemoon/Flightroom/releases/latest/download/latest.json";
+const RELEASE_URL: &str = "https://github.com/subtlemoon/Flightroom/releases/download";
 pub const INSTALLER_PREFIX: &str = "Flightroom-Setup";
 
 #[derive(Clone, Serialize)]

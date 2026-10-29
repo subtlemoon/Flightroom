@@ -517,7 +517,7 @@ pub async fn develop_open(app: AppHandle, id: String, sidecar: Option<String>) -
             as_shot: raw.wb,
             matrices: raw.matrices.clone(),
             camera: format!("{} {}", raw.make, raw.model),
-            saved: saved(&photos, sidecar),
+            saved: saved(&photos, sidecar)?,
             denoised: denoise_file(&app, &raw).exists(),
         })
     })
@@ -536,10 +536,13 @@ pub struct Saved {
     own: HashMap<String, String>,
 }
 
-fn saved(photos: &Photos, sidecar: Option<String>) -> Saved {
-    let text = sidecar.and_then(|s| photos.allowed(&s)).and_then(|s| std::fs::read_to_string(s).ok());
+fn saved(photos: &Photos, sidecar: Option<String>) -> Result<Saved, String> {
+    let text = match sidecar.and_then(|s| photos.allowed(&s)) {
+        Some(s) => photos::read_sidecar(&s)?,
+        None => None,
+    };
     let doc = crate::xmp::Doc::new(text.as_deref().unwrap_or(""));
-    Saved {
+    Ok(Saved {
         settings: doc.all("crs"),
         curves: ["", "Red", "Green", "Blue"]
             .iter()
@@ -549,12 +552,12 @@ fn saved(photos: &Photos, sidecar: Option<String>) -> Saved {
             })
             .collect(),
         own: doc.all("fr"),
-    }
+    })
 }
 
 /// A photo's saved settings without decoding it (for pasting settings and presets onto it).
 #[tauri::command]
-pub fn develop_read(app: AppHandle, sidecar: Option<String>) -> Saved {
+pub fn develop_read(app: AppHandle, sidecar: Option<String>) -> Result<Saved, String> {
     saved(&app.state::<Photos>(), sidecar)
 }
 
@@ -708,11 +711,23 @@ pub struct ExportArgs {
     source: Option<String>,
 }
 
+/// Largest export, in pixels: well above any camera (150 MP) and 750 MB to hold.
+const MAX_EXPORT_PIXELS: usize = 250_000_000;
+
+/// Bytes for an RGB export of this size, or why it can't be made.
+fn export_bytes(w: usize, h: usize) -> Result<usize, String> {
+    if w == 0 || h == 0 || w > 65535 || h > 65535 {
+        return Err(format!("Invalid export size {w} x {h}"));
+    }
+    match w.checked_mul(h) {
+        Some(px) if px <= MAX_EXPORT_PIXELS => Ok(px * 3),
+        _ => Err(format!("Export size {w} x {h} is too large (at most {} megapixels)", MAX_EXPORT_PIXELS / 1_000_000)),
+    }
+}
+
 #[tauri::command]
 pub fn export_begin(app: AppHandle, args: ExportArgs) -> Result<String, String> {
-    if args.width == 0 || args.height == 0 || args.width > 65535 || args.height > 65535 {
-        return Err("Invalid export size".into());
-    }
+    let bytes = export_bytes(args.width, args.height)?;
     let folder = PathBuf::from(&args.folder);
     std::fs::create_dir_all(&folder).map_err(|e| format!("Couldn't create {}: {e}", folder.display()))?;
     let safe: String = args.name.chars().map(|c| if r#"<>:"/\|?*"#.contains(c) || c.is_control() { '_' } else { c }).collect();
@@ -727,9 +742,19 @@ pub fn export_begin(app: AppHandle, args: ExportArgs) -> Result<String, String> 
     let shown = path.to_string_lossy().to_string();
     app.state::<Develop>().exports.lock().unwrap().insert(
         args.job,
-        Export { path, w: args.width, h: args.height, quality: args.quality.clamp(10, 100), source, rgb: vec![0; args.width * args.height * 3] },
+        Export { path, w: args.width, h: args.height, quality: args.quality.clamp(10, 100), source, rgb: vec![0; bytes] },
     );
     Ok(shown)
+}
+
+/// A w x h tile at x, y must lie inside the ew x eh export and come with its RGBA bytes.
+fn check_tile(x: usize, y: usize, w: usize, h: usize, ew: usize, eh: usize, have: usize) -> Result<(), String> {
+    let fits = |a: usize, b: usize, max: usize| a.checked_add(b).is_some_and(|end| end <= max);
+    let need = w.checked_mul(h).and_then(|n| n.checked_mul(4));
+    if !fits(x, w, ew) || !fits(y, h, eh) || need.map_or(true, |n| have < n) {
+        return Err("tile out of range".into());
+    }
+    Ok(())
 }
 
 /// A rendered tile: RGBA bytes, bottom row first (as WebGL reads them).
@@ -744,9 +769,7 @@ pub fn export_tile(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<b
     let dev = app.state::<Develop>();
     let mut exports = dev.exports.lock().unwrap();
     let e = exports.get_mut(&job).ok_or("export was cancelled")?;
-    if x + w > e.w || y + th > e.h || bytes.len() < w * th * 4 {
-        return Err("tile out of range".into());
-    }
+    check_tile(x, y, w, th, e.w, e.h, bytes.len())?;
     for row in 0..th {
         let src = &bytes[(th - 1 - row) * w * 4..(th - row) * w * 4];
         let dst = &mut e.rgb[((y + row) * e.w + x) * 3..((y + row) * e.w + x + w) * 3];
@@ -846,6 +869,27 @@ mod tests {
                 assert!((t - d as f32 / s as f32).abs() < 1e-3);
             }
         }
+    }
+
+    #[test]
+    fn export_sizes_are_checked() {
+        assert_eq!(export_bytes(6000, 4000), Ok(6000 * 4000 * 3));
+        assert_eq!(export_bytes(14204, 10652), Ok(14204 * 10652 * 3));
+        assert!(export_bytes(0, 10).is_err());
+        assert!(export_bytes(65536, 10).is_err());
+        assert!(export_bytes(65535, 65535).unwrap_err().contains("too large"));
+        assert!(export_bytes(20000, 20000).unwrap_err().contains("too large"));
+        assert!(export_bytes(usize::MAX, usize::MAX).is_err());
+    }
+
+    #[test]
+    fn export_tiles_are_checked() {
+        assert!(check_tile(2048, 0, 2048, 2048, 6000, 4000, 2048 * 2048 * 4).is_ok());
+        assert!(check_tile(2048, 0, 2048, 2048, 6000, 4000, 2048 * 2048 * 4 - 1).is_err());
+        assert!(check_tile(4000, 0, 2048, 2048, 6000, 4000, usize::MAX).is_err());
+        // Would wrap around without checked arithmetic.
+        assert!(check_tile(usize::MAX, 0, 2, 1, 6000, 4000, 8).is_err());
+        assert!(check_tile(0, 0, 1 << 33, 1 << 31, usize::MAX, usize::MAX, 0).is_err());
     }
 
     #[test]

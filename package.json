@@ -5,7 +5,7 @@
   "private": true,
   "type": "module",
   "author": "Jaewon",
-  "repository": "https://github.com/subtlemoon/gearcheck",
+  "repository": "https://github.com/subtlemoon/Flightroom",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

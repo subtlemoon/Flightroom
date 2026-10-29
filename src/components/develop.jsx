@@ -12,8 +12,9 @@ import { toggle, useLayout } from '../layout.js';
 import { Filmstrip, photoRating } from './cull.jsx';
 import { imgUrl, ROTATION } from '../cull/previews.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
-import { cachedFolder, keepFolder, sameList } from '../cull/folder.js';
-import { session } from '../develop/session.js';
+import { cachedFolder, keepFolder, latestOnly, sameList } from '../cull/folder.js';
+import { keepSettings, session } from '../develop/session.js';
+import { createSaver } from '../develop/saver.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey } from '../cull/keys.js';
 import {
   COLORS, COLOR_HUES, CURVE_PRESETS, PROFILES, SECTIONS, SLIDER, SLIDERS, TONE_MAPPERS, VIGNETTE_STYLES, WB_PRESETS,
@@ -43,6 +44,12 @@ const HISTORY_PHOTOS = 60;
 // The RAW data stays in memory a while after leaving, so coming straight back is instant.
 const RELEASE_AFTER = 120000;
 let releaseTimer = 0;
+// Outlives the view, so a save still pending when Develop closes is written.
+let saveFailed = () => {};
+const saver = createSaver((sidecar, s) => app.develop.save(sidecar, toXmp(s)), {
+  unsaved: session.unsaved,
+  onError: (p, err) => saveFailed(p, err),
+});
 
 export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const retouch = mode === 'retouch';
@@ -78,6 +85,8 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const [brush, setBrush] = useStored('flightroom-brush', BRUSH_DEFAULT);
   const pendingMeta = useRef();
   pendingMeta.current ||= new Set(Object.keys(meta));
+  const [scans] = useState(latestOnly);
+  const [loads] = useState(latestOnly);
   const stageApi = useRef({});
   const geoCache = useRef(null);
   const rxRef = useRef(null);
@@ -112,13 +121,17 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   // Same folder and position as the Culling tab.
   const open = useCallback(async (dir) => {
     if (!bridge || !dir) return;
+    // Only the newest scan counts: an older folder's answer arriving late is dropped.
+    const latest = scans.next();
     if (cachedFolder(dir)) {
       const res = await bridge.scan(dir);
-      if (!res.error) setList((l) => (l?.photos && sameList(l.photos, res.photos) ? l : res));
+      if (latest() && !res.error) setList((l) => (l?.photos && sameList(l.photos, res.photos) ? l : res));
       return;
     }
     setList({ loading: true, folder: dir });
+    loads.next(); // metadata still coming for the folder before is dropped
     const res = await bridge.scan(dir);
+    if (!latest()) return;
     if (res.error) { setList({ error: res.error, folder: dir }); return; }
     setMeta({});
     pendingMeta.current = new Set();
@@ -145,7 +158,8 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
     const want = ids.filter((id) => id && !pendingMeta.current.has(id));
     if (!want.length || !bridge) return;
     want.forEach((id) => pendingMeta.current.add(id));
-    bridge.meta(want).then((m) => { if (!m.error) setMeta((old) => ({ ...old, ...m })); });
+    const latest = loads.current();
+    bridge.meta(want).then((m) => { if (latest() && !m.error) setMeta((old) => ({ ...old, ...m })); });
   }, [bridge]);
   useEffect(() => {
     if (!photo) return;
@@ -172,7 +186,8 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
       if (info.error) { setOpened({ id: photo.id, error: info.error }); setS(null); return; }
       const asShot = asShotTempTint(info);
       setOpened({ id: photo.id, info, asShot });
-      dirty.current = false;
+      // Settings whose save failed are saved again.
+      dirty.current = session.unsaved.has(photo.id);
       const st = settingsCache.current.get(photo.id) || fromXmp(info.settings, info.curves, asShot, info.own);
       setS(st);
       rxRef.current?.reset(st.layers);
@@ -180,18 +195,21 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
     return () => { live = false; };
   }, [photo?.id]);
 
-  // Save edits to the sidecar shortly after the last change.
+  // Save edits to the sidecar shortly after the last change. Moving to another
+  // photo or leaving Develop writes a pending save at once (closing the window
+  // starts it too, though the window may be gone before it finishes).
   useEffect(() => {
     if (!s || !opened?.info || !photo || opened.id !== photo.id) return;
-    settingsCache.current.set(photo.id, s);
-    if (!dirty.current) return;
-    const target = photo;
-    const t = setTimeout(async () => {
-      const res = await app.develop.save(target.sidecar, toXmp(s));
-      if (res?.error) setToast(`Couldn't save the edit: ${res.error}`);
-    }, 500);
-    return () => clearTimeout(t);
+    if (dirty.current) saver.schedule(photo.id, photo.sidecar, s);
+    keepSettings(photo.id, s, dirty.current);
   }, [s]);
+  useEffect(() => { saver.flush(); }, [photo?.id]);
+  useEffect(() => {
+    saveFailed = (p, err) => setToast(`Couldn't save the edit to ${p.sidecar.split(/[\\/]/).pop()}: ${err?.message || err}`);
+    const flush = () => saver.flush();
+    window.addEventListener('pagehide', flush);
+    return () => { window.removeEventListener('pagehide', flush); saveFailed = () => {}; saver.flush(); };
+  }, []);
 
   // Changes settings. Rapid changes of the same thing (dragging a slider) share
   // one undo step; `label` names it in Retouch's History panel.
@@ -293,16 +311,23 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
         if (opened?.asShot) { update((old) => applyTo(old, part, opened.asShot)); n++; }
         continue;
       }
-      const saved = await app.develop.read(p);
-      if (saved?.error) continue;
-      // Its as-shot colour isn't known without decoding; "As Shot" is written as just that.
-      const base = settingsCache.current.get(p.id) || fromXmp(saved.settings, saved.curves, NO_AS_SHOT, saved.own);
-      const out = toXmp(applyTo(base, part, null));
-      if (out.set.WhiteBalance === 'As Shot') { delete out.set.Temperature; delete out.set.Tint; out.remove.push('Temperature', 'Tint'); }
-      const res = await app.develop.save(p.sidecar, out);
+      // After any save of this photo still on its way, so it reads (and keeps) that.
+      await saver.idle(p.sidecar);
+      const res = await saver.queue(p.sidecar, async () => {
+        const saved = await app.develop.read(p);
+        if (saved?.error) return { skip: true };
+        // Its as-shot colour isn't known without decoding; "As Shot" is written as just that.
+        const base = settingsCache.current.get(p.id) || fromXmp(saved.settings, saved.curves, NO_AS_SHOT, saved.own);
+        const out = toXmp(applyTo(base, part, null));
+        if (out.set.WhiteBalance === 'As Shot') { delete out.set.Temperature; delete out.set.Tint; out.remove.push('Temperature', 'Tint'); }
+        return app.develop.save(p.sidecar, out);
+      });
+      if (res?.skip) continue;
       if (res?.error) { setToast(`Couldn't save ${p.name}: ${res.error}`); return; }
       settingsCache.current.delete(p.id);
       history.current.delete(p.id);
+      session.unsaved.delete(p.id);
+      session.edited.add(p.id);
       n++;
     }
     setToast(n > 1 ? `${what} ${n} photos` : `${what} this photo`);

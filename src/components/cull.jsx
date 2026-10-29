@@ -6,7 +6,7 @@ import { clearPreviews, decodeThumb, drawPhoto, geometry, imgUrl, loadFit, loadF
 import { loadAnalysis, measure, saveAnalysis, suggest, upright } from '../cull/analyze.js';
 import { measurePool } from '../cull/measure-pool.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
-import { cachedFolder, keepFolder, sameList } from '../cull/folder.js';
+import { cachedFolder, keepFolder, latestOnly, sameList } from '../cull/folder.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zoomLevel } from '../cull/keys.js';
 
 // A photo in the culling view, as listed by the desktop side:
@@ -51,6 +51,8 @@ export function CullView({ store, onDevelop }) {
   const autoCancel = useRef(false);
   const pendingMeta = useRef();
   pendingMeta.current ||= new Set(Object.keys(meta));
+  const [scans] = useState(latestOnly);
+  const [loads] = useState(latestOnly);
   const positions = useRef();
   positions.current = state.cull?.positions || {};
 
@@ -83,13 +85,17 @@ export function CullView({ store, onDevelop }) {
 
   const open = useCallback(async (dir, reload) => {
     if (!bridge || !dir) return;
+    // Only the newest scan counts: an older folder's answer arriving late is dropped.
+    const latest = scans.next();
     if (!reload && cachedFolder(dir)) {
       const res = await bridge.scan(dir);
-      if (!res.error) setList((l) => (l?.photos && sameList(l.photos, res.photos) ? l : res));
+      if (latest() && !res.error) setList((l) => (l?.photos && sameList(l.photos, res.photos) ? l : res));
       return;
     }
     setList({ loading: true, folder: dir });
+    loads.next(); // metadata still coming for the folder before is dropped
     const res = await bridge.scan(dir);
+    if (!latest()) return;
     if (res.error) { setList({ error: res.error, folder: dir }); return; }
     setMeta({});
     pendingMeta.current = new Set();
@@ -136,7 +142,8 @@ export function CullView({ store, onDevelop }) {
     const want = ids.filter((id) => id && !pendingMeta.current.has(id));
     if (!want.length || !bridge) return;
     want.forEach((id) => pendingMeta.current.add(id));
-    bridge.meta(want).then((m) => { if (!m.error) setMeta((old) => ({ ...old, ...m })); });
+    const latest = loads.current();
+    bridge.meta(want).then((m) => { if (latest() && !m.error) setMeta((old) => ({ ...old, ...m })); });
   }, [bridge]);
 
   useEffect(() => {

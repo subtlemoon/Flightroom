@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
-const BASE: &str = "https://github.com/subtlemoon/gearcheck/releases/download/ai-models-1/";
+const BASE: &str = "https://github.com/subtlemoon/Flightroom/releases/download/ai-models-1/";
 
 #[derive(Deserialize, Serialize, Clone)]
 struct FileInfo {
@@ -941,6 +941,22 @@ pub async fn ai_install(app: AppHandle, feature: String) -> Result<bool, String>
     .map_err(|e| e.to_string())?
 }
 
+/// Mask pictures are MASK_EDGE (2048 px) on the long edge; this leaves room and caps memory.
+const MAX_MASK_EDGE: usize = 8192;
+const MAX_MASK_PIXELS: usize = 4096 * 4096;
+
+/// RGBA bytes a w x h mask picture needs, or why it can't be used.
+fn mask_picture_bytes(w: usize, h: usize, have: usize) -> Result<usize, String> {
+    if w == 0 || h == 0 || w > MAX_MASK_EDGE || h > MAX_MASK_EDGE {
+        return Err(format!("bad picture size {w} x {h}"));
+    }
+    let need = w.checked_mul(h).filter(|&px| px <= MAX_MASK_PIXELS).ok_or(format!("picture {w} x {h} is too large"))? * 4;
+    if have < need {
+        return Err("bad picture".into());
+    }
+    Ok(need)
+}
+
 /// Works out masks. Body: RGBA bytes (bottom row first, as WebGL reads them);
 /// headers x-task, x-w, x-h. Answer: u32 width, height, count, then per mask a
 /// name (u8 length + UTF-8) and width x height bytes.
@@ -952,9 +968,7 @@ pub async fn ai_masks(app: AppHandle, request: tauri::ipc::Request<'_>) -> Resul
     let task = get("x-task")?;
     let w: usize = get("x-w")?.parse().map_err(|_| "bad width")?;
     let hh: usize = get("x-h")?.parse().map_err(|_| "bad height")?;
-    if w == 0 || hh == 0 || bytes.len() < w * hh * 4 {
-        return Err("bad picture".into());
-    }
+    mask_picture_bytes(w, hh, bytes.len())?;
     let mut v = Vec::with_capacity(w * hh * 3);
     for y in 0..hh {
         for px in bytes[(hh - 1 - y) * w * 4..(hh - y) * w * 4].chunks_exact(4) {
@@ -982,6 +996,18 @@ pub fn models_dir(app: &AppHandle) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mask_pictures_are_checked() {
+        assert_eq!(mask_picture_bytes(2048, 1365, 2048 * 1365 * 4), Ok(2048 * 1365 * 4));
+        assert!(mask_picture_bytes(2048, 1365, 2048 * 1365 * 4 - 1).is_err());
+        assert!(mask_picture_bytes(0, 10, 1000).is_err());
+        assert!(mask_picture_bytes(8193, 1, usize::MAX).is_err());
+        assert!(mask_picture_bytes(8192, 8192, usize::MAX).unwrap_err().contains("too large"));
+        // Sizes whose product overflows are refused, not wrapped around.
+        assert!(mask_picture_bytes(usize::MAX, usize::MAX, 16).is_err());
+        assert!(mask_picture_bytes(1 << 33, 1 << 31, 0).is_err());
+    }
 
     #[test]
     fn denoise_tiles_cover_every_pixel_once() {

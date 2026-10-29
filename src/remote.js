@@ -1,6 +1,6 @@
 // The gear catalog (and Jaewon's own gear) is also published as catalog.json on
 // GitHub, so spec fixes and new gear reach the app without an app update.
-export const CATALOG_URL = 'https://raw.githubusercontent.com/subtlemoon/gearcheck/main/catalog.json';
+export const CATALOG_URL = 'https://raw.githubusercontent.com/subtlemoon/Flightroom/main/catalog.json';
 const CACHE_KEY = 'gearcheck-catalog';
 const REFRESH_MS = 30 * 60 * 1000;
 
@@ -38,7 +38,7 @@ export function watchCatalog(onCatalog, onError = () => {}) {
 }
 
 // Monthly news (news.json in the repo), loaded the same way as the catalog.
-export const NEWS_URL = 'https://raw.githubusercontent.com/subtlemoon/gearcheck/main/news.json';
+export const NEWS_URL = 'https://raw.githubusercontent.com/subtlemoon/Flightroom/main/news.json';
 const NEWS_CACHE_KEY = 'gearcheck-news';
 
 export function isValidNews(n) {

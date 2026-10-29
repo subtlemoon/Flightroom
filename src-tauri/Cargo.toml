@@ -1,6 +1,6 @@
 [package]
 name = "flightroom"
-version = "2.0.0"
+version = "2.7.0"
 description = "Flightroom: photo culling, RAW developing and camera gear planner"
 authors = ["Jaewon"]
 edition = "2021"
@@ -38,6 +38,9 @@ jpeg-encoder = "0.6"
 url = "2"
 percent-encoding = "2"
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "directml", "half"] }
+
+[dev-dependencies]
+quick-xml = "0.42"
 
 [profile.release]
 opt-level = 3

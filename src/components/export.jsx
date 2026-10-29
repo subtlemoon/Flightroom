@@ -22,7 +22,7 @@ export function ExportModal({ photo, photos, shown = photos, picked = null, meta
   const selected = picked?.size > 1 ? raws(photos.filter((p) => picked.has(p.id))) : [];
   const filtered = shown.length < photos.length ? raws(shown) : [];
   const rated = raws(photos.filter((p) => photoRating(p, meta[p.id]) > 0));
-  const edited = raws(photos.filter((p) => edits.has(p.id)));
+  const edited = raws(photos.filter((p) => session.edited.has(p.id)));
   const [which, setWhich] = useState(selected.length ? 'selected' : 'this');
   const [longEdge, setLongEdge] = useState(() => Number(localStorage.getItem('flightroom-export-edge') || 0));
   const [quality, setQuality] = useState(() => Number(localStorage.getItem('flightroom-export-quality') || 92));

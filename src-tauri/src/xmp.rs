@@ -17,7 +17,7 @@ fn is_name_char(c: u8) -> bool {
 }
 
 pub fn escape(v: &str) -> String {
-    v.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    v.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
 }
 
 pub fn unescape(v: &str) -> String {
@@ -291,6 +291,44 @@ mod tests {
         d.set_xml("crs", "GradientBasedCorrections", "", CRS_NS);
         assert!(!d.text.contains("GradientBasedCorrections"));
         assert_eq!(d.get("crs", "Exposure2012").unwrap(), "+0.50");
+    }
+
+    /// Every attribute and text value, as an XML parser reads them (panics if the XML is broken).
+    fn parse(xml: &str) -> Vec<(String, String)> {
+        use quick_xml::events::Event;
+        let mut r = quick_xml::Reader::from_str(xml);
+        let mut out = Vec::new();
+        loop {
+            match r.read_event().expect("well-formed XML") {
+                Event::Start(e) | Event::Empty(e) => {
+                    for a in e.attributes() {
+                        let a = a.expect("well-formed attribute");
+                        let v = a.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap().to_string();
+                        out.push((a.key.into_inner().to_string(), v));
+                    }
+                }
+                Event::Eof => return out,
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn apostrophes_in_single_quoted_attributes() {
+        let src = "<x:xmpmeta xmlns:x='adobe:ns:meta/'><rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\
+            <rdf:Description rdf:about='' xmlns:fr='http://ns.flightroom.app/1.0/' fr:Note='old' fr:Other='keep'/></rdf:RDF></x:xmpmeta>";
+        let mut d = Doc::new(src);
+        let note = "The photographer's \"best\" <shot> & more";
+        d.set_attr("fr", "Note", note, FR_NS);
+        d.set_attr("fr", "Added", "it's new", FR_NS);
+        assert_eq!(d.get("fr", "Note").as_deref(), Some(note));
+        assert_eq!(d.get("fr", "Added").as_deref(), Some("it's new"));
+        let attrs = parse(&d.text);
+        let get = |k: &str| attrs.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+        assert_eq!(get("fr:Note"), Some(note));
+        assert_eq!(get("fr:Added"), Some("it's new"));
+        assert_eq!(get("fr:Other"), Some("keep"));
+        parse(LR);
     }
 
     #[test]
