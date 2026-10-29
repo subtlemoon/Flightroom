@@ -102,3 +102,16 @@ and Calibration, each written under Lightroom's own `crs:` name. Lightroom's AI
 tools (Denoise, Super Resolution, Lens Blur), Point Color, Upright and lens
 profiles aren't previewed; "Enable profile corrections" is passed on for
 Lightroom to apply.
+
+## Retouch
+
+Retouch is Develop's other mode (Ctrl+E switches, like Lightroom's "Edit in
+Photoshop", but nothing is exported): Photoshop-style layers with blend modes
+and opacity, brush, eraser, clone stamp, healing brush, spot healing,
+rectangle / ellipse / lasso selections, fill and clear. Every stroke is kept as
+what you did (points, brush, source offset), not as pixels, and drawn again on
+the graphics card on top of the developed photo each time it is drawn
+(`src/develop/compose.js`). So a Develop change shows through every layer at
+once, clones and heals copy from the photo as it is now developed, and export
+draws them at full resolution. Layers are saved in the sidecar as Flightroom's
+own `fr:Layers` (deflated JSON); Lightroom doesn't see them.
