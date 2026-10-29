@@ -106,12 +106,35 @@ Lightroom to apply.
 ## Retouch
 
 Retouch is Develop's other mode (Ctrl+E switches, like Lightroom's "Edit in
-Photoshop", but nothing is exported): Photoshop-style layers with blend modes
-and opacity, brush, eraser, clone stamp, healing brush, spot healing,
-rectangle / ellipse / lasso selections, fill and clear. Every stroke is kept as
-what you did (points, brush, source offset), not as pixels, and drawn again on
-the graphics card on top of the developed photo each time it is drawn
-(`src/develop/compose.js`). So a Develop change shows through every layer at
-once, clones and heals copy from the photo as it is now developed, and export
-draws them at full resolution. Layers are saved in the sidecar as Flightroom's
-own `fr:Layers` (deflated JSON); Lightroom doesn't see them.
+Photoshop", but nothing is exported), laid out like Photoshop: menu bar (File,
+Edit, Image, Layer, Type, Select, Filter, View, Window, Help) with Photoshop's
+Windows shortcuts, options bar, tool bar and Color / Swatches / Properties /
+Adjustments / Layers / History panels.
+
+- Tools: move and free transform, marquees, lasso, polygonal lasso, quick
+  selection, magic wand, eyedropper, spot healing, healing brush, patch, red
+  eye, brush, pencil, clone stamp, eraser, gradient, paint bucket, blur,
+  sharpen, smudge, dodge, burn, sponge, type, rectangle / ellipse / triangle /
+  polygon / line shapes, hand and zoom. Crop is shared with Develop.
+- Layers: pixel layers, live photo copies, Stamp Visible, 15 adjustment layers
+  (Brightness/Contrast, Levels, Curves, Exposure, Vibrance, Hue/Saturation,
+  Color Balance, Black & White, Photo Filter, Channel Mixer, Selective Color,
+  Invert, Posterize, Threshold, Gradient Map), solid and gradient fill layers,
+  type and shape layers, groups, layer masks, clipping masks, 27 blend modes,
+  opacity and fill, locks, and layer styles (drop shadow, outer glow, stroke,
+  color overlay).
+- Filters (Blur, Blur Gallery, Distort, Noise, Pixelate, Render, Sharpen,
+  Stylize, Other) stay live on a layer like Smart Filters, clipped to the
+  selection they were made with.
+- Select: All, Inverse, Color Range, Subject / Sky / Background (on-device AI),
+  Modify (border, smooth, expand, contract, feather), Grow, Similar, Transform
+  Selection, Quick Mask, Save / Load Selection.
+
+Every stroke, fill and filter is kept as what you did (points, brush, source
+offset, settings), not as pixels, and drawn again on the graphics card on top
+of the developed photo each time it is drawn (`src/develop/compose.js`). So a
+Develop change shows through every layer at once, clones and heals copy from
+the photo as it is now developed, and export draws them at full resolution.
+Layers are saved in the sidecar as Flightroom's own `fr:Layers` (deflated
+JSON); Lightroom doesn't see them. Not there (yet): the pen tool and paths,
+Liquify, the History Brush, 3D, video and CMYK / Lab modes.

@@ -8,45 +8,119 @@
 // Positions are fractions of the photo as you see it (rotated upright, after
 // Transform, before cropping), like masks. Sizes are a brush's radius as a
 // fraction of the photo's long edge.
+//
+// A layer: { id, name, kind, hidden, opacity, fill, blend, ops, ... }
+//   kind  pixel   strokes and fills on a clear layer
+//         photo   a live copy of the developed photo (Duplicate Background), strokes on top
+//         stamp   everything below, merged (Stamp Visible), strokes on top
+//         adjust  an adjustment layer (adj: see adjust.js)
+//         fill    a Solid Color / Gradient fill layer (fillDef)
+//         text    a type layer (text)
+//         shape   a shape layer (shape)
+//         group   a group; layers in it have `parent`
+//   mask     { base: 1 reveal | 0 hide, ops, off, density, feather }
+//   filters  [{ id, type, on, ... }] (filters.js), style (layer styles),
+//   tf       an affine transform in long-edge units (selection.js),
+//   clip     clipped to the layer below, lock { all, pixels, position, alpha }.
 import { deflateSync, inflateSync, strToU8, strFromU8 } from 'fflate';
 import { newId } from './masks.js';
+import { textLayout } from './raster.js';
+import { fromB64, isIdent, selectionBounds, tfApply, tfInv, tfPx, toB64 } from './selection.js';
+
+export * from './selection.js';
 
 export const BLEND_MODES = [
-  ['normal', 'Normal'], ['multiply', 'Multiply'], ['screen', 'Screen'], ['overlay', 'Overlay'],
-  ['soft', 'Soft Light'], ['darken', 'Darken'], ['lighten', 'Lighten'], ['difference', 'Difference'],
+  ['normal', 'Normal'], ['dissolve', 'Dissolve'],
+  ['darken', 'Darken'], ['multiply', 'Multiply'], ['colorBurn', 'Color Burn'], ['linearBurn', 'Linear Burn'], ['darkerColor', 'Darker Color'],
+  ['lighten', 'Lighten'], ['screen', 'Screen'], ['colorDodge', 'Color Dodge'], ['linearDodge', 'Linear Dodge (Add)'], ['lighterColor', 'Lighter Color'],
+  ['overlay', 'Overlay'], ['soft', 'Soft Light'], ['hardLight', 'Hard Light'], ['vividLight', 'Vivid Light'], ['linearLight', 'Linear Light'], ['pinLight', 'Pin Light'], ['hardMix', 'Hard Mix'],
+  ['difference', 'Difference'], ['exclusion', 'Exclusion'], ['subtract', 'Subtract'], ['divide', 'Divide'],
   ['hue', 'Hue'], ['saturation', 'Saturation'], ['color', 'Color'], ['luminosity', 'Luminosity'],
 ];
+// Where Photoshop draws a line between them in its menu.
+export const BLEND_BREAKS = new Set(['dissolve', 'darkerColor', 'lighterColor', 'hardMix', 'divide']);
 export const BLEND_INDEX = Object.fromEntries(BLEND_MODES.map(([k], i) => [k, i]));
 
 // Ops that take their pixels from the photo itself (at an offset).
-export const SOURCED = new Set(['clone', 'heal']);
+export const SOURCED = new Set(['clone', 'heal', 'patch']);
 // Ops drawn with a brush.
-export const STROKED = new Set(['paint', 'erase', 'clone', 'heal']);
+export const STROKED = new Set(['paint', 'erase', 'clone', 'heal', 'dodge', 'burn', 'sponge', 'blur', 'sharpen', 'smudge']);
+// Ops that work on what's already there (the layer over everything below).
+export const SNAPSHOT = new Set(['dodge', 'burn', 'sponge', 'blur', 'sharpen', 'smudge', 'redeye']);
+// Ops whose area is their selection rather than a brush.
+export const REGION = new Set(['patch', 'redeye']);
 
-export function newLayer(layers, name) {
-  const n = 1 + Math.max(0, ...layers.map((l) => Number(/^Layer (\d+)$/.exec(l.name)?.[1]) || 0));
-  return { id: newId(), name: name || `Layer ${n}`, hidden: false, opacity: 100, blend: 'normal', ops: [] };
+export const LAYER_KINDS = { pixel: 'Layer', photo: 'Photo copy', stamp: 'Merged', adjust: 'Adjustment', fill: 'Fill', text: 'Type', shape: 'Shape', group: 'Group' };
+export const kindOf = (l) => l.kind || 'pixel';
+// Layers you can paint on directly (others are painted through their mask).
+export const PAINTABLE = new Set(['pixel', 'photo', 'stamp']);
+
+/** "Name n" with the next free n among the layers. */
+export function nextName(layers, base) {
+  const re = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')} (\\d+)$`);
+  return `${base} ${1 + Math.max(0, ...layers.map((l) => Number(re.exec(l.name)?.[1]) || 0))}`;
 }
 
-export const visibleLayers = (s) => (s?.layers || []).filter((l) => !l.hidden && l.opacity > 0 && l.ops.length);
+export function newLayer(layers, name, kind = 'pixel', extra = {}) {
+  return { id: newId(), name: name || nextName(layers, 'Layer'), kind, hidden: false, opacity: 100, fill: 100, blend: kind === 'group' ? 'pass' : 'normal', ops: [], ...extra };
+}
+
+const hasContent = (l) => kindOf(l) !== 'pixel' || l.ops.length > 0 || (l.filters || []).some((f) => f.on && f.type === 'clouds');
+
+/**
+ * The layers to draw, bottom first: hidden ones and those in hidden groups
+ * left out, a group's opacity passed on to what's in it, clipped layers only
+ * while the layer they're clipped to shows. `liveId`: a layer being painted
+ * on, drawn even while it's empty.
+ */
+export function renderLayers(layers, liveId) {
+  const byId = new Map(layers.map((l) => [l.id, l]));
+  const out = [];
+  let base = false; // the layer below a clipped one is drawn
+  for (const l of layers) {
+    if (l.kind === 'group') continue;
+    let hidden = l.hidden, k = 1;
+    for (let p = byId.get(l.parent), n = 0; p && n < 32; p = byId.get(p.parent), n++) { if (p.hidden) hidden = true; k *= p.opacity / 100; }
+    const shown = !hidden && l.opacity * k > 0 && (hasContent(l) || l.id === liveId);
+    if (!l.clip) base = shown;
+    else if (!base) continue;
+    if (!shown) continue;
+    out.push(k === 1 ? l : { ...l, opacity: l.opacity * k });
+  }
+  return out;
+}
+
+export const visibleLayers = (s, liveId) => renderLayers(s?.layers || [], liveId);
+
+/** Layers in a group (any depth). */
+export function inGroup(layers, groupId) {
+  const ids = new Set([groupId]);
+  let grew = true;
+  while (grew) { grew = false; for (const l of layers) if (l.parent && ids.has(l.parent) && !ids.has(l.id)) { ids.add(l.id); grew = true; } }
+  ids.delete(groupId);
+  return layers.filter((l) => ids.has(l.id));
+}
 
 // --- brushes ---------------------------------------------------------------------
 
 /**
- * A stroke's dabs in oriented pixels: x, y, radius, then a spare slot, per dab.
- * Spaced a quarter of the brush's width apart, like Photoshop's default.
+ * A stroke's dabs in oriented pixels: x, y, radius, then the direction the
+ * stroke moves there (radians, for the smudge tool), per dab. Spaced a
+ * quarter of the brush's width apart, like Photoshop's default.
  */
 export function strokeDabs(op, ow, oh) {
   const r = Math.max(0.5, op.size * Math.max(ow, oh));
   const step = Math.max(0.75, r * 0.5);
   const out = [];
   const pts = op.pts;
+  const ang = (i) => (pts[i] && pts[i - 1] ? Math.atan2((pts[i][1] - pts[i - 1][1]) * oh, (pts[i][0] - pts[i - 1][0]) * ow) : 0);
   for (let i = 0; i < pts.length; i++) {
     const x = pts[i][0] * ow, y = pts[i][1] * oh;
-    if (i === 0) { out.push(x, y, r, 0); continue; }
+    if (i === 0) { out.push(x, y, r, ang(1)); continue; }
     const px = pts[i - 1][0] * ow, py = pts[i - 1][1] * oh;
     const n = Math.max(1, Math.round(Math.hypot(x - px, y - py) / step));
-    for (let k = 1; k <= n; k++) out.push(px + ((x - px) * k) / n, py + ((y - py) * k) / n, r, 0);
+    const a = ang(i);
+    for (let k = 1; k <= n; k++) out.push(px + ((x - px) * k) / n, py + ((y - py) * k) / n, r, a);
   }
   return new Float32Array(out);
 }
@@ -54,8 +128,10 @@ export function strokeDabs(op, ow, oh) {
 /** Where an op draws, in oriented pixels: [x0, y0, x1, y1]; null for the whole photo. */
 export function opBounds(op, ow, oh) {
   if (!STROKED.has(op.t)) {
-    const b = op.clip && selectionBounds(op.clip);
-    return b ? [b[0] * ow, b[1] * oh, b[2] * ow, b[3] * oh] : null;
+    const b = op.clip && selectionBounds(op.clip, ow, oh);
+    if (!b) return null;
+    const pad = op.t === 'patch' ? 0.02 * Math.max(ow, oh) : 1;
+    return [b[0] * ow - pad, b[1] * oh - pad, b[2] * ow + pad, b[3] * oh + pad];
   }
   const r = Math.max(0.5, op.size * Math.max(ow, oh)) + 1;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -66,84 +142,44 @@ export function opBounds(op, ow, oh) {
   return [x0 - r, y0 - r, x1 + r, y1 + r];
 }
 
-// --- selections ------------------------------------------------------------------
-// A selection is shapes added to, taken from or intersected with each other
-// (Shift / Alt as in Photoshop), optionally inverted and feathered.
-// { shapes: [{ mode: 'add'|'sub'|'and', kind: 'rect'|'ellipse'|'poly', x0, y0, x1, y1 | pts }], invert, feather }
+/** Text and shape layers: where they draw (oriented px, before the layer's transform). */
+export function rasterBounds(l, ow, oh) {
+  if (l.kind === 'shape' && l.shape) {
+    const sh = l.shape;
+    const pad = (sh.stroke ? sh.stroke.width * Math.max(ow, oh) : 0) + 2;
+    return [Math.min(sh.x0, sh.x1) * ow - pad, Math.min(sh.y0, sh.y1) * oh - pad, Math.max(sh.x0, sh.x1) * ow + pad, Math.max(sh.y0, sh.y1) * oh + pad];
+  }
+  if (l.kind === 'text' && l.text) {
+    const b = textLayout(l.text, ow, oh).box;
+    return [b[0] - 2, b[1] - 2, b[2] + 2, b[3] + 2];
+  }
+  return null;
+}
 
-export function selectionBounds(sel) {
-  if (sel.invert) return null;
-  let b = null;
-  for (const sh of sel.shapes) {
-    const xs = sh.kind === 'poly' ? sh.pts.map((p) => p[0]) : [sh.x0, sh.x1];
-    const ys = sh.kind === 'poly' ? sh.pts.map((p) => p[1]) : [sh.y0, sh.y1];
-    const s = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
-    if (sh.mode === 'add' || !b) b = b ? [Math.min(b[0], s[0]), Math.min(b[1], s[1]), Math.max(b[2], s[2]), Math.max(b[3], s[3])] : s;
-    else if (sh.mode === 'and') b = [Math.max(b[0], s[0]), Math.max(b[1], s[1]), Math.min(b[2], s[2]), Math.min(b[3], s[3])];
+/** A layer's content box in oriented px as shown (after its transform); null for the whole photo. */
+export function layerBounds(l, ow, oh) {
+  const kind = kindOf(l);
+  if (['photo', 'stamp', 'adjust', 'fill'].includes(kind)) return null;
+  let b = rasterBounds(l, ow, oh);
+  for (const op of l.ops) {
+    const ob = opBounds(op, ow, oh);
+    if (!ob) return null;
+    b = b ? [Math.min(b[0], ob[0]), Math.min(b[1], ob[1]), Math.max(b[2], ob[2]), Math.max(b[3], ob[3])] : ob;
   }
   if (!b) return null;
-  const f = (sel.feather || 0) * 2;
-  return [b[0] - f, b[1] - f, b[2] + f, b[3] + f];
-}
-
-export function traceShape(ctx, sh, W, H) {
-  ctx.beginPath();
-  if (sh.kind === 'rect') ctx.rect(Math.min(sh.x0, sh.x1) * W, Math.min(sh.y0, sh.y1) * H, Math.abs(sh.x1 - sh.x0) * W, Math.abs(sh.y1 - sh.y0) * H);
-  else if (sh.kind === 'ellipse') {
-    ctx.ellipse(((sh.x0 + sh.x1) / 2) * W, ((sh.y0 + sh.y1) / 2) * H, (Math.abs(sh.x1 - sh.x0) / 2) * W, (Math.abs(sh.y1 - sh.y0) / 2) * H, 0, 0, Math.PI * 2);
-  } else sh.pts.forEach(([x, y], i) => (i ? ctx.lineTo(x * W, y * H) : ctx.moveTo(x * W, y * H)));
-  ctx.closePath();
-}
-
-const canvas = (w, h) => {
-  if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h);
-  const c = document.createElement('canvas');
-  c.width = w; c.height = h;
-  return c;
-};
-
-/** A selection drawn as a W x H canvas: covered parts opaque. */
-export function selectionCanvas(sel, W, H) {
-  const c = canvas(W, H);
-  const ctx = c.getContext('2d');
-  sel.shapes.forEach((sh, i) => {
-    ctx.globalCompositeOperation = i === 0 || sh.mode === 'add' ? 'source-over' : sh.mode === 'sub' ? 'destination-out' : 'destination-in';
-    ctx.fillStyle = '#fff';
-    traceShape(ctx, sh, W, H);
-    ctx.fill();
-  });
-  if (sel.invert) {
-    ctx.globalCompositeOperation = 'xor';
-    ctx.fillRect(0, 0, W, H);
+  if (l.tf && !isIdent(l.tf)) {
+    const m = tfPx(l.tf, ow, oh);
+    const pts = [[b[0], b[1]], [b[2], b[1]], [b[0], b[3]], [b[2], b[3]]].map(([x, y]) => tfApply(m, x, y));
+    b = [Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1])), Math.max(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[1]))];
   }
-  const blur = (sel.feather || 0) * Math.max(W, H);
-  if (blur < 0.3) return c;
-  const out = canvas(W, H);
-  const o = out.getContext('2d');
-  o.filter = `blur(${blur / 2}px)`;
-  o.drawImage(c, 0, 0);
-  return out;
+  return b;
 }
 
-/** Whether a point (fractions) is inside the selection (ignoring feather). */
-export function inSelection(sel, x, y) {
-  let inside = false;
-  sel.shapes.forEach((sh, i) => {
-    let hit;
-    if (sh.kind === 'rect') hit = x >= Math.min(sh.x0, sh.x1) && x <= Math.max(sh.x0, sh.x1) && y >= Math.min(sh.y0, sh.y1) && y <= Math.max(sh.y0, sh.y1);
-    else if (sh.kind === 'ellipse') {
-      const rx = Math.abs(sh.x1 - sh.x0) / 2, ry = Math.abs(sh.y1 - sh.y0) / 2;
-      hit = rx > 0 && ry > 0 && ((x - (sh.x0 + sh.x1) / 2) / rx) ** 2 + ((y - (sh.y0 + sh.y1) / 2) / ry) ** 2 <= 1;
-    } else {
-      hit = false;
-      for (let a = 0, b = sh.pts.length - 1; a < sh.pts.length; b = a++) {
-        const [xa, ya] = sh.pts[a], [xb, yb] = sh.pts[b];
-        if ((ya > y) !== (yb > y) && x < ((xb - xa) * (y - ya)) / (yb - ya) + xa) hit = !hit;
-      }
-    }
-    inside = i === 0 || sh.mode === 'add' ? inside || hit : sh.mode === 'sub' ? inside && !hit : inside && hit;
-  });
-  return sel.invert ? !inside : inside;
+/** A point on the photo (fractions) in a layer's own coordinates (before its transform). */
+export function toLayer(l, x, y, ow, oh) {
+  if (!l?.tf || isIdent(l.tf)) return [x, y];
+  const [lx, ly] = tfApply(tfInv(tfPx(l.tf, ow, oh)), x * ow, y * oh);
+  return [lx / ow, ly / oh];
 }
 
 // --- spot healing ----------------------------------------------------------------
@@ -200,8 +236,6 @@ export function findSpotSource(op, img, w, h) {
 // --- the sidecar -----------------------------------------------------------------
 
 const r5 = (v) => Math.round(v * 1e5) / 1e5;
-const toB64 = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode(...u8.subarray(i, i + 0x8000)); return btoa(s); };
-const fromB64 = (t) => Uint8Array.from(atob(t), (c) => c.charCodeAt(0));
 
 /**
  * Layers as Flightroom's own fr:Layers value: JSON, deflated and base64'd
@@ -211,15 +245,18 @@ export function layersToText(layers) {
   if (!layers?.length) return '';
   const clips = [];
   const clipId = (c) => { let i = clips.indexOf(c); if (i < 0) { clips.push(c); i = clips.length - 1; } return i; };
+  const ops = (list) => list.map((op) => ({
+    ...op,
+    ...(op.pts ? { pts: op.pts.flatMap(([x, y]) => [r5(x), r5(y)]) } : {}),
+    ...(op.clip ? { clip: clipId(op.clip) } : {}),
+  }));
   const out = layers.map((l) => ({
     ...l,
-    ops: l.ops.map((op) => ({
-      ...op,
-      ...(op.pts ? { pts: op.pts.flatMap(([x, y]) => [r5(x), r5(y)]) } : {}),
-      ...(op.clip ? { clip: clipId(op.clip) } : {}),
-    })),
+    ops: ops(l.ops),
+    ...(l.mask ? { mask: { ...l.mask, ops: ops(l.mask.ops) } } : {}),
+    ...(l.filters ? { filters: l.filters.map((f) => (f.clip ? { ...f, clip: clipId(f.clip) } : f)) } : {}),
   }));
-  return `z:${toB64(deflateSync(strToU8(JSON.stringify({ v: 1, layers: out, clips })), { level: 6 }))}`;
+  return `z:${toB64(deflateSync(strToU8(JSON.stringify({ v: 2, layers: out, clips })), { level: 6 }))}`;
 }
 
 export function layersFromText(text) {
@@ -228,14 +265,17 @@ export function layersFromText(text) {
     const json = text.startsWith('z:') ? strFromU8(inflateSync(fromB64(text.slice(2)))) : text;
     const { layers, clips = [] } = JSON.parse(json);
     if (!Array.isArray(layers)) return [];
+    const ops = (list) => (Array.isArray(list) ? list : []).map((op) => {
+      const o = { ...op };
+      if (Array.isArray(op.pts)) { o.pts = []; for (let i = 0; i + 1 < op.pts.length; i += 2) o.pts.push([op.pts[i], op.pts[i + 1]]); }
+      if (op.clip != null) o.clip = clips[op.clip] || undefined;
+      return o;
+    });
     return layers.filter((l) => l && Array.isArray(l.ops)).map((l) => ({
       ...l,
-      ops: l.ops.map((op) => {
-        const o = { ...op };
-        if (Array.isArray(op.pts)) { o.pts = []; for (let i = 0; i + 1 < op.pts.length; i += 2) o.pts.push([op.pts[i], op.pts[i + 1]]); }
-        if (op.clip != null) o.clip = clips[op.clip] || undefined;
-        return o;
-      }),
+      ops: ops(l.ops),
+      ...(l.mask ? { mask: { ...l.mask, ops: ops(l.mask.ops) } } : {}),
+      ...(Array.isArray(l.filters) ? { filters: l.filters.map((f) => (f.clip != null ? { ...f, clip: clips[f.clip] || undefined } : f)) } : {}),
     }));
   } catch { return []; }
 }
@@ -248,12 +288,20 @@ export function layersFromText(text) {
 export function sourceRegions(layers, geo, toSource, box, scale, max = 16) {
   const out = [];
   for (const l of layers) {
+    // The visible box in the layer's own coordinates.
+    let lbox = box;
+    if (l.tf && !isIdent(l.tf)) {
+      const inv = tfInv(tfPx(l.tf, geo.ow, geo.oh));
+      const pts = [[box[0], box[1]], [box[2], box[1]], [box[0], box[3]], [box[2], box[3]]].map(([x, y]) => tfApply(inv, x, y));
+      lbox = [Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1])), Math.max(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[1]))];
+    }
     for (const op of l.ops) {
-      if (!SOURCED.has(op.t) || !op.pts?.length || out.length >= max) continue;
+      if (!SOURCED.has(op.t) || out.length >= max) continue;
       const b = opBounds(op, geo.ow, geo.oh);
-      const pad = op.size * Math.max(geo.ow, geo.oh) * 0.6 + 4;
-      const x0 = Math.max(b[0] - pad, box[0]), y0 = Math.max(b[1] - pad, box[1]);
-      const x1 = Math.min(b[2] + pad, box[2]), y1 = Math.min(b[3] + pad, box[3]);
+      if (!b) continue;
+      const pad = (op.size || 0.02) * Math.max(geo.ow, geo.oh) * 0.6 + 4;
+      const x0 = Math.max(b[0] - pad, lbox[0]), y0 = Math.max(b[1] - pad, lbox[1]);
+      const x1 = Math.min(b[2] + pad, lbox[2]), y1 = Math.min(b[3] + pad, lbox[3]);
       if (x1 <= x0 || y1 <= y0) continue;
       const dx = op.dx * geo.ow, dy = op.dy * geo.oh;
       const pts = [];
