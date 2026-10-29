@@ -432,19 +432,19 @@ fn crisp(mut m: Img) -> Img {
 
 // --- the models -----------------------------------------------------------------
 
-/// IS-Net (general use) on a picture, at 1024 x 1024: how sure it is each spot is the subject.
-fn isnet(ai: &Ai, rgb: &Img) -> Result<Img, String> {
+/// BiRefNet (general use) on a picture, at 1024 x 1024: how sure it is each spot is the subject.
+fn salient(ai: &Ai, rgb: &Img) -> Result<Img, String> {
+    const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
+    const STD: [f32; 3] = [0.229, 0.224, 0.225];
     let small = rgb.resize(1024, 1024);
     let mut x = vec![0.0f32; 3 * 1024 * 1024];
     for (k, px) in small.v.chunks_exact(3).enumerate() {
         for ch in 0..3 {
-            x[ch * 1024 * 1024 + k] = px[ch] - 0.5;
+            x[ch * 1024 * 1024 + k] = (px[ch] - MEAN[ch]) / STD[ch];
         }
     }
-    let (_, y) = ai.infer("isnet.onnx", vec![1, 3, 1024, 1024], x)?;
-    let (lo, hi) = y.iter().fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
-    let v = y.iter().map(|&v| (v - lo) / (hi - lo).max(1e-6)).collect();
-    Ok(Img { w: 1024, h: 1024, c: 1, v })
+    let (_, y) = ai.infer("birefnet.onnx", vec![1, 3, 1024, 1024], x)?;
+    Ok(Img { w: 1024, h: 1024, c: 1, v: y.iter().map(|v| v.clamp(0.0, 1.0)).collect() })
 }
 
 /// Subject, at the picture's size. A subject that fills only part of the
@@ -452,7 +452,7 @@ fn isnet(ai: &Ai, rgb: &Img) -> Result<Img, String> {
 /// kart's cage) come out as themselves with the background between them.
 fn subject(ai: &Ai, rgb: &Img) -> Result<Img, String> {
     let (w, h) = (rgb.w, rgb.h);
-    let m = main_subject(isnet(ai, rgb)?).resize(w, h);
+    let m = main_subject(salient(ai, rgb)?).resize(w, h);
     let on: Vec<usize> = (0..w * h).filter(|&k| m.v[k] >= 0.5).collect();
     let Some(&first) = on.first() else { return Ok(m) };
     let (x0, y0, x1, y1) = on.iter().fold((first % w, first / w, first % w, first / w), |(a, b, c, d), &k| {
@@ -467,7 +467,7 @@ fn subject(ai: &Ai, rgb: &Img) -> Result<Img, String> {
         return Ok(m);
     }
     let crop = rgb.crop_resize(bx0 as f32, by0 as f32, cw as f32, ch as f32, cw, ch);
-    let near = isnet(ai, &crop)?.resize(cw, ch);
+    let near = salient(ai, &crop)?.resize(cw, ch);
     let mut v = vec![0.0f32; w * h];
     for y in 0..ch {
         v[(by0 + y) * w + bx0..(by0 + y) * w + bx1].copy_from_slice(&near.v[y * cw..(y + 1) * cw]);
@@ -535,7 +535,25 @@ fn main_subject(mut m: Img) -> Img {
     let (x0, y0, x1, y1) = bounds(&parts[best]);
     let (mx, my) = ((x1 - x0) / 20 + 2, (y1 - y0) / 20 + 2);
     let inside = |(a, b, c, d): (usize, usize, usize, usize)| a + mx >= x0 && b + my >= y0 && c <= x1 + mx && d <= y1 + my;
-    let keep: Vec<bool> = parts.iter().enumerate().map(|(i, r)| i == best || inside(bounds(r))).collect();
+    // Next to it, a sure piece of a good size that juts out of its box counts
+    // too (a kart's front wheel); specks are dropped.
+    let mut on_best = vec![false; w * h];
+    for &k in &parts[best] {
+        on_best[k] = true;
+    }
+    let by_best = dilate(&on_best, w, h, mx.max(my));
+    let n = parts[best].len();
+    let keep: Vec<bool> = parts
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let sure = r.iter().map(|&k| m.v[k]).sum::<f32>() >= 0.8 * r.len() as f32;
+            let (a, _, c, _) = bounds(r);
+            i == best
+                || (r.len() * 500 >= n && inside(bounds(r)))
+                || (r.len() * 50 >= n && sure && (c - a) * 2 <= x1 - x0 && r.iter().any(|&k| by_best[k]))
+        })
+        .collect();
     let kept: Vec<bool> = label.iter().map(|&l| l > 0 && keep[l as usize - 1]).collect();
     // Soft edge values stay only right next to what's kept (faint spill onto
     // things nearby, like a barrier beside a kart, goes).

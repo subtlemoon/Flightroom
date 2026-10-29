@@ -13,7 +13,7 @@ const fromPos = (sl, p) => {
 export const Slider = memo(function Slider({ sl, value, def, onSet, color }) {
   const [text, setText] = useState(null);
   const pos = toPos(sl, value ?? def ?? 0);
-  const zero = sl.log || sl.min >= 0 ? 0 : toPos(sl, 0);
+  const zero = sl.log || sl.min >= 0 || sl.max <= 0 ? 0 : toPos(sl, 0);
   const onChange = (v) => onSet(sl.key, v);
   const commitText = () => {
     const n = Number(String(text).replace(/[^\d.+-]/g, ''));
