@@ -1,6 +1,6 @@
 [package]
 name = "flightroom"
-version = "2.7.0"
+version = "2.7.1"
 description = "Flightroom: photo culling, RAW developing and camera gear planner"
 authors = ["Jaewon"]
 edition = "2021"
