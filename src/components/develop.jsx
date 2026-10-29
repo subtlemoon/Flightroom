@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { bridge as app } from '../bridge.js';
-import { Dropdown, Icon, Modal, PanelHandle } from './ui.jsx';
+import { Dropdown, Icon, PanelHandle } from './ui.jsx';
 import { Slider } from './slider.jsx';
 import { CurveEditor } from './curve.jsx';
 import { BRUSH_DEFAULT, MASK_OPTIONS_DEFAULT, MaskAdjust, MaskOverlay, MaskPanel, OVERLAY_DEFAULT, maskActions, maskView, useStored } from './masks.jsx';
@@ -12,6 +12,8 @@ import { toggle, useLayout } from '../layout.js';
 import { Filmstrip, photoRating } from './cull.jsx';
 import { imgUrl, ROTATION } from '../cull/previews.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
+import { cachedFolder, keepFolder, sameList } from '../cull/folder.js';
+import { session } from '../develop/session.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey } from '../cull/keys.js';
 import {
   COLORS, COLOR_HUES, CURVE_PRESETS, PROFILES, SECTIONS, SLIDER, SLIDERS, TONE_MAPPERS, VIGNETTE_STYLES, WB_PRESETS,
@@ -19,7 +21,7 @@ import {
 } from '../develop/params.js';
 import { asShotTempTint, colorTransform, inv3, neutralToXy, xyToTempTint } from '../develop/color.js';
 import { Geometry, LOOKS, Renderer, ap, constrainedCrop, fitScale, mat, mm, outToFrame, parseFrame, sourceMap } from '../develop/renderer.js';
-import { exportPhoto, exportSize } from '../develop/export.js';
+import { ExportModal } from './export.jsx';
 import { activeToneMap } from '../develop/tonemap.js';
 import { useRetouch } from './retouch.jsx';
 import { RetouchStage } from './rtstage.jsx';
@@ -37,6 +39,10 @@ const TRANSFORM_KEYS = ['perspVertical', 'perspHorizontal', 'perspRotate', 'pers
 const META_WINDOW = 20;
 // Stands in for a photo's as-shot colour when it isn't decoded (see applyPart).
 const NO_AS_SHOT = { temp: 5500, tint: 0 };
+const HISTORY_PHOTOS = 60;
+// The RAW data stays in memory a while after leaving, so coming straight back is instant.
+const RELEASE_AFTER = 120000;
+let releaseTimer = 0;
 
 export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const retouch = mode === 'retouch';
@@ -46,9 +52,11 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const keys = ratingKeys(state.settings);
   const zKey = zoomKey(state.settings);
 
-  const [list, setList] = useState(null);
-  const [currentId, setCurrentId] = useState(null);
-  const [meta, setMeta] = useState({});
+  // Coming from Culling: its photo list, at once (open() reads the folder again quietly).
+  const [seen] = useState(() => cachedFolder(folder));
+  const [list, setList] = useState(seen?.list || null);
+  const [currentId, setCurrentId] = useState(() => seen?.list.photos[state.cull?.positions?.[seen.list.folder] || 0]?.id ?? null);
+  const [meta, setMeta] = useState(seen?.meta || {});
   const [opened, setOpened] = useState(null); // { id, info, asShot } | { id, error }
   const [s, setS] = useState(null);
   const [crop, setCrop] = useState(false);
@@ -68,17 +76,19 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const [sel, setSelState] = useState(null); // selected mask and part: { mask, part }
   const [overlay, setOverlay] = useStored('flightroom-mask-overlay-2', OVERLAY_DEFAULT);
   const [brush, setBrush] = useStored('flightroom-brush', BRUSH_DEFAULT);
-  const pendingMeta = useRef(new Set());
+  const pendingMeta = useRef();
+  pendingMeta.current ||= new Set(Object.keys(meta));
   const stageApi = useRef({});
   const geoCache = useRef(null);
   const rxRef = useRef(null);
-  const settingsCache = useRef(new Map()); // id -> settings (this session)
-  const history = useRef(new Map()); // id -> { past, future, pastL, futureL, last }: settings, and what each step was called
+  const settingsCache = useRef(session.settings);
+  const history = useRef(session.history);
   const dirty = useRef(false);
   const positions = useRef();
   positions.current = state.cull?.positions || {};
 
-  const [filter, setFilter] = useState('all'); // see inFilter
+  // Shared with Culling; its "Likely rejects" is Culling's own.
+  const [filter, setFilter] = useState(() => (seen?.filter && seen.filter !== 'rejects' ? seen.filter : 'all')); // see inFilter
   const layout = useLayout();
   // The crop tool lives in the right panel, so cropping shows the panel.
   useEffect(() => { if (crop && !layout.panel) toggle('panel'); }, [crop]);
@@ -92,7 +102,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   // (rated lower), the one now in its place is shown.
   // Counted once per rating change, not on every slider move.
   const starOptions = useMemo(() => [{ value: 'all', label: 'All photos', hint: allPhotos.length },
-    ...STAR_FILTERS.map(([k, label]) => ({ value: k, label, hint: allPhotos.filter((p) => inFilter(k, photoRating(p, meta[p.id]))).length }))], [allPhotos, meta]);
+    ...[['rated', 'Rated'], ['unrated', 'Unrated'], ...STAR_FILTERS].map(([k, label]) => ({ value: k, label, hint: allPhotos.filter((p) => inFilter(k, photoRating(p, meta[p.id]))).length }))], [allPhotos, meta]);
   const lastIndex = useRef(0);
   let index = photos.findIndex((p) => p.id === currentId);
   if (index < 0) index = Math.min(lastIndex.current, Math.max(0, photos.length - 1));
@@ -102,6 +112,11 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   // Same folder and position as the Culling tab.
   const open = useCallback(async (dir) => {
     if (!bridge || !dir) return;
+    if (cachedFolder(dir)) {
+      const res = await bridge.scan(dir);
+      if (!res.error) setList((l) => (l?.photos && sameList(l.photos, res.photos) ? l : res));
+      return;
+    }
     setList({ loading: true, folder: dir });
     const res = await bridge.scan(dir);
     if (res.error) { setList({ error: res.error, folder: dir }); return; }
@@ -112,6 +127,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
     setList(res);
   }, [bridge]);
   useEffect(() => { if (folder) open(folder); }, [folder, open]);
+  useEffect(() => { if (list?.photos && list.folder) keepFolder(folder, { list, meta, filter }); }, [list, meta, filter]);
 
   const lastPos = useRef(null);
   useEffect(() => {
@@ -136,8 +152,11 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
     requestMeta([photo.id, ...photos.slice(Math.max(0, index - 3), index + META_WINDOW).map((p) => p.id)]);
   }, [photo?.id, photos, requestMeta]);
 
-  // Free the RAW data and graphics memory when leaving the tab.
-  useEffect(() => () => { app?.develop.close(); }, []);
+  // Free the RAW data a while after leaving the tab.
+  useEffect(() => {
+    clearTimeout(releaseTimer);
+    return () => { releaseTimer = setTimeout(() => app?.develop.close(), RELEASE_AFTER); };
+  }, []);
 
   // Open the current photo: decode its RAW and read its saved settings.
   useEffect(() => {
@@ -187,7 +206,10 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
       }
       h.last = Date.now();
       h.future = []; h.futureL = [];
+      // Most recently edited last; the oldest photos' history goes first.
+      history.current.delete(photo.id);
       history.current.set(photo.id, h);
+      if (history.current.size > HISTORY_PHOTOS) history.current.delete(history.current.keys().next().value);
       dirty.current = true;
       return typeof patch === 'function' ? patch(old) : { ...old, ...patch };
     });
@@ -316,8 +338,11 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
     else setToast(rating ? `${'★'.repeat(rating)} saved` : 'Rating cleared');
   }, [bridge]);
 
+  // Which way you're going through the photos: the next one that way is decoded ahead.
+  const way = useRef(1);
   const go = (i) => {
     if (!photos.length) return;
+    if (i !== index) way.current = i < index ? -1 : 1;
     setCurrentId(photos[Math.max(0, Math.min(photos.length - 1, i))].id);
   };
 
@@ -357,6 +382,8 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
       if (typing) return;
       const ctrl = e.ctrlKey || e.metaKey;
       const k = e.key.toLowerCase();
+      // Ctrl+Shift+E: Export, as in Lightroom (Retouch has Photoshop's keys).
+      if (ctrl && e.shiftKey && k === 'e' && !retouch) { e.preventDefault(); if (s) setExporting({}); return; }
       // Ctrl+E: Develop <-> Retouch (Lightroom's "Edit in Photoshop").
       if (ctrl && k === 'e') { e.preventDefault(); if (s) onMode?.(retouch ? 'develop' : 'retouch'); return; }
       if (retouch && rx.onKey(e)) return;
@@ -451,7 +478,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
           <button className={`btn btn-sm${before ? ' on' : ''}`} title="Before / after (\)" onClick={() => setBefore((b) => !b)} disabled={!s}><Icon name="compare" size={14} />{before ? 'Before' : 'After'}</button>
           {!retouch && <button className={`btn btn-sm${overlay.show ? ' on' : ''}`} title="Show the selected mask on the main photo (O)" onClick={() => setOverlay({ show: !overlay.show })} disabled={!s}><Icon name="mask" size={14} />Overlay</button>}
           {!retouch && <button className={`btn btn-sm${crop ? ' btn-primary' : ''}`} title="Crop and straighten (R)" onClick={() => setCrop((c) => !c)} disabled={!s}><Icon name="crop" size={14} />{crop ? 'Done' : 'Crop'}</button>}
-          <button className="btn btn-sm btn-primary" onClick={() => setExporting({})} disabled={!s}><Icon name="export" size={14} />Export</button>
+          <button className="btn btn-sm btn-primary" onClick={() => setExporting({})} disabled={!s} title="Export JPEG (Ctrl+Shift+E)"><Icon name="export" size={14} />Export</button>
         </div>
       </header>
       {retouch && s && info && <div className="rt-top"><MenuBar menus={rx.menus} /><OptionsBar rx={rx} /></div>}
@@ -473,7 +500,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
             </div>
           ) : photo ? (
             <DevelopStage key={photo.id} photo={photo} meta={curMeta} info={info} s={shown} cropMode={crop} cropOverlay={cropOverlay} clip={clip}
-              onCrop={(c) => update({ crop: c })} apiRef={stageApi} nextPhoto={photos[index + 1]} before={before} picker={picker}
+              onCrop={(c) => update({ crop: c })} apiRef={stageApi} nextPhoto={photos[index + way.current] || photos[index - way.current]} before={before} picker={picker}
               maskView={editing && !retouch ? mainMaskView : null} previewView={layout.nav && !retouch ? maskView(selMask, overlay) || 'none' : null}
               maskTool={editing && selPart && !picker && !retouch ? { part: selPart, brush, onPart: (patch) => acts.changePart(selMask.id, selPart.id, patch) } : null}
               retouch={retouch && s ? { rx, toast: setToast } : null} />
@@ -517,7 +544,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
           setToast(`Preset "${name}" saved`);
         }} />
       )}
-      {exporting && <ExportModal photo={photo} photos={allPhotos} folder={list?.folder} info={info} s={s} settingsCache={settingsCache.current}
+      {exporting && <ExportModal photo={photo} photos={allPhotos} shown={photos} picked={picked.size ? picked : null} meta={meta} folder={list?.folder} info={info} s={s}
         onClose={() => setExporting(null)} onDone={(msg) => { setExporting(null); setToast(msg); }} />}
     </div>
   );
@@ -769,28 +796,31 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
   }, [ready, view, W, H, cropMode, frame, toSource, dn, layersNow]);
 
   // Histogram, a little behind the sliders.
+  // Read back without waiting for the graphics card, so dragging never stalls on it.
   useEffect(() => {
     if (!ready || !s || !info || !geo) return;
+    let live = true;
     const t = setTimeout(() => {
-      const r = rendererRef.current;
-      if (r) setHist(r.histogram(info, s, geo, geo.frame(s.crop)));
+      rendererRef.current?.histogram(info, s, geo, geo.frame(s.crop), true).then((h) => { if (live && h) setHist(h); });
     }, 80);
-    return () => clearTimeout(t);
+    return () => { live = false; clearTimeout(t); };
   }, [ready, s, info]);
   // The mask preview on the left: the whole photo with the selected mask.
   const previewKey = previewView && JSON.stringify(previewView);
   useEffect(() => {
     if (!ready || !s || !info || !geo || !previewView) return;
+    let live = true;
     const t = setTimeout(() => {
       const r = rendererRef.current;
       if (!r) return;
       const f = geo.frame(s.crop);
       const k = Math.min(PREVIEW_W / (2 * f.hw), PREVIEW_H / (2 * f.hh)) * dpr;
       const w = Math.max(8, Math.round(2 * f.hw * k)), h = Math.max(8, Math.round(2 * f.hh * k));
-      const px = r.preview(info, s, geo, f, w, h, previewView === 'none' ? null : previewView);
-      window.dispatchEvent(new CustomEvent('develop:preview', { detail: { w, h, px } }));
+      r.preview(info, s, geo, f, w, h, previewView === 'none' ? null : previewView, true).then((px) => {
+        if (live && px) window.dispatchEvent(new CustomEvent('develop:preview', { detail: { w, h, px } }));
+      });
     }, 60);
-    return () => clearTimeout(t);
+    return () => { live = false; clearTimeout(t); };
   }, [ready, s, info, previewKey]);
   useEffect(() => { apiRef.current.hist = hist; window.dispatchEvent(new CustomEvent('develop:hist', { detail: hist })); }, [hist]);
 
@@ -1401,90 +1431,3 @@ function Wheel({ k, title, s, set, big }) {
   );
 }
 
-// --- export ------------------------------------------------------------------
-
-const SIZES = [['Full size', 0], ['Long edge 4096 px', 4096], ['Long edge 2048 px', 2048]];
-
-function ExportModal({ photo, photos, folder, info, s, settingsCache, onClose, onDone }) {
-  const [which, setWhich] = useState('this');
-  const [longEdge, setLongEdge] = useState(() => Number(localStorage.getItem('flightroom-export-edge') || 0));
-  const [quality, setQuality] = useState(() => Number(localStorage.getItem('flightroom-export-quality') || 92));
-  const [dest, setDest] = useState(() => localStorage.getItem('flightroom-export-dest') || '');
-  const [run, setRun] = useState(null); // { done, total, current }
-  const cancel = useRef(false);
-  const sep = folder.includes('\\') ? '\\' : '/';
-  const target = dest || `${folder}${sep}Exported`;
-  const rated = photos.filter((p) => p.raw && (p.rating || 0) > 0);
-  const edited = photos.filter((p) => p.raw && settingsCache.has(p.id));
-  const list = which === 'this' ? [photo] : which === 'rated' ? rated : edited;
-  const geo = new Geometry(info.width, info.height, info.orientation);
-  const size = exportSize(geo.frame(s.crop), longEdge);
-
-  const start = async () => {
-    try {
-      localStorage.setItem('flightroom-export-edge', String(longEdge));
-      localStorage.setItem('flightroom-export-quality', String(quality));
-      localStorage.setItem('flightroom-export-dest', dest);
-    } catch {}
-    cancel.current = false;
-    const saved = [];
-    const failed = [];
-    for (let i = 0; i < list.length && !cancel.current; i++) {
-      const p = list[i];
-      setRun({ done: i, total: list.length, current: p.name, part: 0 });
-      try {
-        let pInfo = info, pS = s;
-        if (p.id !== photo.id) {
-          pInfo = await app.develop.open(p);
-          if (pInfo.error) throw new Error(pInfo.error);
-          pS = settingsCache.get(p.id) || fromXmp(pInfo.settings, pInfo.curves, asShotTempTint(pInfo), pInfo.own);
-        }
-        saved.push(await exportPhoto(p, pInfo, pS, { folder: target, longEdge, quality, cancelled: () => cancel.current, onProgress: (part) => setRun((r) => r && { ...r, part }) }));
-      } catch (err) {
-        if (String(err.message) !== 'cancelled') failed.push(`${p.name}: ${err.message || err}`);
-      }
-    }
-    // Put the photo on screen back in memory for zooming.
-    if (list.some((p) => p.id !== photo.id)) app.develop.open(photo);
-    setRun(null);
-    if (failed.length) { onDone(`Exported ${saved.length}, ${failed.length} failed (${failed[0]})`); return; }
-    onDone(cancel.current ? `Stopped after ${saved.length} photos` : saved.length === 1 ? `Saved ${saved[0].split(/[\\/]/).pop()} to ${target.split(/[\\/]/).pop()}` : `Saved ${saved.length} JPEGs to ${target.split(/[\\/]/).pop()}`);
-  };
-
-  return (
-    <Modal title="Export JPEG" onClose={run ? () => {} : onClose} footer={run
-      ? <button className="btn" onClick={() => { cancel.current = true; }}>Stop</button>
-      : <><button className="btn btn-ghost" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={!list.length} onClick={start}>Export {list.length === 1 ? '1 photo' : `${list.length} photos`}</button></>}>
-      {run ? (
-        <div className="auto-progress">
-          <div className="small">Exporting {run.current} ({run.done + 1} of {run.total})…</div>
-          <div className="tree-progress wide"><span style={{ width: `${((run.done + (run.part || 0)) / run.total) * 100}%` }} /></div>
-        </div>
-      ) : (
-        <div className="export-form">
-          <div className="export-row"><span>Photos</span>
-            <Dropdown value={which} onChange={setWhich} options={[
-              { value: 'this', label: `This photo (${photo.name})` },
-              { value: 'rated', label: 'Rated photos in this folder', hint: rated.length, disabled: !rated.length },
-              { value: 'edited', label: 'Photos edited this session', hint: edited.length, disabled: !edited.length },
-            ]} />
-          </div>
-          <div className="export-row"><span>Size</span>
-            <Dropdown value={longEdge} onChange={setLongEdge} options={SIZES.map(([label, value]) => ({ value, label }))} />
-            {which === 'this' && <span className="muted small">{size.w} × {size.h}</span>}
-          </div>
-          <label className="export-row"><span>Quality</span>
-            <input type="range" min={60} max={100} value={quality} onChange={(e) => setQuality(Number(e.target.value))} />
-            <span className="muted small">{quality}</span>
-          </label>
-          <div className="export-row"><span>Save to</span>
-            <span className="export-dest" title={target}>{target}</span>
-            <button className="btn btn-sm" onClick={async () => { const d = await app.develop.pickFolder('Export to'); if (d) setDest(d); }}>Change</button>
-            {dest && <button className="btn btn-sm btn-ghost" onClick={() => setDest('')}>Use "Exported"</button>}
-          </div>
-          <p className="muted small">JPEGs in sRGB, with the camera and lens details. Existing files are never overwritten.</p>
-        </div>
-      )}
-    </Modal>
-  );
-}

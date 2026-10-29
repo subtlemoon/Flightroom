@@ -289,6 +289,7 @@ export class Renderer {
   /** Releases everything on the graphics card. */
   dispose() {
     const gl = this.gl;
+    this.disposed = true;
     this.free(this.src); this.clearHi(); this.free(this.histTarget); this.free(this.prevTarget);
     for (const t of this.guide || []) this.free(t);
     gl.deleteTexture(this.curveTex); gl.deleteTexture(this.hueTex); gl.deleteTexture(this.blank);
@@ -572,8 +573,44 @@ export class Renderer {
     });
   }
 
-  /** Renders a small copy and counts its pixels per level, for the histogram. */
-  histogram(info, s, geo, frame) {
+  /**
+   * A target's pixels (bottom row first), read without making the page wait for
+   * the graphics card to finish: resolves once it has (null if it went away).
+   */
+  readLater(t) {
+    const gl = this.gl, { w, h } = t;
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buf);
+    gl.bufferData(gl.PIXEL_PACK_BUFFER, w * h * 4, gl.STREAM_READ);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, 0);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    gl.flush();
+    return new Promise((resolve) => {
+      const poll = () => {
+        if (gl.isContextLost()) { resolve(null); return; }
+        if (!this.disposed && gl.clientWaitSync(sync, 0, 0) === gl.TIMEOUT_EXPIRED) { setTimeout(poll, 4); return; }
+        let px = null;
+        if (!this.disposed) {
+          px = new Uint8Array(w * h * 4);
+          gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buf);
+          gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, px);
+          gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+        }
+        gl.deleteSync(sync);
+        gl.deleteBuffer(buf);
+        resolve(px);
+      };
+      poll();
+    });
+  }
+
+  /**
+   * Renders a small copy and counts its pixels per level, for the histogram.
+   * `later`: a promise, without waiting for the graphics card.
+   */
+  histogram(info, s, geo, frame, later = false) {
     const gl = this.gl;
     const k = 256 / Math.max(frame.hw, frame.hh) / 2;
     const w = Math.max(8, Math.round(frame.hw * 2 * k)), h = Math.max(8, Math.round(frame.hh * 2 * k));
@@ -585,15 +622,20 @@ export class Renderer {
     this.hi = null;
     this.render(info, s, geo, frame, outToFrame(w, h, frame, { scale: k, u: 0, v: 0 }), { target: this.histTarget });
     this.hi = saveHi;
+    const count = (px) => {
+      if (!px) return null;
+      const bins = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+      for (let i = 0; i < px.length; i += 4) { bins[0][px[i]]++; bins[1][px[i + 1]]++; bins[2][px[i + 2]]++; }
+      return bins;
+    };
+    if (later) return this.readLater(this.histTarget).then(count);
     const px = new Uint8Array(w * h * 4);
     gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
-    const bins = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
-    for (let i = 0; i < px.length; i += 4) { bins[0][px[i]]++; bins[1][px[i + 1]]++; bins[2][px[i + 2]]++; }
-    return bins;
+    return count(px);
   }
 
-  /** A small copy of the whole (cropped) photo, for the mask preview; pixels bottom row first. */
-  preview(info, s, geo, frame, w, h, maskView) {
+  /** A small copy of the whole (cropped) photo, for the mask preview; pixels bottom row first. `later` as for histogram(). */
+  preview(info, s, geo, frame, w, h, maskView, later = false) {
     const gl = this.gl;
     if (!this.prevTarget || this.prevTarget.w !== w || this.prevTarget.h !== h) {
       this.free(this.prevTarget);
@@ -603,6 +645,7 @@ export class Renderer {
     this.hi = null;
     this.render(info, s, geo, frame, outToFrame(w, h, frame, { scale: fitScale(w, h, frame), u: 0, v: 0 }), { target: this.prevTarget, maskView });
     this.hi = saveHi;
+    if (later) return this.readLater(this.prevTarget);
     const px = new Uint8Array(w * h * 4);
     gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
     return px;

@@ -34,13 +34,13 @@ export function exportSize(frame, longEdge) {
 }
 
 /**
- * Renders and saves one photo. opts: { folder, longEdge, quality, onProgress(0-1), cancelled() }.
+ * Renders and saves one photo. opts: { folder, longEdge, quality, onProgress(0-1), cancelled(),
+ * renderer (one to reuse for a batch; else one is made for this photo) }.
  * Returns the saved file's path.
  */
 export async function exportPhoto(photo, info, s, opts) {
   const dev = bridge.develop;
-  const canvas = new OffscreenCanvas(16, 16);
-  const r = new Renderer(canvas);
+  const r = opts.renderer || new Renderer(new OffscreenCanvas(16, 16));
   const job = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   let begun = false;
   try {
@@ -122,6 +122,6 @@ export async function exportPhoto(photo, info, s, opts) {
     if (begun) dev.exportFinish(job, true);
     throw err;
   } finally {
-    r.dispose();
+    if (r !== opts.renderer) r.dispose();
   }
 }

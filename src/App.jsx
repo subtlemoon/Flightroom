@@ -1,5 +1,5 @@
 import { bridge as app } from './bridge.js';
-import { Component, useEffect, useState } from 'react';
+import { Component, Suspense, lazy, useEffect, useState } from 'react';
 import { useStore } from './store.js';
 import { Icon, PanelHandle } from './components/ui.jsx';
 import { toggle, toggleSides, useLayout } from './layout.js';
@@ -8,8 +8,12 @@ import { GroupForm, GroupView, PresetView } from './components/groups.jsx';
 import { CatalogView, MyGearView, SettingsView } from './components/library.jsx';
 import { NewsView } from './components/news.jsx';
 import { CullView } from './components/cull.jsx';
-import { DevelopView } from './components/develop.jsx';
 import { HomeView, startView } from './components/home.jsx';
+
+// Develop and Retouch (the RAW renderer, layers, AI) load on their own, so the
+// app opens faster; they're fetched in the background once it has started.
+const loadDevelop = () => import('./components/develop.jsx');
+const DevelopView = lazy(() => loadDevelop().then((m) => ({ default: m.DevelopView })));
 
 export default function App() {
   const store = useStore();
@@ -54,6 +58,11 @@ export default function App() {
       <Icon name={icon} /><span className="nav-text">{label}</span>{extra}
     </button>
   );
+
+  useEffect(() => {
+    const t = setTimeout(loadDevelop, 1500);
+    return () => clearTimeout(t);
+  }, []);
 
   const layout = useLayout();
   const photoView = view.name === 'cull' || view.name === 'develop';
@@ -105,7 +114,7 @@ export default function App() {
 
       <main className={`content${photoView ? ' content-cull' : ''}`}>
         {!rail && <PanelHandle side="left" open={layout.nav} onClick={() => toggle('nav')} title={`${layout.nav ? 'Hide' : 'Show'} sidebar (F7)`} />}
-        <Boundary key={view.name}>{main}</Boundary>
+        <Boundary key={view.name}><Suspense fallback={null}>{main}</Suspense></Boundary>
       </main>
 
       {detail && (
