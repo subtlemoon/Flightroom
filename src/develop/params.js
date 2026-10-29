@@ -2,6 +2,7 @@
 // stored in the .xmp sidecar using Lightroom's own names (the crs: namespace),
 // so Lightroom picks the edits up when it imports or re-reads the photo.
 import { masksFromJson, masksToCrs, masksToJson } from './masks.js';
+import { layersFromText, layersToText } from './retouch.js';
 import { TONE_MAPPERS } from './tonemap.js';
 
 export { TONE_MAPPERS };
@@ -180,7 +181,7 @@ export function defaults(asShot) {
   return { ...d };
 }
 function makeDefaults(asShot) {
-  const s = { wb: 'As Shot', profile: 'adobe', toneMap: 'none', bw: false, removeCA: false, lensProfile: false, vignetteStyle: 1, constrainCrop: false, crop: null, masks: [], aiDenoise: 0 };
+  const s = { wb: 'As Shot', profile: 'adobe', toneMap: 'none', bw: false, removeCA: false, lensProfile: false, vignetteStyle: 1, constrainCrop: false, crop: null, masks: [], layers: [], aiDenoise: 0 };
   for (const [k] of CURVE_CHANNELS) s[k] = LINEAR_CURVE;
   for (const sl of SLIDERS) s[sl.key] = sl.def;
   s.temp = asShot.temp;
@@ -243,6 +244,8 @@ export function fromXmp(crs, curves, asShot, own = {}) {
   }
   // Masks are read from Flightroom's own copy (Lightroom's newer mask format isn't read yet).
   if (own.Masks != null) { s.masks = masksFromJson(own.Masks); s.masksOwned = true; }
+  // Retouch layers (Flightroom's own; Lightroom has nothing like them).
+  if (own.Layers) s.layers = layersFromText(own.Layers);
   // AI Denoise: how much of it is blended in (Flightroom's own; Lightroom keeps it as a separate DNG).
   const dn = Number(own.Denoise);
   if (dn > 0 && dn <= 100) s.aiDenoise = Math.round(dn);
@@ -302,6 +305,7 @@ export function toXmp(s) {
     seqs,
     own: {
       Masks: masksToJson(s.masks),
+      Layers: layersToText(s.layers),
       Denoise: s.aiDenoise ? String(s.aiDenoise) : '',
       Profile: s.profile === 'agx' ? 'agx' : '',
       ToneMap: s.toneMap && s.toneMap !== 'none' ? s.toneMap : '',
@@ -314,7 +318,7 @@ export function toXmp(s) {
 
 /** True when the settings differ from what the photo looked like straight from the camera. */
 export function isEdited(s, asShot) {
-  return !!s.crop || !!s.masks?.length || SECTIONS.some((sec) => sectionEdited(s, sec.id, asShot));
+  return !!s.crop || !!s.masks?.length || !!s.layers?.length || SECTIONS.some((sec) => sectionEdited(s, sec.id, asShot));
 }
 
 export function formatValue(sl, v) {

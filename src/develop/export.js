@@ -5,8 +5,17 @@
 // and encoded.
 import { bridge } from '../bridge.js';
 import { Geometry, Renderer, ap, mat, mm, parseFrame, sourceMap } from './renderer.js';
+import { opBounds, sourceRegions, visibleLayers } from './retouch.js';
 
 const TILE = 2048;
+
+const healRing = (long, k) => Math.max(16, long * k * 0.004);
+/** The w x h middle of a padded tile's pixels (rows bottom first, as read back). */
+function inner(px, pw, pad, w, h) {
+  const out = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) out.set(px.subarray(((y + pad) * pw + pad) * 4, ((y + pad) * pw + pad + w) * 4), y * w * 4);
+  return out;
+}
 
 async function fetchFrame(url) {
   const res = await fetch(url);
@@ -46,9 +55,19 @@ export async function exportPhoto(photo, info, s, opts) {
     const toOriented = geo.frameToOriented(f);
     const toSource = sourceMap(geo, s);
     const margin = 16 + 4 * s.sharpenRadius + (s.removeCA || s.defringePurple || s.defringeGreen ? 8 : 0);
+    const layers = visibleLayers(s);
+    // A heal works out its colour from all around its edge, so a tile is drawn
+    // with room around it for heals that cross into the next one.
+    const long = Math.max(geo.ow, geo.oh);
+    const heals = layers.flatMap((l) => l.ops.filter((op) => op.t === 'heal'));
+    const P = heals.length ? Math.min(512, Math.ceil(Math.max(...heals.map((op) => {
+      const b = opBounds(op, geo.ow, geo.oh);
+      return Math.max(b[2] - b[0], b[3] - b[1]);
+    })) * k * 0.5 + healRing(long, k))) : 0;
     for (let i = 0; i < tiles.length; i++) {
       if (opts.cancelled?.()) throw new Error('cancelled');
-      const [tx, ty, tw, th] = tiles[i];
+      const [itx, ity, itw, ith] = tiles[i];
+      const [tx, ty, tw, th] = [itx - P, ity - P, itw + 2 * P, ith + 2 * P];
       // Tile pixels (y up) -> crop frame.
       const out2frame = mat(1 / (k * f.hw), 0, (tx - EW / 2) / (k * f.hw), 0, -1 / (k * f.hh), (ty + th - EH / 2) / (k * f.hh));
       // The part of the photo this tile shows, plus room for sharpening.
@@ -68,8 +87,18 @@ export async function exportPhoto(photo, info, s, opts) {
         const rect = [x0 / geo.sw, y0 / geo.sh, rw / geo.sw, rh / geo.sh];
         r.setHi(region, rect, rect);
       }
-      const px = r.renderTile(info, s, geo, f, out2frame, tw, th);
-      const res = await dev.exportTile(job, tx, ty, tw, th, px);
+      // Retouch clones and heals in this tile copy from elsewhere: those parts at full size too.
+      if (layers.length) {
+        const ob = [[0, 0], [tw, 0], [0, th], [tw, th]].map(([x, y]) => ap(o2o, x, y));
+        const box = [Math.min(...ob.map((p) => p[0])), Math.min(...ob.map((p) => p[1])), Math.max(...ob.map((p) => p[0])), Math.max(...ob.map((p) => p[1]))];
+        const regions = sourceRegions(layers, geo, toSource, box, scale, 64);
+        const frames = [];
+        for (const g of regions) frames.push(await fetchFrame(dev.regionUrl(photo, g, dn)));
+        r.setOpHi(new Map(regions.map((g, i) => [g.id, { frame: frames[i], rect: [g.x / geo.sw, g.y / geo.sh, g.w / geo.sw, g.h / geo.sh] }])));
+      }
+      let px = r.renderTile(info, s, geo, f, out2frame, tw, th);
+      if (P) px = inner(px, tw, P, itw, ith);
+      const res = await dev.exportTile(job, itx, ity, itw, ith, px);
       if (res?.error) throw new Error(res.error);
       opts.onProgress?.((i + 1) / (tiles.length + 1));
     }

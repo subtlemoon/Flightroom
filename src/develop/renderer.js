@@ -6,6 +6,7 @@ import { colorTransform, inv3, mul3 } from './color.js';
 import { CURVE_SIZE, HUE_SIZE, calibrationMatrix, curveTable, gradeTints, hueTable } from './luts.js';
 import { MAX_MASKS, POINT_DEFAULT, adjOf, lumRange, maskRaster } from './masks.js';
 import { tonemapUniforms } from './tonemap.js';
+import { Composer } from './compose.js';
 
 const GUIDE_EDGE = 320;
 // The base rendering under the sliders, per profile (params.js PROFILES).
@@ -262,6 +263,7 @@ export class Renderer {
     this.src = { tex: this.texture(gl.RGB16F, frame.w, frame.h, gl.RGB, gl.HALF_FLOAT, frame.data), w: frame.w, h: frame.h };
     this.guideKey = '';
     this.clearHi();
+    this.setOpHi(null);
   }
 
   /** A full-resolution part of the photo; rect in photo coordinates (0-1). */
@@ -276,6 +278,13 @@ export class Renderer {
     this.hi = null;
   }
 
+  /** Sharper parts of the photo for clone and heal sources: Map op id -> { frame, rect }, or null. */
+  setOpHi(map) {
+    const gl = this.gl;
+    for (const h of this.opHi?.values() || []) gl.deleteTexture(h.tex);
+    this.opHi = map && new Map([...map].map(([id, h]) => [id, { tex: this.texture(gl.RGB16F, h.frame.w, h.frame.h, gl.RGB, gl.HALF_FLOAT, h.frame.data), rect: h.rect, safe: h.rect }]));
+  }
+
   /** Releases everything on the graphics card. */
   dispose() {
     const gl = this.gl;
@@ -283,6 +292,8 @@ export class Renderer {
     for (const t of this.guide || []) this.free(t);
     gl.deleteTexture(this.curveTex); gl.deleteTexture(this.hueTex); gl.deleteTexture(this.blank);
     for (const t of this.maskTex || []) gl.deleteTexture(t.tex);
+    this.composer?.dispose();
+    this.setOpHi(null);
     if (this.maskCurveTex) gl.deleteTexture(this.maskCurveTex);
     // An offscreen (export) context is done for good; a page canvas may be
     // given a new renderer (React remounts), so its context must stay usable.
@@ -467,7 +478,7 @@ export class Renderer {
    * Renders into `target` (null = the canvas). `out2frame` maps output pixels
    * to the crop frame; geo/frame say where that frame sits in the photo.
    */
-  render(info, s, geo, frame, out2frame, { target = null, showClip = false, maskView = null } = {}) {
+  render(info, s, geo, frame, out2frame, { target = null, showClip = false, maskView = null, live = null } = {}) {
     if (!this.src) return;
     this.updateGuide(info, s);
     this.updateLuts(s);
@@ -475,7 +486,19 @@ export class Renderer {
     if (this.masks.length) this.updateMaskCurves();
     if ((s.dehaze || this.masks.some((m) => m.adj?.dehaze)) && this.airY == null) this.measureAir();
     const out2ori = mm(geo.frameToOriented(frame), out2frame);
-    const hi = this.hi;
+    // Retouch layers on top (compose.js); `live` is a stroke still being painted.
+    const layers = (s.layers || []).filter((l) => !l.hidden && l.opacity > 0 && (l.ops.length || l.id === live?.layerId));
+    if (!layers.length) { this.drawPhoto(info, s, geo, frame, out2frame, out2ori, target, showClip, maskView, null); return; }
+    this.composer ||= new Composer(this);
+    this.composer.render((t, extra) => (extra
+      ? this.drawPhoto(info, s, geo, frame, out2frame, mm(mat(1, 0, extra.shift[0], 0, 1, extra.shift[1]), out2ori), t, false, null, this.opHi?.get(extra.op.id))
+      : this.drawPhoto(info, s, geo, frame, out2frame, out2ori, t, showClip, maskView, null)), layers, geo, out2ori, target, live,
+    [s, info, frame, this.src, this.hi, this.opHi, showClip, maskView && JSON.stringify(maskView)]);
+  }
+
+  /** The developed photo; out2ori may be shifted (a clone's source), sharper may stand in for this.hi. */
+  drawPhoto(info, s, geo, frame, out2frame, out2ori, target, showClip, maskView, sharper) {
+    const hi = sharper || this.hi;
     const look = LOOKS[s.profile] || LOOKS.adobe;
     const { cx, cy, half } = centred(geo);
     const [tS, tM, tH, tG] = gradeTints(s);
