@@ -11,6 +11,25 @@ import { filterReach } from './filters.js';
 const DISTORT = new Set(['radial', 'pinch', 'spherize', 'twirl']);
 
 const TILE = 2048;
+// A tile is drawn with room around it for effects that reach past its edge. The
+// padded tile is one picture on the graphics card, so its edge is capped (with
+// room up to 1,024 px it is 2048 + 2 x 1024, as always); wider room shrinks the
+// tile instead, down to MIN_TILE. Effects reaching further than that still
+// export, with as much room as fits.
+export const MAX_PADDED = 6144;
+const MIN_TILE = 512;
+
+/**
+ * Tiles ([x, y, w, h], output px) for an EW x EH export whose effects reach
+ * `reach` output px past a tile's edge, and the room (pad) drawn around each.
+ */
+export function tileGrid(EW, EH, reach, maxPadded = MAX_PADDED) {
+  const pad = Math.min(Math.ceil(Math.max(0, reach)), Math.floor((maxPadded - MIN_TILE) / 2));
+  const tile = Math.min(TILE, maxPadded - 2 * pad);
+  const tiles = [];
+  for (let ty = 0; ty < EH; ty += tile) for (let tx = 0; tx < EW; tx += tile) tiles.push([tx, ty, Math.min(tile, EW - tx), Math.min(tile, EH - ty)]);
+  return { pad, tiles };
+}
 
 const healRing = (long, k) => Math.max(16, long * k * 0.004);
 /** The w x h middle of a padded tile's pixels (rows bottom first, as read back). */
@@ -53,8 +72,6 @@ export async function exportPhoto(photo, info, s, opts) {
     const started = await dev.exportBegin({ job, folder: opts.folder, name: photo.name, width: EW, height: EH, quality: opts.quality, source: photo.id });
     if (started?.error) throw new Error(started.error);
     begun = true;
-    const tiles = [];
-    for (let ty = 0; ty < EH; ty += TILE) for (let tx = 0; tx < EW; tx += TILE) tiles.push([tx, ty, Math.min(TILE, EW - tx), Math.min(TILE, EH - ty)]);
     const toOriented = geo.frameToOriented(f);
     const toSource = sourceMap(geo, s);
     const margin = 16 + 4 * s.sharpenRadius + (s.removeCA || s.defringePurple || s.defringeGreen ? 8 : 0);
@@ -75,7 +92,7 @@ export async function exportPhoto(photo, info, s, opts) {
       const smear = l.ops.some((op) => SNAPSHOT.has(op.t)) ? 8 : 0;
       return (styles * 1.5 + filters + (l.mask && !l.mask.off ? (l.mask.feather || 0) * long : 0)) * k + smear;
     };
-    const P = Math.min(1024, Math.ceil(Math.max(healPad, ...layers.map(reach), 0)));
+    const { pad: P, tiles } = tileGrid(EW, EH, Math.max(healPad, ...layers.map(reach), 0), Math.min(MAX_PADDED, r.maxTex));
     for (let i = 0; i < tiles.length; i++) {
       if (opts.cancelled?.()) throw new Error('cancelled');
       const [itx, ity, itw, ith] = tiles[i];
