@@ -100,7 +100,7 @@ export function MaskPanel({ s, size, sel, setSel, acts, overlay, setOverlay, ai,
         <span className="muted small">{masks.length} of {MAX_MASKS}</span>
       </div>
       <div className="mask-create">
-        <button className="btn btn-sm btn-primary mask-new" disabled={!s || masks.length >= MAX_MASKS} onClick={() => setMenu(menu === 'new' ? null : 'new')}>
+        <button className="btn btn-sm btn-primary mask-new" disabled={!s || masks.length >= MAX_MASKS} onClick={() => { if (menu !== 'new') ai.warm(); setMenu(menu === 'new' ? null : 'new'); }}>
           <Icon name="plus" size={14} />Create new mask
         </button>
         {menu === 'new' && <PartMenu onPick={(t) => { setMenu(null); acts.create(t); }} onAi={(t) => pickAi(t)} onClose={() => setMenu(null)} />}

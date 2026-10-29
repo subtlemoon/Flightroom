@@ -68,17 +68,36 @@ export function useAiMasks({ photo, picture, acts, ensure, toast }) {
   const [pick, setPick] = useState(null); // { type, results, target }
   useEffect(() => setPick(null), [photo?.id]);
 
-  const results = async (task) => {
+  // One run per photo and task, shared by a click and the head start below.
+  const results = (task) => {
     const key = `${photo.id}|${task}`;
     if (!cache.has(key)) {
       const pic = picture();
-      if (!pic) throw new Error('The photo isn\'t ready yet');
-      const r = await bridge.ai.masks(task, pic.w, pic.h, pic.rgba);
-      if (r?.error) throw new Error(r.error);
-      cache.set(key, r);
+      if (!pic) return Promise.reject(new Error('The photo isn\'t ready yet'));
+      const t0 = performance.now();
+      const p = bridge.ai.masks(task, pic.w, pic.h, pic.rgba).then((r) => {
+        if (r?.error) throw new Error(r.error);
+        return { r, secs: (performance.now() - t0) / 1000 };
+      });
+      p.catch(() => cache.delete(key));
+      cache.set(key, p);
       if (cache.size > 6) cache.delete(cache.keys().next().value);
     }
     return cache.get(key);
+  };
+
+  // Opening a mask menu starts on the subject, which is the slow one, if it's downloaded.
+  const warm = async () => {
+    try {
+      if (photo && (await bridge.ai.status()).features?.subject) results(TASK.subject).catch(() => {});
+    } catch { /* it runs on click instead */ }
+  };
+
+  // A slow run says where it ran, so a processor fallback shows.
+  const slow = async (type, secs) => {
+    const st = await bridge.ai.status().catch(() => ({}));
+    const gpu = st.device === 'graphics card', fell = gpu && st.on_cpu?.includes(FEATURE[type]);
+    toast(`${aiName(type)} took ${Math.round(secs)} s on the ${gpu && !fell ? 'graphics card' : 'processor'}${fell ? ' (the graphics card couldn\'t run it)' : ''}`);
   };
 
   const make = (items, target, separate) => {
@@ -98,7 +117,9 @@ export function useAiMasks({ photo, picture, acts, ensure, toast }) {
     try {
       if (!(await ensure(FEATURE[type]))) return;
       setBusy(AI_TYPES.find(([k]) => k === type)[1]);
-      const r = await results(TASK[type]);
+      const t0 = performance.now();
+      const { r, secs } = await results(TASK[type]);
+      if (performance.now() - t0 > 6000) slow(type, secs);
       const named = (n) => r.find((x) => x.name === n);
       if (type === 'subject' || type === 'background') {
         const sub = named('subject');
@@ -116,7 +137,7 @@ export function useAiMasks({ photo, picture, acts, ensure, toast }) {
   };
 
   const picker = pick && <AiPicker {...pick} onClose={() => setPick(null)} onCreate={(items, separate) => { setPick(null); make(items, pick.target, separate); }} />;
-  return { run, busy, picker };
+  return { run, busy, picker, warm };
 }
 
 // People: each person and their parts. Landscape: what was found.
