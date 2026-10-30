@@ -204,37 +204,88 @@ impl Raw {
         (dw, dh, out)
     }
 
-    /// Full-resolution RGB of a region (Malvar-He-Cutler demosaicing). Rows are
-    /// done in bands, each normalizing its sensor values once (with the 2 rows
-    /// and columns around it the 5x5 filter reads, mirrored at the photo's edges).
-    pub fn demosaic(&self, x0: usize, y0: usize, w: usize, h: usize, dn: Option<(&[u16], f32)>) -> Vec<f32> {
-        const BAND: usize = 32;
+    /// Columns x0..x0 + w and the 2 more each side the 5x5 filter reads, mirrored at the photo's edges.
+    fn cols(&self, x0: usize, w: usize) -> Vec<usize> {
+        (0..w + 4).map(|i| mirror((x0 + i) as isize - 2, self.w)).collect()
+    }
+
+    /// `out.len() / (w * 3)` rows of a region (Malvar-He-Cutler demosaicing) from
+    /// row `top`, `xs` its cols(): the sensor values they read are normalized once,
+    /// with the 2 rows above and below (mirrored at the photo's edges).
+    fn demosaic_rows(&self, x0: usize, w: usize, top: usize, xs: &[usize], dn: Option<(&[u16], f32)>, out: &mut [f32]) {
         let pw = w + 4;
-        let xs: Vec<usize> = (0..pw).map(|i| mirror((x0 + i) as isize - 2, self.w)).collect();
-        let mut out = vec![0f32; w * h * 3];
-        out.par_chunks_mut(w * 3 * BAND).enumerate().for_each(|(band, chunk)| {
-            let rows = chunk.len() / (w * 3);
-            let top = y0 + band * BAND;
-            let mut norm = vec![0f32; pw * (rows + 4)];
-            for (i, line) in norm.chunks_exact_mut(pw).enumerate() {
-                self.norm_row(mirror((top + i) as isize - 2, self.h), &xs, line);
+        let mut norm = vec![0f32; pw * (out.len() / (w * 3) + 4)];
+        for (i, line) in norm.chunks_exact_mut(pw).enumerate() {
+            self.norm_row(mirror((top + i) as isize - 2, self.h), xs, line);
+        }
+        for (r, row) in out.chunks_exact_mut(w * 3).enumerate() {
+            let y = top + r;
+            let cfa = self.cfa[y & 1];
+            for (rx, px) in row.chunks_exact_mut(3).enumerate() {
+                let x = x0 + rx;
+                let mut v = mhc(&norm, (r + 2) * pw + rx + 2, pw, cfa[x & 1], cfa[(x + 1) & 1]);
+                if let Some((d, amt)) = dn {
+                    v = mix(v, dn_at(d, (y * self.w + x) * 3), amt);
+                }
+                px.copy_from_slice(&v);
             }
-            for (r, row) in chunk.chunks_exact_mut(w * 3).enumerate() {
-                let y = top + r;
-                let cfa = self.cfa[y & 1];
-                for (rx, px) in row.chunks_exact_mut(3).enumerate() {
-                    let x = x0 + rx;
-                    let mut v = mhc(&norm, (r + 2) * pw + rx + 2, pw, cfa[x & 1], cfa[(x + 1) & 1]);
-                    if let Some((d, amt)) = dn {
-                        v = mix(v, dn_at(d, (y * self.w + x) * 3), amt);
+        }
+    }
+
+    /// Full-resolution RGB of a region, in bands of rows.
+    pub fn demosaic(&self, x0: usize, y0: usize, w: usize, h: usize, dn: Option<(&[u16], f32)>) -> Vec<f32> {
+        let xs = self.cols(x0, w);
+        let mut out = vec![0f32; w * h * 3];
+        out.par_chunks_mut(w * 3 * BAND).enumerate().for_each(|(b, rows)| self.demosaic_rows(x0, w, y0 + b * BAND, &xs, dn, rows));
+        out
+    }
+
+    /// A region as the answer to the window (a frame), averaged down to ow x oh
+    /// when that's smaller. Made a band of rows at a time, straight into the
+    /// answer: the whole region is never held in floats (12 bytes a pixel).
+    #[allow(clippy::too_many_arguments)]
+    pub fn region(&self, x0: usize, y0: usize, w: usize, h: usize, ow: usize, oh: usize, dn: Option<(&[u16], f32)>) -> Vec<u8> {
+        let xs = self.cols(x0, w);
+        let mut out = frame(ow, oh, &[]);
+        out.resize(16 + ow * oh * 6, 0);
+        if ow == w && oh == h {
+            out[16..].par_chunks_mut(w * 6 * BAND).enumerate().for_each(|(b, bytes)| {
+                let mut rgb = vec![0f32; bytes.len() / 2];
+                self.demosaic_rows(x0, w, y0 + b * BAND, &xs, dn, &mut rgb);
+                put_half(bytes, &rgb);
+            });
+            return out;
+        }
+        let (xw, yw) = (weights(w, ow), weights(h, oh));
+        out[16..].par_chunks_mut(ow * 6 * BAND).enumerate().for_each(|(b, bytes)| {
+            // The source rows these output rows cover, demosaiced once, then area-averaged.
+            let taps = &yw[b * BAND..][..bytes.len() / (ow * 6)];
+            let first = taps[0][0].0;
+            let last = taps[taps.len() - 1][taps[taps.len() - 1].len() - 1].0;
+            let mut src = vec![0f32; (last - first + 1) * w * 3];
+            self.demosaic_rows(x0, w, y0 + first, &xs, dn, &mut src);
+            let mut acc = vec![0f32; taps.len() * ow * 3];
+            for (row, ty) in acc.chunks_exact_mut(ow * 3).zip(taps) {
+                for &(sy, wy) in ty {
+                    let line = &src[(sy - first) * w * 3..][..w * 3];
+                    for (ox, tx) in xw.iter().enumerate() {
+                        for &(sx, wx) in tx {
+                            let wt = wx * wy;
+                            row[ox * 3] += line[sx * 3] * wt;
+                            row[ox * 3 + 1] += line[sx * 3 + 1] * wt;
+                            row[ox * 3 + 2] += line[sx * 3 + 2] * wt;
+                        }
                     }
-                    px.copy_from_slice(&v);
                 }
             }
+            put_half(bytes, &acc);
         });
         out
     }
 }
+
+/// Rows of a region done together.
+const BAND: usize = 32;
 
 /// Malvar-He-Cutler at index `i` of normalized sensor values `n` (rows `pw` long,
 /// 2 pixels of room around it): `col` is its colour, `next` the colour right of it.
@@ -329,27 +380,6 @@ fn weights(src: usize, dst: usize) -> Vec<Vec<(usize, f32)>> {
         .collect()
 }
 
-/// Averages an RGB f32 image down to dw x dh.
-pub fn shrink(src: &[f32], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<f32> {
-    let xw = weights(sw, dw);
-    let yw = weights(sh, dh);
-    let mut out = vec![0f32; dw * dh * 3];
-    out.par_chunks_mut(dw * 3).enumerate().for_each(|(oy, row)| {
-        for &(sy, wy) in &yw[oy] {
-            let line = &src[sy * sw * 3..(sy + 1) * sw * 3];
-            for (ox, taps) in xw.iter().enumerate() {
-                for &(sx, wx) in taps {
-                    let w = wx * wy;
-                    row[ox * 3] += line[sx * 3] * w;
-                    row[ox * 3 + 1] += line[sx * 3 + 1] * w;
-                    row[ox * 3 + 2] += line[sx * 3 + 2] * w;
-                }
-            }
-        }
-    });
-    out
-}
-
 /// The answer to an image request: header, then the half floats (little-endian).
 fn frame(w: usize, h: usize, data: &[u16]) -> Vec<u8> {
     const CHUNK: usize = 1 << 16;
@@ -365,14 +395,15 @@ fn frame(w: usize, h: usize, data: &[u16]) -> Vec<u8> {
     out
 }
 
-/// Floats as half-float bits, converted in parallel (and with the CPU's own
+/// Floats into `out` as little-endian half floats (with the CPU's own
 /// conversion instructions where it has them).
-fn f16_bits(data: &[f32]) -> Vec<u16> {
+fn put_half(out: &mut [u8], f: &[f32]) {
     use half::slice::{HalfBitsSliceExt, HalfFloatSliceExt};
-    const CHUNK: usize = 1 << 16;
-    let mut out = vec![0u16; data.len()];
-    out.par_chunks_mut(CHUNK).zip(data.par_chunks(CHUNK)).for_each(|(o, d)| o.reinterpret_cast_mut::<f16>().convert_from_f32_slice(d));
-    out
+    let mut bits = vec![0u16; f.len()];
+    bits.reinterpret_cast_mut::<f16>().convert_from_f32_slice(f);
+    for (b, v) in out.chunks_exact_mut(2).zip(&bits) {
+        b.copy_from_slice(&v.to_le_bytes());
+    }
 }
 
 // --- state ------------------------------------------------------------------
@@ -382,6 +413,9 @@ fn f16_bits(data: &[f32]) -> Vec<u16> {
 const RAWS_KEPT: usize = 3;
 const OVERVIEWS_KEPT: usize = 3;
 
+/// An AI Denoise result: its cache file, the photo, and the half floats (270 MB at 45 MP).
+type Denoised = (String, PathBuf, Arc<Vec<u16>>);
+
 #[derive(Default)]
 pub struct Develop {
     /// Decoded RAW files, the photo on screen first.
@@ -390,8 +424,8 @@ pub struct Develop {
     decoding: Mutex<()>,
     overviews: Mutex<VecDeque<(PathBuf, String, usize, Arc<Vec<u8>>)>>,
     exports: Mutex<HashMap<String, Export>>,
-    /// The AI Denoise result of the photo being developed (cache file key, half floats).
-    denoised: Mutex<Option<(String, Arc<Vec<u16>>)>>,
+    /// The AI Denoise result of the photo being developed, let go once another photo is on screen.
+    denoised: Mutex<Option<Denoised>>,
     cancel_denoise: AtomicBool,
 }
 
@@ -399,6 +433,12 @@ impl Develop {
     /// The decoded RAW for `p`. With `keep` it is the photo on screen; without,
     /// one decoded ahead, kept behind it.
     fn raw(&self, p: &Path, keep: bool) -> Result<Arc<Raw>, String> {
+        if keep {
+            let mut d = self.denoised.lock().unwrap();
+            if d.as_ref().is_some_and(|d| d.1 != p) {
+                *d = None;
+            }
+        }
         let key = std::fs::metadata(p).map(|m| format!("{}:{:?}", m.len(), m.modified().ok())).map_err(|e| e.to_string())?;
         let take = || {
             let mut raws = self.raws.lock().unwrap();
@@ -443,7 +483,7 @@ impl Develop {
         let path = denoise_file(app, raw);
         let name = path.to_string_lossy().to_string();
         let mut cur = self.denoised.lock().unwrap();
-        if let Some((k, d)) = cur.as_ref() {
+        if let Some((k, _, d)) = cur.as_ref() {
             if *k == name {
                 return Some(d.clone());
             }
@@ -453,7 +493,7 @@ impl Develop {
             return None;
         }
         let d = Arc::new(bytes[8..].chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect::<Vec<u16>>());
-        *cur = Some((name, d.clone()));
+        *cur = Some((name, raw.path.clone(), d.clone()));
         Some(d)
     }
 
@@ -491,18 +531,16 @@ pub fn handle(app: &AppHandle, kind: &str, q: &HashMap<String, String>) -> HttpR
             let y = num(q, "y").unwrap_or(0).min(raw.h - 1);
             let w = num(q, "w").unwrap_or(raw.w).clamp(1, raw.w - x);
             let h = num(q, "h").unwrap_or(raw.h).clamp(1, raw.h - y);
-            if w * h > 40_000_000 {
-                return fail("region too large".into());
-            }
             let ow = num(q, "ow").unwrap_or(w).clamp(1, w);
             let oh = num(q, "oh").unwrap_or(h).clamp(1, h);
+            // What it costs is the answer (6 bytes a pixel), not the part of the photo
+            // read: a whole 45 MP photo averaged down for a small export is fine.
+            if ow * oh > 40_000_000 {
+                return fail("region too large".into());
+            }
             let dn = num(q, "dn").unwrap_or(0).min(100);
             let d = if dn > 0 { dev.denoised(app, &raw) } else { None };
-            let mut rgb = raw.demosaic(x, y, w, h, d.as_deref().map(|d| (d.as_slice(), dn as f32 / 100.0)));
-            if ow != w || oh != h {
-                rgb = shrink(&rgb, w, h, ow, oh);
-            }
-            respond(200, "application/octet-stream", frame(ow, oh, &f16_bits(&rgb)))
+            respond(200, "application/octet-stream", raw.region(x, y, w, h, ow, oh, d.as_deref().map(|d| (d.as_slice(), dn as f32 / 100.0))))
         }
         _ => photos::not_found(),
     }
@@ -585,10 +623,11 @@ pub fn develop_read(app: AppHandle, sidecar: Option<String>) -> Result<Saved, St
     saved(&app.state::<Photos>(), sidecar)
 }
 
-/// Frees memory when leaving the Develop tab.
+/// Frees memory a while after leaving the Develop tab: the RAW data and the AI models.
 #[tauri::command]
 pub fn develop_close(app: AppHandle) {
     app.state::<Develop>().release();
+    app.state::<crate::ai::Ai>().release();
 }
 
 // --- AI Denoise ------------------------------------------------------------------
@@ -638,7 +677,7 @@ pub async fn develop_denoise(app: AppHandle, id: String) -> Result<bool, String>
         let part = file.with_extension("part");
         std::fs::write(&part, bytes).map_err(|e| format!("Couldn't save the denoised photo: {e}"))?;
         std::fs::rename(&part, &file).map_err(|e| e.to_string())?;
-        *dev.denoised.lock().unwrap() = Some((file.to_string_lossy().to_string(), Arc::new(out)));
+        *dev.denoised.lock().unwrap() = Some((file.to_string_lossy().to_string(), raw.path.clone(), Arc::new(out)));
         dev.overviews.lock().unwrap().clear();
         // Only the newest few results stay on disk.
         if let Ok(rd) = std::fs::read_dir(dir) {
@@ -721,7 +760,12 @@ pub struct Export {
     quality: u8,
     source: Option<PathBuf>,
     rgb: Vec<u8>,
+    /// When its last tile came: one left waiting this long was abandoned (the
+    /// window reloaded mid-export), and its picture is dropped.
+    touched: std::time::Instant,
 }
+
+const EXPORT_ABANDONED: std::time::Duration = std::time::Duration::from_secs(600);
 
 #[derive(Deserialize)]
 pub struct ExportArgs {
@@ -764,10 +808,11 @@ pub fn export_begin(app: AppHandle, args: ExportArgs) -> Result<String, String> 
     }
     let source = args.source.and_then(|s| app.state::<Photos>().allowed(&s));
     let shown = path.to_string_lossy().to_string();
-    app.state::<Develop>().exports.lock().unwrap().insert(
-        args.job,
-        Export { path, w: args.width, h: args.height, quality: args.quality.clamp(10, 100), source, rgb: vec![0; bytes] },
-    );
+    let dev = app.state::<Develop>();
+    let mut exports = dev.exports.lock().unwrap();
+    exports.retain(|_, e| e.touched.elapsed() < EXPORT_ABANDONED);
+    let touched = std::time::Instant::now();
+    exports.insert(args.job, Export { path, w: args.width, h: args.height, quality: args.quality.clamp(10, 100), source, rgb: vec![0; bytes], touched });
     Ok(shown)
 }
 
@@ -793,6 +838,7 @@ pub fn export_tile(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<b
     let dev = app.state::<Develop>();
     let mut exports = dev.exports.lock().unwrap();
     let e = exports.get_mut(&job).ok_or("export was cancelled")?;
+    e.touched = std::time::Instant::now();
     check_tile(x, y, w, th, e.w, e.h, bytes.len())?;
     for row in 0..th {
         let src = &bytes[(th - 1 - row) * w * 4..(th - row) * w * 4];
@@ -951,6 +997,29 @@ mod tests {
 
     // --- the straightforward versions, to check the fast ones against ---------
 
+    fn f16_bits(data: &[f32]) -> Vec<u16> {
+        data.iter().map(|&v| f16::from_f32(v).to_bits()).collect()
+    }
+
+    fn ref_shrink(src: &[f32], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<f32> {
+        let (xw, yw) = (weights(sw, dw), weights(sh, dh));
+        let mut out = vec![0f32; dw * dh * 3];
+        for (oy, row) in out.chunks_mut(dw * 3).enumerate() {
+            for &(sy, wy) in &yw[oy] {
+                let line = &src[sy * sw * 3..(sy + 1) * sw * 3];
+                for (ox, taps) in xw.iter().enumerate() {
+                    for &(sx, wx) in taps {
+                        let w = wx * wy;
+                        row[ox * 3] += line[sx * 3] * w;
+                        row[ox * 3 + 1] += line[sx * 3 + 1] * w;
+                        row[ox * 3 + 2] += line[sx * 3 + 2] * w;
+                    }
+                }
+            }
+        }
+        out
+    }
+
     fn ref_at(r: &Raw, x: isize, y: isize) -> f32 {
         let x = mirror(x, r.w);
         let y = mirror(y, r.h);
@@ -1059,11 +1128,30 @@ mod tests {
     fn frames_carry_exact_half_floats() {
         let mut vals: Vec<f32> = (0..200_003).map(|i| (i as f32 - 1000.0) * 0.000_731).collect();
         vals.extend([0.0, -0.0, 1e-8, 65504.0, 70000.0, -70000.0, f32::INFINITY, f32::NEG_INFINITY, 0.333_333_34, 6.1e-5]);
+        let mut bytes = vec![0u8; vals.len() * 2];
+        put_half(&mut bytes, &vals);
+        assert!(bytes.chunks_exact(2).zip(&vals).all(|(b, &v)| u16::from_le_bytes([b[0], b[1]]) == f16::from_f32(v).to_bits()));
         let bits = f16_bits(&vals);
-        assert!(bits.iter().zip(&vals).all(|(&b, &v)| b == f16::from_f32(v).to_bits()));
         let f = frame(7, 3, &bits);
         assert_eq!(&f[..16], [b"FRIM".as_slice(), &7u32.to_le_bytes(), &3u32.to_le_bytes(), &3u32.to_le_bytes()].concat());
         assert!(f[16..].chunks_exact(2).zip(&bits).all(|(b, &v)| u16::from_le_bytes([b[0], b[1]]) == v));
+    }
+
+    #[test]
+    fn regions_are_answered_as_before() {
+        // Made band by band straight into the answer; before: the whole region in
+        // floats, averaged down, then converted.
+        for (w, h, ox, oy) in [(97, 61, 0, 0), (301, 207, 1, 1)] {
+            let r = synthetic(w, h, ox, oy);
+            let dn: Vec<u16> = (0..w * h * 3).map(|i| f16::from_f32((i % 251) as f32 / 251.0).to_bits()).collect();
+            for d in [None, Some((dn.as_slice(), 0.4))] {
+                for (x0, y0, rw, rh, ow, oh) in [(0, 0, w, h, w, h), (3, 5, w - 7, h - 9, w - 7, h - 9), (0, 0, w, h, w / 3, h / 4), (5, 2, w - 5, h - 2, 17, 11), (1, 1, w - 1, h - 1, w - 2, h - 3), (0, 0, w, h, 1, 1)] {
+                    let rgb = ref_demosaic(&r, x0, y0, rw, rh, d);
+                    let rgb = if (ow, oh) == (rw, rh) { rgb } else { ref_shrink(&rgb, rw, rh, ow, oh) };
+                    assert!(r.region(x0, y0, rw, rh, ow, oh, d) == frame(ow, oh, &f16_bits(&rgb)), "{w}x{h}: {x0},{y0} {rw}x{rh} -> {ow}x{oh}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -1087,6 +1175,33 @@ mod tests {
         assert!(same(&r.demosaic(3, 5, 290, 199, None), &ref_demosaic(&r, 3, 5, 290, 199, None)));
     }
 
+    fn peak_mb() -> u64 {
+        std::fs::read_to_string("/proc/self/status").ok().and_then(|s| s.lines().find(|l| l.starts_with("VmHWM")).and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok())).unwrap_or(0) / 1024
+    }
+
+    /// cargo test --release --lib mem_region -- --ignored --nocapture --test-threads 1 (one at a time, each in its own process)
+    #[test]
+    #[ignore]
+    fn mem_region_before() {
+        let raw = synthetic(8256, 5504, 2, 1);
+        let base = peak_mb();
+        let t = std::time::Instant::now();
+        let rgb = raw.demosaic(1000, 1000, 4096, 4096, None);
+        let f = frame(4096, 4096, &f16_bits(&rgb));
+        drop(rgb);
+        println!("before: {:?}, peak +{} MB ({} bytes)", t.elapsed(), peak_mb() - base, f.len());
+    }
+
+    #[test]
+    #[ignore]
+    fn mem_region_after() {
+        let raw = synthetic(8256, 5504, 2, 1);
+        let base = peak_mb();
+        let t = std::time::Instant::now();
+        let f = raw.region(1000, 1000, 4096, 4096, 4096, 4096, None);
+        println!("after: {:?}, peak +{} MB ({} bytes)", t.elapsed(), peak_mb() - base, f.len());
+    }
+
     /// cargo test --release --lib bench_develop -- --ignored --nocapture
     #[test]
     #[ignore]
@@ -1100,11 +1215,11 @@ mod tests {
             let f = frame(w, h, &ov);
             println!("frame: {:?} ({} bytes)", t.elapsed(), f.len());
             let t = std::time::Instant::now();
-            let rgb = raw.demosaic(1000, 1000, 4096, 4096, None);
-            println!("demosaic 4096^2: {:?}", t.elapsed());
+            let f = raw.region(1000, 1000, 4096, 4096, 4096, 4096, None);
+            println!("region 4096^2: {:?} ({} bytes)", t.elapsed(), f.len());
             let t = std::time::Instant::now();
-            let f = frame(4096, 4096, &f16_bits(&rgb));
-            println!("region frame (f16): {:?} ({} bytes)", t.elapsed(), f.len());
+            let f = raw.region(0, 0, 8256, 5504, 2048, 1365, None);
+            println!("region 8256x5504 -> 2048x1365: {:?} ({} bytes)", t.elapsed(), f.len());
         }
     }
 

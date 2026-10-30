@@ -43,11 +43,49 @@ pub struct Ai {
     on_cpu: Mutex<std::collections::HashSet<String>>,
     device: Mutex<Option<String>>,
     installing: Mutex<()>,
+    /// When AI masks last ran, and whether a watcher is waiting to free the models after.
+    last_use: Mutex<Option<std::time::Instant>>,
+    watching: std::sync::atomic::AtomicBool,
 }
+
+/// Models for AI masks stay loaded while you work with them, and go once they've
+/// sat unused this long: they take hundreds of MB (and as much again on the graphics card).
+const MODELS_IDLE: std::time::Duration = std::time::Duration::from_secs(180);
 
 impl Ai {
     pub fn new(dir: PathBuf) -> Self {
-        Ai { dir, manifest: Mutex::new(None), sessions: Mutex::new(HashMap::new()), on_cpu: Mutex::default(), device: Mutex::new(None), installing: Mutex::new(()) }
+        Ai {
+            dir,
+            manifest: Mutex::new(None),
+            sessions: Mutex::new(HashMap::new()),
+            on_cpu: Mutex::default(),
+            device: Mutex::new(None),
+            installing: Mutex::new(()),
+            last_use: Mutex::new(None),
+            watching: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// Notes that the models were just used; a watcher frees them after MODELS_IDLE.
+    fn touch(app: &AppHandle) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let ai = app.state::<Ai>();
+        *ai.last_use.lock().unwrap() = Some(std::time::Instant::now());
+        if ai.watching.swap(true, Relaxed) {
+            return;
+        }
+        let app = app.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(20));
+            let ai = app.state::<Ai>();
+            let last = ai.last_use.lock().unwrap();
+            if last.map_or(true, |t| t.elapsed() >= MODELS_IDLE) {
+                ai.watching.store(false, Relaxed);
+                drop(last);
+                ai.release();
+                return;
+            }
+        });
     }
 
     fn base() -> String {
@@ -991,7 +1029,9 @@ pub async fn ai_masks(app: AppHandle, request: tauri::ipc::Request<'_>) -> Resul
         }
     }
     let rgb = Img { w, h: hh, c: 3, v };
+    let app2 = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || masks(&app.state::<Ai>(), &task, &rgb)).await.map_err(|e| e.to_string())??;
+    Ai::touch(&app2);
     let mut out = Vec::new();
     for n in [w as u32, hh as u32, result.len() as u32] {
         out.extend(n.to_le_bytes());

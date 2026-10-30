@@ -35,6 +35,7 @@ hex = "0.4"
 ureq = { version = "3", features = ["json"] }
 rusty-leveldb = "4"
 jpeg-encoder = "0.6"
+zune-jpeg = "0.5"
 url = "2"
 percent-encoding = "2"
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "directml", "half"] }

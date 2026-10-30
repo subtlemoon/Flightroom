@@ -1196,6 +1196,7 @@ dependencies = [
  "url",
  "webview2-com",
  "windows-core",
+ "zune-jpeg",
 ]
 
 [[package]]
