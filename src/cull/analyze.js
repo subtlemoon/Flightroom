@@ -56,7 +56,7 @@ export function focusArea(box, W, H, person) {
 }
 
 // Grayscale (0-255) of RGBA pixels.
-export function toGray(rgba) {
+function toGray(rgba) {
   const gray = new Uint8ClampedArray(rgba.length >> 2);
   for (let i = 0, j = 0; j < gray.length; i += 4, j++) gray[j] = (rgba[i] * 77 + rgba[i + 1] * 150 + rgba[i + 2] * 29) >> 8;
   return gray;

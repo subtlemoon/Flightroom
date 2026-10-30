@@ -2,7 +2,7 @@ import { bridge as app, FILES } from '../bridge.js';
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Dropdown, Icon, Modal, PanelHandle } from './ui.jsx';
 import { toggle, useLayout } from '../layout.js';
-import { clearPreviews, decodeThumb, drawPhoto, geometry, imgUrl, loadFit, loadFull, loadThumb, prune, ROTATION, thumbFallbackUrl } from '../cull/previews.js';
+import { clearPreviews, decodeThumb, drawPhoto, fallbackShown, fitKept, geometry, imgUrl, loadFit, loadFull, loadThumb, prune, ROTATION, thumbFallbackUrl } from '../cull/previews.js';
 import { loadAnalysis, measure, saveAnalysis, suggest, upright } from '../cull/analyze.js';
 import { measurePool } from '../cull/measure-pool.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
@@ -20,7 +20,7 @@ const ExportModal = lazy(() => import('./export.jsx').then((m) => ({ default: m.
 
 const filterName = (f) => ({ all: '', rated: 'rated', unrated: 'unrated', rejects: 'likely reject' })[f] ?? STAR_FILTERS.find(([k]) => k === f)?.[1].replace('Only ', '');
 
-const AHEAD = [1, 2, -1, 3, -2]; // neighbours decoded in advance, in this order
+const AHEAD = [1, 2, -1, 3, -2]; // neighbours decoded in advance, in this order (as many as fitKept allows)
 const META_WINDOW = 20; // only files near the current one are opened, so a OneDrive
                         // folder isn't downloaded all at once just by opening it
 
@@ -158,7 +158,8 @@ export function CullView({ store, onDevelop }) {
         await Promise.all(batch.map(async (p) => {
           const orientation = m[p.id]?.orientation;
           try {
-            measured[p.id] = { ...(await pool.measure(await decodeThumb(p), orientation, new URL(imgUrl('preview', p.id), location.href).href)), takenAt: m[p.id]?.takenAt };
+            const full = m[p.id]?.width && { url: new URL(imgUrl('gray', p.id), location.href).href, width: m[p.id].width, height: m[p.id].height };
+            measured[p.id] = { ...(await pool.measure(await decodeThumb(p), orientation, full)), takenAt: m[p.id]?.takenAt };
           } catch {
             // The worker couldn't do it: measure here, on the whole frame.
             try {
@@ -566,7 +567,7 @@ function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, scale, sub
     if (fit) {
       fit.catch(() => {}).finally(() => {
         if (!live) return;
-        for (const d of AHEAD) {
+        for (const d of AHEAD.slice(0, fitKept() - 1)) {
           const p = photos[index + d];
           if (!p) continue;
           keep.add(`fit:${p.id}`).add(`thumb:${p.id}`);
@@ -715,9 +716,10 @@ function Thumb({ photo, meta, suggested, active, picked, left, onClick }) {
   const rating = photoRating(photo, meta);
   const rot = ROTATION[meta?.orientation] || 0;
   const onError = () => { if (src.startsWith(FILES)) thumbFallbackUrl(photo).then(setSrc, () => {}); };
+  const onLoad = () => { if (!src.startsWith(FILES)) fallbackShown(photo); };
   return (
     <button className={`thumb${active ? ' active' : ''}${picked ? ' picked' : ''}`} style={{ left }} onClick={onClick} onMouseDown={(e) => e.preventDefault()} title={photo.name}>
-      <img src={src} alt="" decoding="async" draggable={false} onError={onError} style={rot ? { transform: `rotate(${rot}deg)` } : undefined} />
+      <img src={src} alt="" decoding="async" draggable={false} onError={onError} onLoad={onLoad} style={rot ? { transform: `rotate(${rot}deg)` } : undefined} />
       {rating > 0 ? <span className="thumb-stars">{'★'.repeat(rating)}</span>
         : suggested > 0 && <span className="thumb-stars ghost" title="Suggested by auto-rate">{'☆'.repeat(suggested)}</span>}
     </button>
