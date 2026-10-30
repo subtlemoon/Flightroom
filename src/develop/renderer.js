@@ -42,6 +42,7 @@ function program(gl, frag) {
   gl.bindAttribLocation(p, 0, 'aPos');
   gl.linkProgram(p);
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  for (const sh of gl.getAttachedShaders(p)) gl.deleteShader(sh); // freed with the program
   const loc = {};
   const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
   for (let i = 0; i < n; i++) {
@@ -212,8 +213,8 @@ export class Renderer {
     this.down = program(gl, GUIDE_DOWN);
     this.blur = program(gl, BLUR);
     this.final = program(gl, FINAL);
-    const buf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    this.quad = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
@@ -291,12 +292,14 @@ export class Renderer {
     this.free(this.src); this.clearHi(); this.free(this.histTarget); this.free(this.prevTarget);
     for (const t of this.guide || []) this.free(t);
     gl.deleteTexture(this.curveTex); gl.deleteTexture(this.hueTex); gl.deleteTexture(this.blank);
+    gl.deleteBuffer(this.quad);
+    for (const p of [this.down, this.blur, this.final]) gl.deleteProgram(p.p);
     for (const t of this.maskTex || []) gl.deleteTexture(t.tex);
     this.composer?.dispose();
     this.setOpHi(null);
     if (this.maskCurveTex) gl.deleteTexture(this.maskCurveTex);
-    // An offscreen (export) context is done for good; a page canvas may be
-    // given a new renderer (React remounts), so its context must stay usable.
+    // An offscreen (export) context is done for good; a page canvas's owner
+    // decides (Develop keeps one canvas for every photo and drops it on leaving).
     if (typeof OffscreenCanvas !== 'undefined' && this.canvas instanceof OffscreenCanvas) gl.getExtension('WEBGL_lose_context')?.loseContext();
   }
 

@@ -118,10 +118,11 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
     requestMeta([photo.id, ...photos.slice(Math.max(0, index - 3), index + META_WINDOW).map((p) => p.id)]);
   }, [photo?.id, photos, requestMeta]);
 
-  // Free the RAW data a while after leaving the tab.
+  // Free the graphics card's copy of the photo on leaving the tab, and the RAW
+  // data a while after (coming straight back doesn't decode it again).
   useEffect(() => {
     clearTimeout(releaseTimer);
-    return () => { releaseTimer = setTimeout(() => app?.develop.close(), RELEASE_AFTER); };
+    return () => { dropStage(); releaseTimer = setTimeout(() => app?.develop.close(), RELEASE_AFTER); };
   }, []);
 
   // Open the current photo: decode its RAW and read its saved settings.
@@ -568,8 +569,29 @@ function sampleGrid(frame, edge = 320) {
   return { gw, gh, data: out };
 }
 
+// One canvas and renderer for every photo while Develop is open. A new WebGL
+// context per photo would compile the shaders again and keep another
+// screen-sized drawing buffer until garbage collection. Freed on leaving Develop.
+let stage = null; // { canvas, renderer }
+function stageRenderer() {
+  if (!stage || stage.renderer.gl.isContextLost()) {
+    const canvas = document.createElement('canvas');
+    canvas.style.width = canvas.style.height = '100%';
+    stage = { canvas, renderer: new Renderer(canvas) };
+  }
+  return stage;
+}
+function dropStage() {
+  if (!stage) return;
+  stage.renderer.dispose();
+  stage.renderer.gl.getExtension('WEBGL_lose_context')?.loseContext();
+  stage.canvas.remove();
+  stage = null;
+}
+
 function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCrop, apiRef, nextPhoto, before, picker, maskView, previewView, maskTool, retouch }) {
   const wrapRef = useRef();
+  const hostRef = useRef();
   const canvasRef = useRef();
   const rendererRef = useRef(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -591,10 +613,14 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
   }, []);
 
   useEffect(() => {
-    try { rendererRef.current = new Renderer(canvasRef.current); } catch (err) { setError(String(err.message || err)); }
+    let st;
+    try { st = stageRenderer(); } catch (err) { setError(String(err.message || err)); return; }
+    hostRef.current.appendChild(st.canvas);
+    canvasRef.current = st.canvas;
+    rendererRef.current = st.renderer;
     const lost = (e) => { e.preventDefault(); setError('The graphics card stopped the photo renderer'); setReady(false); };
-    canvasRef.current.addEventListener('webglcontextlost', lost);
-    return () => { rendererRef.current?.dispose(); rendererRef.current = null; };
+    st.canvas.addEventListener('webglcontextlost', lost);
+    return () => { st.canvas.removeEventListener('webglcontextlost', lost); st.canvas.remove(); rendererRef.current = null; };
   }, []);
 
   // How much AI Denoise to show; slider moves are let settle before the photo is fetched again.
@@ -933,7 +959,7 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
         <img className="dev-placeholder" src={imgUrl('preview', photo.id)} alt="" draggable={false}
           style={rot ? { transform: `rotate(${rot}deg)`, maxWidth: rot % 180 ? size.h : undefined, maxHeight: rot % 180 ? size.w : undefined } : undefined} />
       )}
-      <canvas ref={canvasRef} style={{ width: size.w, height: size.h, opacity: ready ? 1 : 0 }}
+      <div ref={hostRef} style={{ width: size.w, height: size.h, opacity: ready ? 1 : 0 }}
         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} />
       <div className="stage-top">
         {!ready && !error && <span className="pill-mini">Loading RAW…</span>}
