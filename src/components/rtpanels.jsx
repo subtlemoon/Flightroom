@@ -166,6 +166,7 @@ export function OptionsBar({ rx }) {
       {['marquee', 'ellipse', 'lasso', 'polygon'].includes(tool) && S(sl('feather', 'Feather', 0, 250), Math.round(rt.feather * L), 0, (k, v) => setRt({ feather: v / L }))}
       {tool === 'wand' && <>{S(sl('tol', 'Tolerance', 0, 255), t.tol, 32, (k, v) => set({ tol: v }))}{check('Contiguous', t.contiguous, (contiguous) => set({ contiguous }))}</>}
       {tool === 'polygon' && hint('Click points; double-click, Enter or click the first point to close')}
+      {(tool === 'row' || tool === 'column') && hint(`Click to select a one-pixel ${tool}, then Ctrl+T and drag a side handle out to stretch it`)}
       {SELECTORS.has(tool) && (
         <div className="rt-sel-btns">
           <button className="btn btn-sm" onClick={() => rx.sel.ai('subject')} title="Select > Subject (AI)"><Icon name="subject" size={13} />Select Subject</button>
@@ -322,7 +323,7 @@ function HistoryPanel({ history }) {
 
 // --- Layers -----------------------------------------------------------------------------
 
-const KIND_ICON = { pixel: 'brush', photo: 'photo', stamp: 'layers', adjust: 'adjust', fill: 'palette', text: 'type', shape: 'shapeRect', group: 'folder2' };
+const KIND_ICON = { pixel: 'brush', photo: 'photo', stamp: 'layers', stretch: 'stretch', adjust: 'adjust', fill: 'palette', text: 'type', shape: 'shapeRect', group: 'folder2' };
 const KIND_FILTER = [{ value: 'all', label: 'All kinds' }, { value: 'pixel', label: 'Pixel' }, { value: 'adjust', label: 'Adjustment' }, { value: 'type', label: 'Type' },
   { value: 'shape', label: 'Shape' }, { value: 'smart', label: 'With filters' }, { value: 'group', label: 'Group' }];
 const matches = (l, f) => f === 'all' || (f === 'pixel' ? PAINTABLE.has(kindOf(l)) : f === 'type' ? l.kind === 'text' : f === 'smart' ? !!l.filters?.length : f === 'adjust' ? l.kind === 'adjust' || l.kind === 'fill' : l.kind === f);
@@ -458,7 +459,8 @@ function PropertiesPanel({ rx }) {
       {kind === 'fill' && <FillProps rx={rx} l={cur} />}
       {kind === 'text' && <TextProps rx={rx} l={cur} />}
       {kind === 'shape' && <ShapeProps rx={rx} l={cur} />}
-      {PAINTABLE.has(kind) && cur.tf && !isIdent(cur.tf) && (
+      {kind === 'stretch' && <p className="muted small rt-note">A one-pixel {cur.stretch?.col ? 'column' : 'row'} of the photo. Ctrl+T, then drag a side handle to stretch it further (Alt stretches both ways).</p>}
+      {(PAINTABLE.has(kind) || kind === 'stretch') && cur.tf && !isIdent(cur.tf) && (
         <div className="rt-prop-row"><span className="muted small grow">Moved / transformed</span><button className="btn btn-sm btn-ghost" onClick={() => acts.change(cur.id, { tf: undefined }, 'Reset Transform')}>Reset transform</button></div>
       )}
       {cur.mask && (
