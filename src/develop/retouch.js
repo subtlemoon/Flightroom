@@ -54,6 +54,42 @@ export const kindOf = (l) => l.kind || 'pixel';
 // Layers you can paint on directly (others are painted through their mask).
 export const PAINTABLE = new Set(['pixel', 'photo', 'stamp']);
 
+// --- pixel stretch -------------------------------------------------------------
+// A one-pixel row or column of the developed photo as a layer of its own:
+// { col: a column (else a row), at: which one (a fraction across the photo),
+// from, to: where it starts and ends along itself (fractions) }. Free
+// Transform scales it like any layer, so dragging its side out stretches that
+// line of pixels into streaks. Like a photo copy it's drawn from the developed
+// photo, so Develop changes flow through it.
+
+/** A stretch's line: its middle (oriented px), and where it starts and ends along itself. */
+export function stretchLine(st, ow, oh) {
+  const size = st.col ? ow : oh, len = st.col ? oh : ow;
+  const line = Math.min(size - 1, Math.max(0, Math.floor(st.at * size + 1e-6))) + 0.5;
+  return { col: !!st.col, line, a0: Math.max(0, (st.from ?? 0) * len), a1: Math.min(len, (st.to ?? 1) * len) };
+}
+
+/** Oriented px -> the pixel on the line it takes its colour from (3x3, row by row). */
+export function stretchMap(st, ow, oh) {
+  const { col, line } = stretchLine(st, ow, oh);
+  return col ? [0, 0, line, 0, 1, 0, 0, 0, 1] : [1, 0, 0, 0, 0, line, 0, 0, 1];
+}
+
+/** A stretch layer's one-pixel box (oriented px, before its transform). */
+export function stretchBounds(st, ow, oh) {
+  const { col, line, a0, a1 } = stretchLine(st, ow, oh);
+  return col ? [line - 0.5, a0, line + 0.5, a1] : [a0, line - 0.5, a1, line + 0.5];
+}
+
+/** A selection one pixel thin (a Single Row or Column Marquee): its stretch settings, else null. */
+export function thinSelection(sel, ow, oh) {
+  const b = sel && !sel.invert && selectionBounds({ ...sel, tf: null }, ow, oh);
+  if (!b || (sel.tf && !isIdent(sel.tf))) return null;
+  const w = (b[2] - b[0]) * ow, h = (b[3] - b[1]) * oh;
+  if (Math.min(w, h) > 1.5) return null;
+  return w <= h ? { col: true, at: (b[0] + b[2]) / 2, from: b[1], to: b[3] } : { col: false, at: (b[1] + b[3]) / 2, from: b[0], to: b[2] };
+}
+
 /** "Name n" with the next free n among the layers. */
 export function nextName(layers, base) {
   const re = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')} (\\d+)$`);
@@ -159,7 +195,7 @@ export function rasterBounds(l, ow, oh) {
 export function layerBounds(l, ow, oh) {
   const kind = kindOf(l);
   if (['photo', 'stamp', 'adjust', 'fill'].includes(kind)) return null;
-  let b = rasterBounds(l, ow, oh);
+  let b = kind === 'stretch' && l.stretch ? stretchBounds(l.stretch, ow, oh) : rasterBounds(l, ow, oh);
   for (const op of l.ops) {
     const ob = opBounds(op, ow, oh);
     if (!ob) return null;
@@ -280,12 +316,21 @@ export function layersFromText(text) {
 }
 
 /**
- * The parts of the photo (sensor px) that clones and heals inside `box`
- * (oriented px) copy from, so they can be fetched sharp when zoomed in or
- * exporting. toSource maps oriented px to photo coordinates (0-1).
+ * The parts of the photo (sensor px) that clones, heals and pixel stretches
+ * inside `box` (oriented px) copy from, so they can be fetched sharp when
+ * zoomed in or exporting. toSource maps oriented px to photo coordinates (0-1).
  */
 export function sourceRegions(layers, geo, toSource, box, scale, max = 16) {
   const out = [];
+  // The sensor box around oriented points (pts), fetched at about the shown scale.
+  const add = (id, pts) => {
+    const xs = pts.map((p) => p[0] * geo.sw), ys = pts.map((p) => p[1] * geo.sh);
+    const sx0 = Math.max(0, Math.floor(Math.min(...xs) - 16)), sx1 = Math.min(geo.sw, Math.ceil(Math.max(...xs) + 16));
+    const sy0 = Math.max(0, Math.floor(Math.min(...ys) - 16)), sy1 = Math.min(geo.sh, Math.ceil(Math.max(...ys) + 16));
+    if (sx1 - sx0 < 2 || sy1 - sy0 < 2) return;
+    const k = Math.min(1, scale * 1.1);
+    out.push({ id, x: sx0, y: sy0, w: sx1 - sx0, h: sy1 - sy0, ow: Math.max(1, Math.round((sx1 - sx0) * k)), oh: Math.max(1, Math.round((sy1 - sy0) * k)) });
+  };
   for (const l of layers) {
     // The visible box in the layer's own coordinates.
     let lbox = box;
@@ -293,6 +338,19 @@ export function sourceRegions(layers, geo, toSource, box, scale, max = 16) {
       const inv = tfInv(tfPx(l.tf, geo.ow, geo.oh));
       const pts = [[box[0], box[1]], [box[2], box[1]], [box[0], box[3]], [box[2], box[3]]].map(([x, y]) => tfApply(inv, x, y));
       lbox = [Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1])), Math.max(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[1]))];
+    }
+    // A pixel stretch: the strip of its line beside what's shown.
+    if (l.kind === 'stretch' && l.stretch && out.length < max) {
+      const { col, line, a0: s0, a1: s1 } = stretchLine(l.stretch, geo.ow, geo.oh);
+      const [a0, a1] = col ? [Math.max(s0, lbox[1]), Math.min(s1, lbox[3])] : [Math.max(s0, lbox[0]), Math.min(s1, lbox[2])];
+      if (a1 > a0) {
+        const pts = [];
+        for (let i = 0; i <= 4; i++) {
+          const a = a0 + ((a1 - a0) * i) / 4;
+          for (const d of [-1, 1]) pts.push(col ? toSource(line + d, a) : toSource(a, line + d));
+        }
+        add(l.id, pts);
+      }
     }
     for (const op of l.ops) {
       if (!SOURCED.has(op.t) || out.length >= max) continue;
@@ -308,12 +366,7 @@ export function sourceRegions(layers, geo, toSource, box, scale, max = 16) {
         const t = i / 4;
         for (const [x, y] of [[x0 + (x1 - x0) * t, y0], [x0 + (x1 - x0) * t, y1], [x0, y0 + (y1 - y0) * t], [x1, y0 + (y1 - y0) * t]]) pts.push(toSource(x + dx, y + dy));
       }
-      const xs = pts.map((p) => p[0] * geo.sw), ys = pts.map((p) => p[1] * geo.sh);
-      const sx0 = Math.max(0, Math.floor(Math.min(...xs) - 16)), sx1 = Math.min(geo.sw, Math.ceil(Math.max(...xs) + 16));
-      const sy0 = Math.max(0, Math.floor(Math.min(...ys) - 16)), sy1 = Math.min(geo.sh, Math.ceil(Math.max(...ys) + 16));
-      if (sx1 - sx0 < 2 || sy1 - sy0 < 2) continue;
-      const k = Math.min(1, scale * 1.1);
-      out.push({ id: op.id, x: sx0, y: sy0, w: sx1 - sx0, h: sy1 - sy0, ow: Math.max(1, Math.round((sx1 - sx0) * k)), oh: Math.max(1, Math.round((sy1 - sy0) * k)) });
+      add(op.id, pts);
     }
   }
   return out;

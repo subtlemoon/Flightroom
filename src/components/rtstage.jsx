@@ -157,6 +157,14 @@ export function RetouchStage({ rx, geo, toOri, toCss, live, commit, pickColor, z
     if (tool === 'dropper') { const c = pickColor(X, Y); if (c) setRt(e.altKey ? { bg: c } : { fg: c }); return; }
     if (tool === 'zoom') { zoomAt(X, Y, e.altKey ? 0.5 : 2); return; }
     if (tool === 'bucket') { rx.bucket(fx, fy); return; }
+    // Single Row / Column Marquee: the one-pixel line under the pointer, all the way across.
+    if (tool === 'row' || tool === 'column') {
+      const col = tool === 'column', size = col ? ow : oh;
+      const i = Math.min(size - 1, Math.max(0, Math.floor((col ? fx : fy) * size)));
+      const [a, b] = [i / size, (i + 1) / size];
+      rx.combine({ shapes: [{ kind: 'rect', mode: 'add', ...(col ? { x0: a, x1: b, y0: 0, y1: 1 } : { x0: 0, x1: 1, y0: a, y1: b }) }], invert: false, feather: 0 }, selMode(e));
+      return;
+    }
     if (tool === 'wand') { rx.sel.wand(fx, fy, selMode(e)); return; }
     if (tool === 'polygon') {
       if (!poly) { setPoly({ pts: [[fx, fy]], mode: selMode(e) }); return; }

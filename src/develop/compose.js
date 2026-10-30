@@ -9,7 +9,7 @@
 // follow every Develop change. Heals then even out the colour difference at
 // their edge with a smooth fill (push-pull pyramid), like a healing brush.
 import { VERT } from './shaders.js';
-import { BLEND_INDEX, REGION, SNAPSHOT, SOURCED, STROKED, isIdent, kindOf, opBounds, selectionCanvas, strokeDabs, tfPx, tfScale } from './retouch.js';
+import { BLEND_INDEX, REGION, SNAPSHOT, SOURCED, STROKED, isIdent, kindOf, opBounds, selectionCanvas, strokeDabs, stretchLine, stretchMap, tfPx, tfScale } from './retouch.js';
 import { ADJ_GLSL, adjustmentLut, adjustmentUniforms } from './adjust.js';
 import { BLUR_FRAG, FX_FRAG, filterPlan } from './filters.js';
 import { rasterize } from './raster.js';
@@ -152,6 +152,17 @@ const INSIDE = `${HEAD}
 uniform mat3 uOut2Ori;
 uniform vec2 uOriSize;
 void main() { vec2 q = (uOut2Ori * vec3(gl_FragCoord.xy, 1.0)).xy; o = vec4(q.x >= 0.0 && q.y >= 0.0 && q.x <= uOriSize.x && q.y <= uOriSize.y ? 1.0 : 0.0); }`;
+
+// Pixel stretch: just its one-pixel line (in the layer's own coordinates, so
+// a transform stretches it).
+const STRETCH = `${HEAD}
+uniform mat3 uOut2Ori;
+uniform vec4 uS; // column (1) or row (0), the line's middle, where it starts and ends along itself (oriented px)
+void main() {
+  vec2 q = (uOut2Ori * vec3(gl_FragCoord.xy, 1.0)).xy;
+  vec2 v = uS.x > 0.5 ? q : q.yx;
+  o = vec4(abs(v.x - uS.y) <= 0.5 && v.y >= uS.z && v.y <= uS.w ? 1.0 : 0.0);
+}`;
 
 // Heal, first level: the difference between what's there and the source, known
 // only outside the stroke (weight 1), averaged over each texel's footprint.
@@ -346,7 +357,7 @@ export class Composer {
       dab: program(gl, DAB_VERT, DAB_FRAG), op: program(gl, VERT, OP), covsel: program(gl, VERT, COVSEL), inside: program(gl, VERT, INSIDE),
       healL0: program(gl, VERT, HEAL_L0), pull: program(gl, VERT, PULL), push: program(gl, VERT, PUSH), comp: program(gl, VERT, COMP),
       adj: program(gl, VERT, ADJ), blur: program(gl, VERT, BLUR_FRAG), fx: program(gl, VERT, FX_FRAG), shade: program(gl, VERT, SHADE),
-      style: program(gl, VERT, STYLE), clipa: program(gl, VERT, CLIPA),
+      style: program(gl, VERT, STYLE), clipa: program(gl, VERT, CLIPA), stretch: program(gl, VERT, STRETCH),
     };
     this.vao = gl.createVertexArray();
     this.sets = new Map(); // "WxH" -> buffers for that output size
@@ -584,6 +595,15 @@ export class Composer {
         this.r.draw(this.progs.inside, T.layer, { uOut2Ori: lc.uOut2Ori, uOriSize: [lc.geo.ow, lc.geo.oh] });
         gl.disable(gl.BLEND);
       }
+    } else if (kind === 'stretch' && layer.stretch) {
+      // The photo with every pixel taken from the line, then kept only on the line.
+      const { geo } = lc;
+      const st = stretchLine(layer.stretch, geo.ow, geo.oh);
+      lc.base(T.layer, { shift: [0, 0], out2ori: mm(stretchMap(layer.stretch, geo.ow, geo.oh), lc.out2ori), op: layer });
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ZERO, gl.SRC_COLOR);
+      this.r.draw(this.progs.stretch, T.layer, { uOut2Ori: lc.uOut2Ori, uS: [st.col ? 1 : 0, st.line, st.a0, st.a1] });
+      gl.disable(gl.BLEND);
     } else if (kind === 'stamp') this.blit(T.acc[this.cur], T.layer);
     else if (kind === 'adjust' && layer.adj) {
       const { type, p } = adjustmentUniforms(layer.adj);

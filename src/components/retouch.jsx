@@ -10,7 +10,7 @@ import { useRef, useState } from 'react';
 import { newId } from '../develop/masks.js';
 import {
   BLEND_MODES, IDENT, PAINTABLE, bitmapSelection, colorSelect, flipRgba, inGroup, isIdent, kindOf, layerBounds, modifyValues, moveSelection,
-  newLayer, nextName, selectionBounds, selectionValues, tfAbout, tfMul, tfPx, tfUnits, findSpotSource, selectionOutline,
+  newLayer, nextName, selectionBounds, selectionValues, stretchBounds, thinSelection, tfAbout, tfMul, tfPx, tfUnits, findSpotSource, selectionOutline,
 } from '../develop/retouch.js';
 import { ADJ_LABEL, newAdjustment } from '../develop/adjust.js';
 import { FILTER_DEF, newFilter } from '../develop/filters.js';
@@ -18,7 +18,8 @@ import { FILTER_DEF, newFilter } from '../develop/filters.js';
 // [id, label, icon, key]; a group shares one place on the tool bar (Shift+key goes round it).
 export const TOOL_GROUPS = [
   [['move', 'Move Tool', 'move', 'V']],
-  [['marquee', 'Rectangular Marquee Tool', 'marquee', 'M'], ['ellipse', 'Elliptical Marquee Tool', 'ellipseSel', 'M']],
+  [['marquee', 'Rectangular Marquee Tool', 'marquee', 'M'], ['ellipse', 'Elliptical Marquee Tool', 'ellipseSel', 'M'],
+    ['row', 'Single Row Marquee Tool', 'rowSel', 'M'], ['column', 'Single Column Marquee Tool', 'colSel', 'M']],
   [['lasso', 'Lasso Tool', 'lasso', 'L'], ['polygon', 'Polygonal Lasso Tool', 'polyLasso', 'L']],
   [['quick', 'Quick Selection Tool', 'quickSel', 'W'], ['wand', 'Magic Wand Tool', 'wand', 'W']],
   [['crop', 'Crop Tool', 'crop', 'C']],
@@ -39,7 +40,7 @@ export const TOOL_GROUPS = [
 export const TOOLS = TOOL_GROUPS.flat();
 export const TOOL = Object.fromEntries(TOOL_GROUPS.flatMap((g, gi) => g.map(([id, label, icon, key]) => [id, { id, label, icon, key, group: gi }])));
 export const BRUSHES = new Set(['brush', 'pencil', 'eraser', 'clone', 'spot', 'heal', 'blur', 'sharpen', 'smudge', 'dodge', 'burn', 'sponge', 'quick']);
-export const SELECTORS = new Set(['marquee', 'ellipse', 'lasso', 'polygon', 'quick', 'wand']);
+export const SELECTORS = new Set(['marquee', 'ellipse', 'row', 'column', 'lasso', 'polygon', 'quick', 'wand']);
 export const SHAPE_TOOLS = { rect: 'rect', ellipseShape: 'ellipse', triangle: 'triangle', polygonShape: 'polygon', line: 'line' };
 // Tools that work on the photo's pixels, so they go on a layer of their own over a type, fill or adjustment layer.
 const PIXEL_TOOLS = new Set(['clone', 'heal', 'spot', 'patch', 'redeye', 'blur', 'sharpen', 'smudge', 'dodge', 'burn', 'sponge']);
@@ -445,6 +446,16 @@ export function useRetouch(ctx) {
     return layerBounds({ ...l, tf: null }, ow, oh) || [0, 0, ow, oh];
   };
   const startTransform = (what = cur ? 'layer' : 'selection') => {
+    // A one-pixel row or column selected (Single Row / Column Marquee): it goes on a
+    // Pixel Stretch layer, ready to drag out into streaks.
+    const thin = thinSelection(selection, ow, oh);
+    if (thin) {
+      const id = acts.insert(newLayer(acts.layers, nextName(acts.layers, 'Pixel Stretch'), 'stretch', { stretch: thin }), 'Pixel Stretch');
+      setSelection(null);
+      setXform({ what: 'layer', id, box: stretchBounds(thin, ow, oh), tf0: IDENT, tf: IDENT });
+      toast('Drag a side handle out to stretch the line of pixels');
+      return;
+    }
     if (what === 'layer' && (!cur || cur.kind === 'group')) { if (selection) what = 'selection'; else { toast('Pick a layer to transform'); return; } }
     if (what === 'layer' && (cur.lock?.position || cur.lock?.all)) { toast(`${cur.name} is locked`); return; }
     const tf0 = (what === 'layer' ? cur.tf : selection?.tf) || IDENT;

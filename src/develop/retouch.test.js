@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findSpotSource, inSelection, layersFromText, layersToText, opBounds, selectionBounds, strokeDabs } from './retouch.js';
+import { findSpotSource, inSelection, layerBounds, layersFromText, layersToText, opBounds, selectionBounds, sourceRegions, stretchMap, strokeDabs, thinSelection } from './retouch.js';
 import { defaults, fromXmp, isEdited, toXmp } from './params.js';
 
 const asShot = { temp: 5500, tint: 0 };
@@ -87,5 +87,32 @@ describe('spot healing', () => {
     const op = { t: 'spot', size: 4 / 200, pts: [[70 / 200, 50 / 100]] };
     const { dx } = findSpotSource(op, { data }, w, h);
     expect(70 + dx * w).toBeLessThan(96); // stays in the dark half
+  });
+});
+
+describe('pixel stretch', () => {
+  const rect = (x0, y0, x1, y1) => ({ shapes: [{ kind: 'rect', mode: 'add', x0, y0, x1, y1 }], invert: false, feather: 0 });
+  it('turns a one-pixel column or row selection into a stretch, and nothing thicker', () => {
+    expect(thinSelection(rect(250 / 1000, 0, 251 / 1000, 1), 1000, 500)).toEqual({ col: true, at: 250.5 / 1000, from: 0, to: 1 });
+    expect(thinSelection(rect(0.2, 100 / 500, 0.6, 101 / 500), 1000, 500)).toMatchObject({ col: false, from: 0.2, to: 0.6 });
+    expect(thinSelection(rect(0.2, 0.2, 0.21, 0.6), 1000, 500)).toBeNull();
+    expect(thinSelection(null, 1000, 500)).toBeNull();
+  });
+  it('takes every pixel from the line, and its box is that one pixel', () => {
+    const st = { col: true, at: 250.5 / 1000, from: 0, to: 1 };
+    const m = stretchMap(st, 1000, 500);
+    expect([m[0] * 900 + m[1] * 40 + m[2], m[3] * 900 + m[4] * 40 + m[5]]).toEqual([250.5, 40]);
+    expect(layerBounds({ kind: 'stretch', stretch: st, ops: [] }, 1000, 500)).toEqual([250, 0, 251, 500]);
+  });
+  it('fetches the line sharp for the part of it on screen', () => {
+    const geo = { ow: 1000, oh: 500, sw: 1000, sh: 500 };
+    const l = { id: 'a', kind: 'stretch', stretch: { col: true, at: 0.2505, from: 0, to: 1 }, ops: [] };
+    const [g] = sourceRegions([l], geo, (x, y) => [x / 1000, y / 500], [600, 100, 900, 300], 1);
+    expect(g.id).toBe('a');
+    expect(g.x).toBeLessThanOrEqual(249);
+    expect(g.x + g.w).toBeGreaterThanOrEqual(252);
+    expect(g.w).toBeLessThan(40);
+    expect(g.y).toBeLessThanOrEqual(100);
+    expect(g.y + g.h).toBeGreaterThanOrEqual(300);
   });
 });
