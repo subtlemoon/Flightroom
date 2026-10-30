@@ -569,8 +569,13 @@ pub fn new_xmp(rating: i32) -> String {
 /// An XMP packet's bytes as text Flightroom can edit in place. None: blank, so a
 /// new packet may be written. Anything else (not UTF-8, no rdf:Description) is an
 /// error, so metadata Flightroom can't read is never replaced with a new packet.
+/// (XMP inside a JPEG is always UTF-8; sidecars can also be UTF-16: xmp_file_text.)
 pub fn xmp_text(bytes: Vec<u8>) -> Result<Option<String>, String> {
     let text = String::from_utf8(bytes).map_err(|_| "its XMP isn't UTF-8 text, so Flightroom leaves it unchanged".to_string())?;
+    editable_xmp(text)
+}
+
+fn editable_xmp(text: String) -> Result<Option<String>, String> {
     if text.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}' || c == '\0').is_empty() {
         return Ok(None);
     }
@@ -578,6 +583,49 @@ pub fn xmp_text(bytes: Vec<u8>) -> Result<Option<String>, String> {
         return Err("its XMP has no rdf:Description Flightroom can edit, so it is left unchanged".into());
     }
     Ok(Some(text))
+}
+
+/// How a sidecar's text is stored, so an edit is written back the same way (and
+/// any `encoding="UTF-16"` declaration in it stays true).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum XmpEncoding {
+    Utf8,
+    Utf16 { big_endian: bool, bom: bool },
+}
+
+/// A sidecar's bytes as editable text (see xmp_text) and how they were stored:
+/// UTF-8, or UTF-16 found by its byte order mark or, without one, by the `<` it starts with.
+pub fn xmp_file_text(bytes: Vec<u8>) -> Result<Option<(String, XmpEncoding)>, String> {
+    let utf16 = match bytes.as_slice() {
+        [0xff, 0xfe, ..] => Some((false, true)),
+        [0xfe, 0xff, ..] => Some((true, true)),
+        [b'<', 0, ..] => Some((false, false)),
+        [0, b'<', ..] => Some((true, false)),
+        _ => None,
+    };
+    let Some((big_endian, bom)) = utf16 else { return Ok(xmp_text(bytes)?.map(|t| (t, XmpEncoding::Utf8))) };
+    let body = &bytes[if bom { 2 } else { 0 }..];
+    let bad = || "its XMP isn't valid UTF-16 text, so Flightroom leaves it unchanged".to_string();
+    if body.len() % 2 != 0 {
+        return Err(bad());
+    }
+    let units: Vec<u16> = body.chunks_exact(2).map(|b| if big_endian { u16::from_be_bytes([b[0], b[1]]) } else { u16::from_le_bytes([b[0], b[1]]) }).collect();
+    let text = String::from_utf16(&units).map_err(|_| bad())?;
+    Ok(editable_xmp(text)?.map(|t| (t, XmpEncoding::Utf16 { big_endian, bom })))
+}
+
+/// Text as bytes in the given encoding (the inverse of xmp_file_text).
+pub fn xmp_file_bytes(text: &str, enc: XmpEncoding) -> Vec<u8> {
+    match enc {
+        XmpEncoding::Utf8 => text.as_bytes().to_vec(),
+        XmpEncoding::Utf16 { big_endian, bom } => {
+            let mut out = Vec::with_capacity(2 + text.len() * 2);
+            for u in bom.then_some(0xfeff).into_iter().chain(text.encode_utf16()) {
+                out.extend(if big_endian { u.to_be_bytes() } else { u.to_le_bytes() });
+            }
+            out
+        }
+    }
 }
 
 /// Sets xmp:Rating in an existing XMP packet and leaves everything else untouched
@@ -816,6 +864,45 @@ mod tests {
         j.extend(&body);
         j.extend(&JPEG[2..]);
         assert!(set_jpeg_rating(&j, 3).is_err());
+    }
+
+    fn utf16(text: &str, big_endian: bool, bom: bool) -> Vec<u8> {
+        xmp_file_bytes(text, XmpEncoding::Utf16 { big_endian, bom })
+    }
+
+    #[test]
+    fn utf16_sidecars_are_read_and_written_back_the_same_way() {
+        let text = format!("<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n{}", new_xmp(2).replace("xmp:Rating", "xmp:Label=\"Caf\u{e9} \u{1f3ce}\"\n   xmp:Rating"));
+        for (big_endian, bom) in [(false, true), (true, true), (false, false), (true, false)] {
+            let enc = XmpEncoding::Utf16 { big_endian, bom };
+            let bytes = utf16(&text, big_endian, bom);
+            let (got, got_enc) = xmp_file_text(bytes.clone()).unwrap().unwrap();
+            assert_eq!((got.as_str(), got_enc), (text.as_str(), enc));
+            assert_eq!(read_rating(&got), Some(2));
+            // Rated: still UTF-16 the same way round, so its encoding declaration stays true.
+            let out = xmp_file_bytes(&set_rating(Some(&got), 5), enc);
+            assert_eq!(out[..4], bytes[..4]);
+            let (back, _) = xmp_file_text(out).unwrap().unwrap();
+            assert_eq!(read_rating(&back), Some(5));
+            assert!(back.contains("encoding=\"UTF-16\"") && back.contains("Caf\u{e9} \u{1f3ce}"));
+        }
+        assert_eq!(xmp_file_text(LR_SIDECAR.as_bytes().to_vec()).unwrap().unwrap().1, XmpEncoding::Utf8);
+        assert_eq!(xmp_file_text(utf16(" \n", false, true)), Ok(None));
+    }
+
+    #[test]
+    fn broken_utf16_is_refused() {
+        let good = utf16(LR_SIDECAR, false, true);
+        // An odd number of bytes, a lone surrogate, or no rdf:Description.
+        let mut odd = good.clone();
+        odd.push(b'x');
+        let mut lone = good.clone();
+        lone.extend(0xd800u16.to_le_bytes());
+        for bad in [odd, lone, utf16("<x:xmpmeta/>", true, true), vec![0xff, 0xfe, 0, 0, b'<', 0, 0, 0]] {
+            assert!(xmp_file_text(bad).is_err());
+        }
+        // UTF-16 never goes inside a JPEG.
+        assert!(xmp_text(good).is_err());
     }
 
     #[test]

@@ -2,9 +2,9 @@ import { bridge as app, FILES } from '../bridge.js';
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Dropdown, Icon, Modal, PanelHandle } from './ui.jsx';
 import { toggle, useLayout } from '../layout.js';
-import { clearPreviews, decodeThumb, drawPhoto, fallbackShown, fitKept, geometry, imgUrl, loadFit, loadFull, loadThumb, prune, ROTATION, thumbFallbackUrl } from '../cull/previews.js';
+import { clearPreviews, decodeThumb, drawPhoto, fallbackShown, fitEdge, fitKept, fitKey, fullKey, geometry, imgUrl, loadFit, loadFull, loadThumb, prune, releaseFull, ROTATION, thumbFallbackUrl, thumbKey } from '../cull/previews.js';
 import { loadAnalysis, measure, saveAnalysis, suggest, upright } from '../cull/analyze.js';
-import { measurePool } from '../cull/measure-pool.js';
+import { Cancelled, measurePool } from '../cull/measure-pool.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
 import { cachedFolder, startAt, useFolder, usePosition } from '../cull/folder.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zoomLevel } from '../cull/keys.js';
@@ -47,6 +47,7 @@ export function CullView({ store, onDevelop }) {
   const [showSubject, setShowSubject] = useState(false); // while the pointer is on the suggestion
   const [exporting, setExporting] = useState(false);
   const autoCancel = useRef(false);
+  const autoPool = useRef(null);
   const lastIndex = useRef(0);
   // A folder read anew starts where you left it, showing every photo.
   const { list, setList, meta, setMeta, open, requestMeta } = useFolder(bridge, folder, seen, filter, (res) => {
@@ -93,6 +94,22 @@ export function CullView({ store, onDevelop }) {
 
   usePosition(actions, list?.folder, allPhotos.findIndex((p) => p.id === photo?.id));
   useEffect(() => clearPreviews, []);
+
+  // Auto-rate keeps going with its panel closed, but not after leaving Culling:
+  // the run stops at once, and what it finished is saved for its folder.
+  const shownFolder = useRef(null);
+  shownFolder.current = list?.folder ?? null;
+  useEffect(() => () => {
+    shownFolder.current = null;
+    autoCancel.current = true;
+    autoPool.current?.close();
+  }, []);
+  const stopAuto = () => { autoCancel.current = true; autoPool.current?.close(); };
+  // A change to a folder's analysis: saved, and shown if that folder is still the one open here.
+  const storeAnalysis = (dir, change) => {
+    if (shownFolder.current === dir) setAuto((a) => { const next = change(a); saveAnalysis(dir, next); return next; });
+    else saveAnalysis(dir, change(loadAnalysis(dir)));
+  };
 
   // Photo and rated counts for the folder list.
   const ratedCount = allPhotos.filter(isRated).length;
@@ -148,6 +165,7 @@ export function CullView({ store, onDevelop }) {
     setAutoRun({ kind: 'analyze', done: 0, total: todo.length });
     const started = performance.now();
     const pool = measurePool();
+    autoPool.current = pool;
     try {
       // Photos stream through the workers a few at a time; metadata is read in batches.
       const BATCH = pool.size * 6;
@@ -157,10 +175,12 @@ export function CullView({ store, onDevelop }) {
         if (!m.error) setMeta((old) => ({ ...old, ...m }));
         await Promise.all(batch.map(async (p) => {
           const orientation = m[p.id]?.orientation;
+          if (autoCancel.current) return;
           try {
             const full = m[p.id]?.width && { url: new URL(imgUrl('gray', p.id), location.href).href, width: m[p.id].width, height: m[p.id].height };
             measured[p.id] = { ...(await pool.measure(await decodeThumb(p), orientation, full)), takenAt: m[p.id]?.takenAt };
-          } catch {
+          } catch (err) {
+            if (err instanceof Cancelled || autoCancel.current) return; // stopped: measured next time
             // The worker couldn't do it: measure here, on the whole frame.
             try {
               const raw = await decodeThumb(p);
@@ -175,14 +195,16 @@ export function CullView({ store, onDevelop }) {
       }
     } finally {
       pool.close(); // each worker holds its own detector, so they never outlive a run
+      if (autoPool.current === pool) autoPool.current = null;
     }
     console.log(`[auto-rate] measured ${todo.length} photos in ${Math.round(performance.now() - started)} ms`);
-    setAuto((a) => { const next = { ...a, measured }; saveAnalysis(dir, next); return next; });
+    storeAnalysis(dir, (a) => ({ ...a, measured: { ...a.measured, ...measured } }));
     setAutoRun(null);
   };
 
   // Writes every suggestion to photos you haven't rated yourself.
   const applyAll = async () => {
+    const dir = list.folder;
     const targets = allPhotos.filter((p) => suggestions[p.id] && autoMayRate(p) && photoRating(p, meta[p.id]) !== suggestions[p.id].stars);
     autoCancel.current = false;
     setAutoRun({ kind: 'apply', done: 0, total: targets.length });
@@ -197,7 +219,7 @@ export function CullView({ store, onDevelop }) {
       setAutoRun((r) => r && { ...r, done: Math.min(targets.length, i + 8) });
     }
     setList((l) => ({ ...l, photos: l.photos.map((x) => (x.id in written ? { ...x, rating: written[x.id] } : x)) }));
-    setAuto((a) => { const next = { ...a, applied: { ...a.applied, ...written } }; saveAnalysis(list.folder, next); return next; });
+    storeAnalysis(dir, (a) => ({ ...a, applied: { ...a.applied, ...written } }));
     setAutoRun(null);
     setToast(`Rated ${Object.keys(written).length} photos${failed ? `, ${failed} could not be saved` : ''}`);
   };
@@ -332,7 +354,7 @@ export function CullView({ store, onDevelop }) {
         <AutoRatePanel photos={allPhotos} measuredCount={measuredCount} suggestions={suggestions} run={autoRun}
           applicable={allPhotos.filter((p) => suggestions[p.id] && autoMayRate(p) && photoRating(p, meta[p.id]) !== suggestions[p.id].stars).length}
           handRated={allPhotos.filter((p) => !autoMayRate(p)).length}
-          onAnalyze={analyze} onApply={applyAll} onCancel={() => { autoCancel.current = true; }}
+          onAnalyze={analyze} onApply={applyAll} onCancel={stopAuto}
           onReview={() => { setFilter('rejects'); setAutoOpen(false); }}
           onReset={() => { const next = { measured: {}, applied: auto.applied }; setAuto(next); saveAnalysis(list.folder, next); }}
           onClose={() => setAutoOpen(false)} />
@@ -538,6 +560,30 @@ function Stars({ value, onRate, keys }) {
   );
 }
 
+// The size screen-sized previews are made at (screen size x display scale). It
+// changes when the window moves to another screen or the scale is changed.
+function useFitEdge() {
+  const [edge, setEdge] = useState(fitEdge);
+  useEffect(() => {
+    let mq = null;
+    const check = () => setEdge(fitEdge());
+    const watch = () => {
+      mq?.removeEventListener('change', onScale);
+      mq = window.matchMedia?.(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+      mq?.addEventListener('change', onScale);
+    };
+    const onScale = () => { watch(); check(); };
+    watch();
+    window.addEventListener('resize', check);
+    return () => { mq?.removeEventListener('change', onScale); window.removeEventListener('resize', check); };
+  }, []);
+  return edge;
+}
+
+// After zooming out, the full-size picture (180 MB at 45 MP) is kept this long,
+// so zooming back in soon after is instant, and then let go.
+const FULL_LINGER_MS = 8000;
+
 // The big photo. Shows the small preview instantly, swaps in the sharp one as soon
 // as it's decoded, and loads the full-resolution preview only when zoomed in.
 function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, scale, subject, children }) {
@@ -546,6 +592,7 @@ function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, scale, sub
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [layers, setLayers] = useState({ id: null });
   const drag = useRef(null);
+  const edge = useFitEdge();
 
   useLayoutEffect(() => {
     const el = wrapRef.current;
@@ -559,7 +606,8 @@ function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, scale, sub
     let live = true;
     const put = (kind) => (bmp) => { if (live) setLayers((l) => (l.id === photo.id ? { ...l, [kind]: bmp } : { id: photo.id, [kind]: bmp })); };
     setLayers((l) => (l.id === photo.id ? l : { id: photo.id }));
-    const keep = new Set([`thumb:${photo.id}`, `fit:${photo.id}`, `full:${photo.id}`]);
+    // The full-size one is let go by the effect below, not here.
+    const keep = new Set([thumbKey(photo.id), fitKey(photo.id, edge), fullKey(photo.id)]);
     loadThumb(photo).then(put('thumb'), () => {});
     const fit = meta ? loadFit(photo, meta) : null;
     fit?.then(put('fit'), () => {});
@@ -570,7 +618,7 @@ function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, scale, sub
         for (const d of AHEAD.slice(0, fitKept() - 1)) {
           const p = photos[index + d];
           if (!p) continue;
-          keep.add(`fit:${p.id}`).add(`thumb:${p.id}`);
+          keep.add(fitKey(p.id, edge)).add(thumbKey(p.id));
           loadThumb(p).catch(() => {});
           if (metaById[p.id]) loadFit(p, metaById[p.id]).catch(() => {});
         }
@@ -578,7 +626,17 @@ function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, scale, sub
       });
     }
     return () => { live = false; };
-  }, [photo.id, !!meta, !!zoom]);
+  }, [photo.id, !!meta, !!zoom, edge]);
+
+  useEffect(() => {
+    if (zoom) return;
+    const t = setTimeout(() => {
+      // Out of the layers first, so a closed bitmap is never drawn; zooming in again loads a new one.
+      setLayers((l) => (l.full ? { ...l, full: null } : l));
+      releaseFull(photo.id);
+    }, FULL_LINGER_MS);
+    return () => clearTimeout(t);
+  }, [photo.id, !!zoom]);
 
   const dpr = window.devicePixelRatio || 1;
   const W = Math.round(size.w * dpr);

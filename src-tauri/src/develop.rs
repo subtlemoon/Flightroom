@@ -412,6 +412,20 @@ fn put_half(out: &mut [u8], f: &[f32]) {
 /// ahead so the next arrow press doesn't wait for a decode (about 90 MB each for 45 MP).
 const RAWS_KEPT: usize = 3;
 const OVERVIEWS_KEPT: usize = 3;
+/// Bytes those may hold, the AI Denoise result counted with the RAWs: three 45 MP
+/// RAWs and a denoised one fit; bigger photos keep fewer neighbours. The photo on
+/// screen is always kept, whatever its size.
+const RAW_BUDGET: usize = 640 << 20;
+const OVERVIEW_BUDGET: usize = 160 << 20;
+
+/// Drops entries from the back (neighbours, then older ones) until at most `max`
+/// are left within `budget` bytes. The first, the photo on screen, always stays.
+fn trim<T>(q: &mut VecDeque<T>, max: usize, budget: usize, size: impl Fn(&T) -> usize) {
+    let mut total: usize = q.iter().map(&size).sum();
+    while q.len() > 1 && (q.len() > max || total > budget) {
+        total -= q.pop_back().map_or(0, |x| size(&x));
+    }
+}
 
 /// An AI Denoise result: its cache file, the photo, and the half floats (270 MB at 45 MP).
 type Denoised = (String, PathBuf, Arc<Vec<u16>>);
@@ -427,6 +441,8 @@ pub struct Develop {
     /// The AI Denoise result of the photo being developed, let go once another photo is on screen.
     denoised: Mutex<Option<Denoised>>,
     cancel_denoise: AtomicBool,
+    /// An export sweeper is running (sweep_exports).
+    sweeping: AtomicBool,
 }
 
 impl Develop {
@@ -458,8 +474,14 @@ impl Develop {
         let mut raws = self.raws.lock().unwrap();
         let at = if keep { 0 } else { raws.len().min(1) };
         raws.insert(at, raw.clone());
-        raws.truncate(RAWS_KEPT);
+        drop(raws);
+        self.trim_raws();
         Ok(raw)
+    }
+
+    fn trim_raws(&self) {
+        let denoised = self.denoised.lock().unwrap().as_ref().map_or(0, |d| d.2.len() * 2);
+        trim(&mut self.raws.lock().unwrap(), RAWS_KEPT, RAW_BUDGET.saturating_sub(denoised), |r| r.data.len() * 2);
     }
 
     fn overview(&self, app: &AppHandle, p: &Path, edge: usize, keep: bool, dn: usize) -> Result<Arc<Vec<u8>>, String> {
@@ -473,8 +495,10 @@ impl Develop {
         let bytes = Arc::new(frame(w, h, &data));
         let mut ov = self.overviews.lock().unwrap();
         ov.retain(|o| o.0 != p);
-        ov.push_front((p.to_path_buf(), key, edge, bytes.clone()));
-        ov.truncate(OVERVIEWS_KEPT);
+        // The photo on screen first, as with the RAWs, so a big look-ahead never pushes it out.
+        let at = if keep { 0 } else { ov.len().min(1) };
+        ov.insert(at, (p.to_path_buf(), key, edge, bytes.clone()));
+        trim(&mut ov, OVERVIEWS_KEPT, OVERVIEW_BUDGET, |o| o.3.len());
         Ok(bytes)
     }
 
@@ -493,7 +517,11 @@ impl Develop {
             return None;
         }
         let d = Arc::new(bytes[8..].chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect::<Vec<u16>>());
+        drop(bytes);
         *cur = Some((name, raw.path.clone(), d.clone()));
+        drop(cur);
+        // It counts against the RAWs' budget: neighbours may have to go.
+        self.trim_raws();
         Some(d)
     }
 
@@ -679,6 +707,7 @@ pub async fn develop_denoise(app: AppHandle, id: String) -> Result<bool, String>
         std::fs::rename(&part, &file).map_err(|e| e.to_string())?;
         *dev.denoised.lock().unwrap() = Some((file.to_string_lossy().to_string(), raw.path.clone(), Arc::new(out)));
         dev.overviews.lock().unwrap().clear();
+        dev.trim_raws();
         // Only the newest few results stay on disk.
         if let Ok(rd) = std::fs::read_dir(dir) {
             let mut files: Vec<_> = rd.flatten().filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path()))).collect();
@@ -765,7 +794,26 @@ pub struct Export {
     touched: std::time::Instant,
 }
 
-const EXPORT_ABANDONED: std::time::Duration = std::time::Duration::from_secs(600);
+/// A tile comes every second or so while a photo exports; one that hasn't had a
+/// tile for this long was abandoned.
+const EXPORT_ABANDONED: std::time::Duration = std::time::Duration::from_secs(180);
+/// Picture memory all exports together may hold: a batch exports one photo at a
+/// time, so this is one very large photo with room to spare (a 45 MP one is 137 MB).
+const EXPORT_BUDGET: usize = 1 << 30;
+
+/// Drops abandoned exports, then makes room for one of `bytes` within the budget.
+fn admit_export(exports: &mut HashMap<String, Export>, bytes: usize, now: std::time::Instant) -> Result<(), String> {
+    exports.retain(|_, e| now.saturating_duration_since(e.touched) < EXPORT_ABANDONED);
+    let held: usize = exports.values().map(|e| e.rgb.len()).sum();
+    if held.checked_add(bytes).map_or(true, |n| n > EXPORT_BUDGET) {
+        return Err(format!(
+            "Not enough memory for this export ({} MB) while other exports hold {} MB. Let them finish and try again.",
+            bytes >> 20,
+            held >> 20
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Deserialize)]
 pub struct ExportArgs {
@@ -810,10 +858,33 @@ pub fn export_begin(app: AppHandle, args: ExportArgs) -> Result<String, String> 
     let shown = path.to_string_lossy().to_string();
     let dev = app.state::<Develop>();
     let mut exports = dev.exports.lock().unwrap();
-    exports.retain(|_, e| e.touched.elapsed() < EXPORT_ABANDONED);
     let touched = std::time::Instant::now();
+    admit_export(&mut exports, bytes, touched)?;
     exports.insert(args.job, Export { path, w: args.width, h: args.height, quality: args.quality.clamp(10, 100), source, rgb: vec![0; bytes], touched });
+    drop(exports);
+    sweep_exports(&app);
     Ok(shown)
+}
+
+/// While exports are held, checks on them now and then and drops abandoned ones,
+/// so a window reloaded mid-export doesn't keep its picture until the next export.
+fn sweep_exports(app: &AppHandle) {
+    if app.state::<Develop>().sweeping.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(EXPORT_ABANDONED / 6);
+        let dev = app.state::<Develop>();
+        let mut exports = dev.exports.lock().unwrap();
+        let now = std::time::Instant::now();
+        exports.retain(|_, e| now.saturating_duration_since(e.touched) < EXPORT_ABANDONED);
+        if exports.is_empty() {
+            // Cleared under the lock, so an export_begin after this starts a new sweeper.
+            dev.sweeping.store(false, Ordering::Release);
+            return;
+        }
+    });
 }
 
 /// A w x h tile at x, y must lie inside the ew x eh export and come with its RGBA bytes.
@@ -939,6 +1010,58 @@ mod tests {
                 assert!((t - d as f32 / s as f32).abs() < 1e-3);
             }
         }
+    }
+
+    #[test]
+    fn caches_keep_the_photo_on_screen_within_their_budget() {
+        let mb = |n: usize| n << 20;
+        // Three 45 MP RAWs (90 MB each) all stay.
+        let mut q: VecDeque<usize> = VecDeque::from([mb(90), mb(90), mb(90)]);
+        trim(&mut q, RAWS_KEPT, RAW_BUDGET, |&n| n);
+        assert_eq!(q.len(), 3);
+        // With a 270 MB denoised result loaded too, still within the budget.
+        trim(&mut q, RAWS_KEPT, RAW_BUDGET - mb(270), |&n| n);
+        assert_eq!(q.len(), 3);
+        // 100 MP RAWs (200 MB) and a denoised one (600 MB): only the photo on screen.
+        let mut q: VecDeque<usize> = VecDeque::from([mb(200), mb(200), mb(200)]);
+        trim(&mut q, RAWS_KEPT, RAW_BUDGET.saturating_sub(mb(600)), |&n| n);
+        assert_eq!(q, [mb(200)]);
+        // One photo bigger than the whole budget is still kept; neighbours go from the back.
+        let mut q: VecDeque<usize> = VecDeque::from([mb(900), mb(1), mb(2)]);
+        trim(&mut q, RAWS_KEPT, RAW_BUDGET, |&n| n);
+        assert_eq!(q, [mb(900)]);
+        let mut q: VecDeque<usize> = VecDeque::from([1, 2, 3, 4, 5]);
+        trim(&mut q, 3, usize::MAX, |&n| n);
+        assert_eq!(q, [1, 2, 3]);
+        // Full-size (8192 px) overviews, 270 MB each: the one on screen stays.
+        let mut q: VecDeque<usize> = VecDeque::from([mb(270), mb(270)]);
+        trim(&mut q, OVERVIEWS_KEPT, OVERVIEW_BUDGET, |&n| n);
+        assert_eq!(q.len(), 1);
+    }
+
+    fn job(bytes: usize, touched: std::time::Instant) -> Export {
+        Export { path: PathBuf::new(), w: 1, h: 1, quality: 90, source: None, rgb: vec![0; bytes], touched }
+    }
+
+    #[test]
+    fn exports_stay_within_their_memory_budget() {
+        let now = std::time::Instant::now();
+        let mut ex = HashMap::new();
+        // One photo after another, as a batch exports: always room.
+        for _ in 0..3 {
+            admit_export(&mut ex, 6000 * 4000 * 3, now).unwrap();
+            ex.insert("a".to_string(), job(6000 * 4000 * 3, now));
+            ex.remove("a");
+        }
+        // A big export under way leaves no room for a second big one, which is refused before anything is allocated...
+        ex.insert("busy".to_string(), job(700 << 20, now));
+        let err = admit_export(&mut ex, 700 << 20, now + std::time::Duration::from_secs(5)).unwrap_err();
+        assert!(err.contains("Not enough memory"), "{err}");
+        assert!(ex.contains_key("busy"), "an export still sending tiles is never dropped");
+        assert!(admit_export(&mut ex, usize::MAX, now).is_err());
+        // ...until it has gone quiet long enough to count as abandoned.
+        admit_export(&mut ex, 700 << 20, now + EXPORT_ABANDONED).unwrap();
+        assert!(ex.is_empty());
     }
 
     #[test]

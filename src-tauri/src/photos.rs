@@ -235,17 +235,26 @@ fn write_cache(file: &Path, data: &[u8]) -> std::io::Result<()> {
 /// one that exists but can't be read is an error, never a fresh start, so
 /// Lightroom's and other apps' data in it is never written over.
 pub fn read_sidecar(sidecar: &Path) -> Result<Option<String>, String> {
+    Ok(read_sidecar_as(sidecar)?.map(|(text, _)| text))
+}
+
+/// A sidecar's text and how it was stored (UTF-8 or UTF-16).
+fn read_sidecar_as(sidecar: &Path) -> Result<Option<(String, lib::XmpEncoding)>, String> {
     let name = sidecar.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     match fs::read(sidecar) {
-        Ok(bytes) => lib::xmp_text(bytes).map_err(|e| format!("{name}: {e}")),
+        Ok(bytes) => lib::xmp_file_text(bytes).map_err(|e| format!("{name}: {e}")),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(format!("Couldn't read {name}: {e}")),
     }
 }
 
+/// Changes a sidecar, writing it back in the encoding it was in (UTF-8 for a new one).
 fn rewrite_sidecar(sidecar: &Path, f: impl FnOnce(Option<String>) -> String) -> Result<(), String> {
-    let old = read_sidecar(sidecar)?;
-    atomic_write(sidecar, f(old).as_bytes()).map_err(|e| e.to_string())
+    let (old, enc) = match read_sidecar_as(sidecar)? {
+        Some((text, enc)) => (Some(text), enc),
+        None => (None, lib::XmpEncoding::Utf8),
+    };
+    atomic_write(sidecar, &lib::xmp_file_bytes(&f(old), enc)).map_err(|e| e.to_string())
 }
 
 /// Reads, changes and writes a sidecar while holding its lock (ratings and
@@ -276,6 +285,10 @@ pub fn query(uri: &tauri::http::Uri) -> HashMap<String, String> {
     url::form_urlencoded::parse(uri.query().unwrap_or("").as_bytes()).into_owned().collect()
 }
 
+/// Largest embedded preview decoded for auto-rating (one byte a pixel): well above
+/// any camera's (45 MP on a Z7 II), so a damaged or crafted file can't take gigabytes.
+const MAX_GRAY_PIXELS: usize = 120_000_000;
+
 /// Grey (luma) pixels of a JPEG inside x, y, w, h (cut to the picture): its
 /// width and height (u32 each), then a byte a pixel, top row first. Only the
 /// luma is decoded.
@@ -283,8 +296,13 @@ pub fn jpeg_gray(jpg: &[u8], x: usize, y: usize, w: usize, h: usize) -> Option<V
     use zune_jpeg::zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
     let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::Luma).set_max_width(1 << 15).set_max_height(1 << 15);
     let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(jpg), opts);
-    let px = d.decode().ok()?;
+    // The size comes from the file: checked before the picture is decoded.
+    d.decode_headers().ok()?;
     let (pw, ph) = d.dimensions()?;
+    if pw.checked_mul(ph).map_or(true, |n| n == 0 || n > MAX_GRAY_PIXELS) {
+        return None;
+    }
+    let px = d.decode().ok()?;
     if px.len() < pw * ph {
         return None;
     }
@@ -371,7 +389,7 @@ pub async fn cull_scan(app: AppHandle, folder: String) -> Result<Scan, String> {
         let photos = groups
             .into_iter()
             .map(|g| {
-                let rating = g.sidecar.as_ref().and_then(|s| fs::read_to_string(dir.join(s)).ok()).and_then(|x| lib::read_rating(&x));
+                let rating = g.sidecar.as_ref().and_then(|s| read_sidecar(&dir.join(s)).ok().flatten()).and_then(|x| lib::read_rating(&x));
                 Photo {
                     id: join(&g.file),
                     name: g.file.clone(),
@@ -637,10 +655,20 @@ mod tests {
         fs::write(&blank, "  \n").unwrap();
         rewrite_sidecar(&blank, new).unwrap();
         assert_eq!(lib::read_rating(&fs::read_to_string(&blank).unwrap()), Some(4));
-        // Not UTF-8 (UTF-16 here), not XMP Flightroom can edit, or not a file: unchanged, with an error.
-        let utf16: Vec<u8> = [0xff, 0xfe].into_iter().chain("<x:xmpmeta><rdf:Description crs:Exposure2012=\"+1\"/></x:xmpmeta>".encode_utf16().flat_map(u16::to_le_bytes)).collect();
+        // UTF-16: edited and written back as UTF-16.
+        let utf16 = |t: &str| lib::xmp_file_bytes(t, lib::XmpEncoding::Utf16 { big_endian: false, bom: true });
+        let wide = d.join("utf16.xmp");
+        fs::write(&wide, utf16("<x:xmpmeta><rdf:Description crs:Exposure2012=\"+1\"/></x:xmpmeta>")).unwrap();
+        rewrite_sidecar(&wide, new).unwrap();
+        let (text, enc) = lib::xmp_file_text(fs::read(&wide).unwrap()).unwrap().unwrap();
+        assert_eq!((lib::read_rating(&text), enc), (Some(4), lib::XmpEncoding::Utf16 { big_endian: false, bom: true }));
+        assert!(text.contains("crs:Exposure2012=\"+1\""));
+        // Not valid UTF-8 or UTF-16, not XMP Flightroom can edit, or not a file: unchanged, with an error.
+        let mut broken = utf16("<x:xmpmeta><rdf:Description crs:Exposure2012=\"+1\"/></x:xmpmeta>");
+        broken.extend(0xdc00u16.to_le_bytes());
+        let latin1: &[u8] = b"<x:xmpmeta><rdf:Description dc:creator=\"Caf\xe9\"/></x:xmpmeta>";
         let odd: &[u8] = b"<x:xmpmeta>Lightroom data in a form Flightroom doesn't know</x:xmpmeta>";
-        for (name, bytes) in [("utf16.xmp", utf16.as_slice()), ("odd.xmp", odd)] {
+        for (name, bytes) in [("broken16.xmp", broken.as_slice()), ("latin1.xmp", latin1), ("odd.xmp", odd)] {
             let f = d.join(name);
             fs::write(&f, bytes).unwrap();
             assert!(rewrite_sidecar(&f, new).is_err(), "{name}");
@@ -682,6 +710,17 @@ mod tests {
         let g = jpeg_gray(&jpg, 90, 50, 40, 40).unwrap();
         assert_eq!(&g[0..8], [10, 0, 0, 0, 10, 0, 0, 0]);
         assert!(jpeg_gray(b"not a jpeg", 0, 0, 10, 10).is_none());
+    }
+
+    #[test]
+    fn grey_refuses_a_preview_too_big_to_decode() {
+        let mut jpg = Vec::new();
+        jpeg_encoder::Encoder::new(&mut jpg, 90).encode(&[128; 64 * 48 * 3], 64, 48, jpeg_encoder::ColorType::Rgb).unwrap();
+        assert!(jpeg_gray(&jpg, 0, 0, 64, 48).is_some());
+        // The same file claiming 60000 x 60000 (3.6 GB of grey): refused from its header alone.
+        let sof = jpg.windows(2).position(|m| m == [0xff, 0xc0]).unwrap();
+        jpg[sof + 5..sof + 9].copy_from_slice(&[0xea, 0x60, 0xea, 0x60]);
+        assert!(jpeg_gray(&jpg, 0, 0, 100, 100).is_none());
     }
 
     /// FLIGHTROOM_JPEG=<big jpeg> cargo test --release --lib gray_of_a_big -- --ignored --nocapture
