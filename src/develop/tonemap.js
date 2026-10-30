@@ -51,10 +51,6 @@ export function srgbEncode1(x) {
   return v < 0.0031308 ? v * 12.92 : 1.055 * v ** (1 / 2.4) - 0.055;
 }
 
-export function srgbEncode(rgb) {
-  return [srgbEncode1(rgb[0]), srgbEncode1(rgb[1]), srgbEncode1(rgb[2])];
-}
-
 // --- 1. Sigmoid (modified log-logistic around middle gray 0.18) -------------
 
 /**

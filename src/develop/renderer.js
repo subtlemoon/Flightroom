@@ -8,6 +8,7 @@ import { MAX_MASKS, POINT_DEFAULT, adjOf, lumRange, maskRaster } from './masks.j
 import { tonemapUniforms } from './tonemap.js';
 import { Composer } from './compose.js';
 import { renderLayers } from './retouch.js';
+import { ROTATION } from '../cull/rotation.js';
 
 const GUIDE_EDGE = 320;
 // The base rendering under the sliders, per profile (params.js PROFILES).
@@ -41,6 +42,7 @@ function program(gl, frag) {
   gl.bindAttribLocation(p, 0, 'aPos');
   gl.linkProgram(p);
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  for (const sh of gl.getAttachedShaders(p)) gl.deleteShader(sh); // freed with the program
   const loc = {};
   const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
   for (let i = 0; i < n; i++) {
@@ -49,9 +51,6 @@ function program(gl, frag) {
   }
   return { p, loc };
 }
-
-// Rotation (clockwise degrees) for an EXIF orientation.
-const ROT = { 1: 0, 2: 0, 3: 180, 4: 180, 5: 90, 6: 90, 7: 270, 8: 270 };
 
 // 3x3 affine matrices, row-major [a b c; d e f; 0 0 1] as arrays of 9.
 const mat = (a, b, c, d, e, f) => [a, b, c, d, e, f, 0, 0, 1];
@@ -72,7 +71,7 @@ const glMat = (M) => new Float32Array([M[0], M[3], M[6], M[1], M[4], M[7], M[2],
 export class Geometry {
   constructor(sw, sh, orientation) {
     this.sw = sw; this.sh = sh;
-    this.rot = ROT[orientation] || 0;
+    this.rot = ROTATION[orientation] || 0;
     this.ow = this.rot % 180 ? sh : sw;
     this.oh = this.rot % 180 ? sw : sh;
     // oriented pixel -> sensor pixel
@@ -214,8 +213,8 @@ export class Renderer {
     this.down = program(gl, GUIDE_DOWN);
     this.blur = program(gl, BLUR);
     this.final = program(gl, FINAL);
-    const buf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    this.quad = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
@@ -293,12 +292,14 @@ export class Renderer {
     this.free(this.src); this.clearHi(); this.free(this.histTarget); this.free(this.prevTarget);
     for (const t of this.guide || []) this.free(t);
     gl.deleteTexture(this.curveTex); gl.deleteTexture(this.hueTex); gl.deleteTexture(this.blank);
+    gl.deleteBuffer(this.quad);
+    for (const p of [this.down, this.blur, this.final]) gl.deleteProgram(p.p);
     for (const t of this.maskTex || []) gl.deleteTexture(t.tex);
     this.composer?.dispose();
     this.setOpHi(null);
     if (this.maskCurveTex) gl.deleteTexture(this.maskCurveTex);
-    // An offscreen (export) context is done for good; a page canvas may be
-    // given a new renderer (React remounts), so its context must stay usable.
+    // An offscreen (export) context is done for good; a page canvas's owner
+    // decides (Develop keeps one canvas for every photo and drops it on leaving).
     if (typeof OffscreenCanvas !== 'undefined' && this.canvas instanceof OffscreenCanvas) gl.getExtension('WEBGL_lose_context')?.loseContext();
   }
 

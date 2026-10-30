@@ -28,28 +28,54 @@ impl Source for [u8] {
     }
 }
 
-impl Source for std::fs::File {
-    fn get(&self, offset: u64, length: usize) -> Vec<u8> {
-        // Lengths come from the file's own metadata: never allocate past its end.
-        let left = self.size().map_or(0, |n| n.saturating_sub(offset));
-        let length = length.min(usize::try_from(left).unwrap_or(usize::MAX));
-        let mut buf = vec![0u8; length];
-        let mut done = 0;
-        while done < length {
-            #[cfg(unix)]
-            let r = std::os::unix::fs::FileExt::read_at(self, &mut buf[done..], offset + done as u64);
-            #[cfg(windows)]
-            let r = std::os::windows::fs::FileExt::seek_read(self, &mut buf[done..], offset + done as u64);
-            match r {
-                Ok(0) | Err(_) => break,
-                Ok(n) => done += n,
-            }
+/// `length` bytes of a file from `offset` (fewer at its end). The caller keeps
+/// `length` sensible: this reserves that much memory.
+pub fn read_at(f: &std::fs::File, offset: u64, length: usize) -> Vec<u8> {
+    let mut buf = vec![0u8; length];
+    let mut done = 0;
+    while done < length {
+        #[cfg(unix)]
+        let r = std::os::unix::fs::FileExt::read_at(f, &mut buf[done..], offset + done as u64);
+        #[cfg(windows)]
+        let r = std::os::windows::fs::FileExt::seek_read(f, &mut buf[done..], offset + done as u64);
+        match r {
+            Ok(0) | Err(_) => break,
+            Ok(n) => done += n,
         }
-        buf.truncate(done);
-        buf
+    }
+    buf.truncate(done);
+    buf
+}
+
+/// A photo file with its first HEADER_BYTES in memory: nearly all of its metadata
+/// sits there, so reading it takes one read of the file instead of dozens.
+pub struct FileSource {
+    file: std::fs::File,
+    size: u64,
+    head: Vec<u8>,
+}
+
+impl FileSource {
+    pub fn open(path: &std::path::Path) -> std::io::Result<Self> {
+        let file = std::fs::File::open(path)?;
+        let size = file.metadata()?.len();
+        let head = read_at(&file, 0, HEADER_BYTES.min(usize::try_from(size).unwrap_or(usize::MAX)));
+        Ok(FileSource { file, size, head })
+    }
+}
+
+impl Source for FileSource {
+    fn get(&self, offset: u64, length: usize) -> Vec<u8> {
+        let end = offset.saturating_add(length as u64);
+        if end <= self.head.len() as u64 {
+            return self.head[offset as usize..end as usize].to_vec();
+        }
+        // Lengths come from the file's own metadata: never reserve past its end.
+        let left = usize::try_from(self.size.saturating_sub(offset)).unwrap_or(usize::MAX);
+        read_at(&self.file, offset, length.min(left))
     }
     fn size(&self) -> Option<u64> {
-        self.metadata().ok().map(|m| m.len())
+        Some(self.size)
     }
 }
 
@@ -758,13 +784,19 @@ mod tests {
         // Claims 4 GB, or runs past the end: no preview rather than a huge read.
         assert!(read_photo_info(&tiff_with_jpeg(64, u32::MAX, 5000)[..], ".nef").preview.is_none());
         assert!(read_photo_info(&tiff_with_jpeg(64, 5001, 5000)[..], ".nef").preview.is_none());
-        // The same through a file, whose reads never allocate past its end.
+        // The same through a file, whose reads never reserve memory past its end
+        // and give the same bytes from the part kept in memory and from the disk.
         let path = std::env::temp_dir().join(format!("flightroom-test-preview-{}.nef", std::process::id()));
-        std::fs::write(&path, tiff_with_jpeg(64, u32::MAX, 5000)).unwrap();
-        let f = std::fs::File::open(&path).unwrap();
+        let mut bytes = tiff_with_jpeg(64, u32::MAX, 5000);
+        bytes.extend((0..HEADER_BYTES).map(|i| (i % 253) as u8));
+        std::fs::write(&path, &bytes).unwrap();
+        let f = FileSource::open(&path).unwrap();
         assert!(read_photo_info(&f, ".nef").preview.is_none());
-        assert_eq!(f.get(64, usize::MAX).len(), 5000);
+        assert_eq!(f.get(64, usize::MAX).len(), bytes.len() - 64);
         assert!(f.get(u64::MAX, 10).is_empty());
+        for (at, n) in [(0, 10), (HEADER_BYTES - 5, 10), (HEADER_BYTES, 7), (bytes.len() - 3, 9)] {
+            assert_eq!(f.get(at as u64, n), bytes.get(at..(at + n).min(bytes.len())).unwrap(), "{at} {n}");
+        }
         drop(f);
         let _ = std::fs::remove_file(&path);
     }
@@ -833,7 +865,7 @@ mod real_file {
     #[ignore]
     fn reads_a_real_file() {
         let p = std::env::var("FLIGHTROOM_NEF").expect("set FLIGHTROOM_NEF");
-        let f = std::fs::File::open(&p).unwrap();
+        let f = super::FileSource::open(std::path::Path::new(&p)).unwrap();
         let info = super::read_photo_info(&f, &super::ext_of(&p));
         println!("{} preview {:?} thumb {:?}", serde_json::to_string(&info).unwrap(), info.preview, info.thumb);
         assert!(info.preview.is_some() && info.thumb.is_some());

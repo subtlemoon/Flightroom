@@ -15,9 +15,11 @@ export const imgUrl = (kind, id) => fileUrl(`photo/${kind}`, { p: id });
 export const fitEdge = () => Math.min(4096, Math.round(Math.max(screen.width, screen.height) * (window.devicePixelRatio || 1)));
 
 const cache = new Map(); // key -> Promise<ImageBitmap>; Map order = least recently used first
-// A fit bitmap is up to ~45 MB and a full-size one ~180 MB, so few are kept:
-// the current photo and the neighbours decoded ahead (AHEAD in cull.jsx).
-const LIMITS = { thumb: 80, fit: 7, full: 1 };
+// Screen-sized bitmaps kept: the current photo and the neighbours decoded ahead
+// (AHEAD in cull.jsx), as many as fit in FIT_BUDGET: 7 up to about a 2880 px
+// screen (22 MB each), 3 on a 5K one (45 MB each).
+const FIT_BUDGET = 160 * 1024 * 1024;
+export const fitKept = () => Math.max(3, Math.min(7, Math.floor(FIT_BUDGET / (fitEdge() ** 2 * (2 / 3) * 4))));
 
 function cached(key, load) {
   if (cache.has(key)) {
@@ -33,8 +35,9 @@ function cached(key, load) {
 }
 
 // Frees the oldest bitmaps of each kind beyond its limit, never touching `keep`.
+// A full-size one (180 MB at 45 MP) is kept only for the photo on screen.
 export function prune(keep) {
-  for (const [kind, max] of Object.entries(LIMITS)) {
+  for (const [kind, max] of Object.entries({ thumb: 24, fit: fitKept(), full: 0 })) {
     const keys = [...cache.keys()].filter((k) => k.startsWith(`${kind}:`));
     for (const k of keys.slice(0, Math.max(0, keys.length - max))) {
       if (keep.has(k)) continue;
@@ -88,15 +91,6 @@ function pump() {
   }
 }
 
-export const loadThumb = (photo) => cached(`thumb:${photo.id}`, async () => {
-  try {
-    return await createImageBitmap(await fetchBlob(imgUrl('thumb', photo.id)));
-  } catch (err) {
-    if (err.status !== 404) throw err;
-    return (await makeThumb(photo)).bmp;
-  }
-});
-
 // The small preview as a fresh bitmap that isn't kept in the cache; the caller
 // closes it. Used by auto-rating, which looks at every photo once.
 export async function decodeThumb(photo) {
@@ -108,11 +102,19 @@ export async function decodeThumb(photo) {
   }
 }
 
-// For <img> tags in the filmstrip: the cached thumbnail URL, or a freshly made one.
+export const loadThumb = (photo) => cached(`thumb:${photo.id}`, () => decodeThumb(photo));
+
+// For <img> tags in the filmstrip: a freshly made thumbnail, held until the
+// <img> has it (fallbackShown). It's saved to the thumbnail cache too, where the
+// filmstrip finds it from then on.
 const madeUrls = new Map();
 export async function thumbFallbackUrl(photo) {
   if (!madeUrls.has(photo.id)) madeUrls.set(photo.id, makeThumb(photo).then(({ bmp, blob }) => { bmp.close(); return URL.createObjectURL(blob); }));
   return madeUrls.get(photo.id);
+}
+export function fallbackShown(photo) {
+  madeUrls.get(photo.id)?.then((url) => URL.revokeObjectURL(url), () => {});
+  madeUrls.delete(photo.id);
 }
 
 // Frees every cached bitmap and thumbnail URL (leaving the Culling tab).

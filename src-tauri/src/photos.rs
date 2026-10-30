@@ -96,7 +96,10 @@ pub struct Photos {
     folders: Mutex<HashSet<PathBuf>>,
     info: Mutex<InfoCache>,
     io: Limiter,
-    /// One lock per file being written, so writes to one file run in order.
+    /// Full-size previews decoded for auto-rating, two at a time (45 MB each at 45 MP).
+    decode: Limiter,
+    /// One lock per file being written, so writes to one file run in order
+    /// (see locked; a lock goes once no one holds or waits for it).
     writes: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
     thumbs: PathBuf,
 }
@@ -127,6 +130,7 @@ impl Photos {
             folders: Mutex::new(HashSet::new()),
             info: Mutex::new(InfoCache::new(INFO_CACHE_MAX)),
             io: Limiter::new(6),
+            decode: Limiter::new(2),
             writes: Mutex::new(HashMap::new()),
             thumbs,
         }
@@ -146,7 +150,7 @@ impl Photos {
             }
         }
         let ext = lib::ext_of(&p.to_string_lossy());
-        let info = self.io.run(|| fs::File::open(p).map(|f| lib::read_photo_info(&f, &ext)))?;
+        let info = self.io.run(|| lib::FileSource::open(p).map(|f| lib::read_photo_info(&f, &ext)))?;
         self.info.lock().unwrap().insert(p.to_path_buf(), Cached { key: key.clone(), info: info.clone() });
         Ok((key, info))
     }
@@ -155,8 +159,20 @@ impl Photos {
         self.info.lock().unwrap().remove(p);
     }
 
-    fn write_lock(&self, p: &Path) -> Arc<Mutex<()>> {
-        self.writes.lock().unwrap().entry(p.to_path_buf()).or_default().clone()
+    /// Runs `f` holding file `p`'s write lock.
+    fn locked<T>(&self, p: &Path, f: impl FnOnce() -> T) -> T {
+        let lock = self.writes.lock().unwrap().entry(p.to_path_buf()).or_default().clone();
+        let out = {
+            let _g = lock.lock().unwrap_or_else(|e| e.into_inner());
+            f()
+        };
+        // Copies are only made under the list's lock: one left alone is no one else's.
+        let mut writes = self.writes.lock().unwrap();
+        drop(lock);
+        if writes.get(p).is_some_and(|l| Arc::strong_count(l) == 1) {
+            writes.remove(p);
+        }
+        out
     }
 
     fn thumb_path(&self, p: &Path, key: &str) -> PathBuf {
@@ -179,7 +195,7 @@ pub fn read_part(p: &Path, part: &lib::JpegPart) -> std::io::Result<Vec<u8>> {
     if len > lib::MAX_PART {
         return Err(bad("is too large"));
     }
-    let buf = lib::Source::get(&f, part.offset, len as usize);
+    let buf = lib::read_at(&f, part.offset, len as usize);
     if buf.len() as u64 != len {
         return Err(bad("couldn't be read in full"));
     }
@@ -235,10 +251,7 @@ fn rewrite_sidecar(sidecar: &Path, f: impl FnOnce(Option<String>) -> String) -> 
 /// Reads, changes and writes a sidecar while holding its lock (ratings and
 /// develop settings share the file).
 pub fn edit_sidecar(app: &AppHandle, sidecar: &Path, f: impl FnOnce(Option<String>) -> String) -> Result<(), String> {
-    let photos = app.state::<Photos>();
-    let lock = photos.write_lock(sidecar);
-    let _g = lock.lock().unwrap();
-    rewrite_sidecar(sidecar, f)
+    app.state::<Photos>().locked(sidecar, || rewrite_sidecar(sidecar, f))
 }
 
 // --- gcimg:// ---------------------------------------------------------------
@@ -263,9 +276,34 @@ pub fn query(uri: &tauri::http::Uri) -> HashMap<String, String> {
     url::form_urlencoded::parse(uri.query().unwrap_or("").as_bytes()).into_owned().collect()
 }
 
+/// Grey (luma) pixels of a JPEG inside x, y, w, h (cut to the picture): its
+/// width and height (u32 each), then a byte a pixel, top row first. Only the
+/// luma is decoded.
+pub fn jpeg_gray(jpg: &[u8], x: usize, y: usize, w: usize, h: usize) -> Option<Vec<u8>> {
+    use zune_jpeg::zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
+    let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::Luma).set_max_width(1 << 15).set_max_height(1 << 15);
+    let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(jpg), opts);
+    let px = d.decode().ok()?;
+    let (pw, ph) = d.dimensions()?;
+    if px.len() < pw * ph {
+        return None;
+    }
+    let (x, y) = (x.min(pw), y.min(ph));
+    let (w, h) = (w.min(pw - x), h.min(ph - y));
+    let mut out = Vec::with_capacity(8 + w * h);
+    out.extend((w as u32).to_le_bytes());
+    out.extend((h as u32).to_le_bytes());
+    for row in px.chunks_exact(pw).skip(y).take(h) {
+        out.extend_from_slice(&row[x..x + w]);
+    }
+    Some(out)
+}
+
 // /photo/preview?p=<file>  full-size embedded JPEG
 // /photo/thumb?p=<file>    small JPEG (cached on disk); 404 when the file has
 //                          none, and the window makes one and sends it back.
+// /photo/gray?p=<file>&x&y&w&h  part of the full-size one in grey (jpeg_gray), for
+//                          auto-rating: the window never has to hold the whole picture.
 pub fn handle_photo(app: &AppHandle, kind: &str, q: &HashMap<String, String>) -> HttpResponse {
     let photos = app.state::<Photos>();
     let Some(p) = q.get("p").and_then(|p| photos.allowed(p)) else { return respond(403, "text/plain", Vec::new()) };
@@ -275,6 +313,11 @@ pub fn handle_photo(app: &AppHandle, kind: &str, q: &HashMap<String, String>) ->
             Some(buf) => respond(200, "image/jpeg", lib::strip_exif(buf)),
             None => not_found(),
         };
+    }
+    if kind == "gray" {
+        let n = |k: &str| q.get(k).and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
+        let gray = info.preview.and_then(|part| photos.decode.run(|| read_part(&p, &part).ok().and_then(|jpg| jpeg_gray(&jpg, n("x"), n("y"), n("w"), n("h")))));
+        return gray.map_or_else(not_found, |g| respond(200, "application/octet-stream", g));
     }
     let cached = photos.thumb_path(&p, &key);
     if let Ok(hit) = fs::read(&cached) {
@@ -392,10 +435,10 @@ pub async fn cull_rate(app: AppHandle, args: RateArgs) -> Result<serde_json::Val
         };
         if args.rating_in == "file" {
             // A JPEG on its own: the rating goes in the file's XMP block (Lightroom reads it there).
-            let lock = photos.write_lock(&id);
-            let _g = lock.lock().unwrap();
-            let buf = fs::read(&id).map_err(|e| e.to_string())?;
-            atomic_write(&id, &lib::set_jpeg_rating(&buf, args.rating)?).map_err(|e| e.to_string())?;
+            photos.locked(&id, || {
+                let buf = fs::read(&id).map_err(|e| e.to_string())?;
+                atomic_write(&id, &lib::set_jpeg_rating(&buf, args.rating)?).map_err(|e| e.to_string())
+            })?;
             photos.forget(&id);
         } else {
             let Some(sidecar) = photos.allowed(&args.sidecar).filter(|s| lib::ext_of(&s.to_string_lossy()) == ".xmp") else {
@@ -607,6 +650,77 @@ mod tests {
         fs::create_dir(&dir).unwrap();
         assert!(read_sidecar(&dir).is_err());
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn crops_a_jpeg_in_grey() {
+        // A 100 x 60 picture: grey levels in steps, colour that has the same luma, encoded and decoded back.
+        let (w, h) = (100u16, 60u16);
+        let mut rgb = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let v = (x / 10 * 20 + y / 20 * 5) as u8;
+                rgb.extend([v, v, v]);
+            }
+        }
+        let mut jpg = Vec::new();
+        let mut enc = jpeg_encoder::Encoder::new(&mut jpg, 98);
+        enc.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_2_0);
+        enc.encode(&rgb, w, h, jpeg_encoder::ColorType::Rgb).unwrap();
+        let g = jpeg_gray(&jpg, 25, 10, 40, 30).unwrap();
+        assert_eq!((u32::from_le_bytes(g[0..4].try_into().unwrap()), u32::from_le_bytes(g[4..8].try_into().unwrap())), (40, 30));
+        assert_eq!(g.len(), 8 + 40 * 30);
+        for (i, &v) in g[8..].iter().enumerate() {
+            let (x, y) = (25 + i % 40, 10 + i / 40);
+            let want = rgb[(y * w as usize + x) * 3] as i32;
+            // Away from the steps (where JPEG rings a little), the grey comes back.
+            if x % 10 > 1 && x % 10 < 8 && y % 20 > 1 && y % 20 < 18 {
+                assert!((v as i32 - want).abs() <= 2, "{x},{y}: {v} vs {want}");
+            }
+        }
+        // A rectangle past the edges is cut to the picture; something not a JPEG is refused.
+        let g = jpeg_gray(&jpg, 90, 50, 40, 40).unwrap();
+        assert_eq!(&g[0..8], [10, 0, 0, 0, 10, 0, 0, 0]);
+        assert!(jpeg_gray(b"not a jpeg", 0, 0, 10, 10).is_none());
+    }
+
+    /// FLIGHTROOM_JPEG=<big jpeg> cargo test --release --lib gray_of_a_big -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn gray_of_a_big_preview() {
+        let jpg = fs::read(std::env::var("FLIGHTROOM_JPEG").unwrap()).unwrap();
+        let t = std::time::Instant::now();
+        let g = jpeg_gray(&jpg, 3000, 2000, 1600, 1600).unwrap();
+        println!("decoded and cut in {:?}: {} bytes", t.elapsed(), g.len());
+        fs::write(std::env::var("FLIGHTROOM_JPEG").unwrap() + ".gray", &g).unwrap();
+    }
+
+    #[test]
+    fn write_locks_keep_writes_in_order_and_go_after() {
+        let photos = Photos::new(PathBuf::from("unused"));
+        let (a, b) = (PathBuf::from("a.xmp"), PathBuf::from("b.xmp"));
+        let inside = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|s| {
+            for i in 0..16 {
+                let (photos, inside, p) = (&photos, &inside, if i % 2 == 0 { &a } else { &b });
+                s.spawn(move || {
+                    for _ in 0..50 {
+                        photos.locked(p, || {
+                            // Only this thread writes this file now.
+                            let n = inside.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            assert!(n < 2, "{n} writers at once");
+                            std::thread::yield_now();
+                            inside.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                        });
+                    }
+                });
+            }
+        });
+        // Nothing waits any more: the list is empty again (it used to keep every file ever written).
+        assert!(photos.writes.lock().unwrap().is_empty());
+        // A write that panics doesn't block the file after it.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| photos.locked(&a, || panic!("disk gone"))));
+        assert_eq!(photos.locked(&a, || 7), 7);
     }
 
     #[test]

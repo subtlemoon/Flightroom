@@ -12,7 +12,7 @@ import { toggle, useLayout } from '../layout.js';
 import { Filmstrip, photoRating } from './cull.jsx';
 import { imgUrl, ROTATION } from '../cull/previews.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
-import { cachedFolder, keepFolder, latestOnly, sameList } from '../cull/folder.js';
+import { cachedFolder, startAt, useFolder, usePosition } from '../cull/folder.js';
 import { keepSettings, session } from '../develop/session.js';
 import { createSaver } from '../develop/saver.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey } from '../cull/keys.js';
@@ -61,9 +61,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
 
   // Coming from Culling: its photo list, at once (open() reads the folder again quietly).
   const [seen] = useState(() => cachedFolder(folder));
-  const [list, setList] = useState(seen?.list || null);
   const [currentId, setCurrentId] = useState(() => seen?.list.photos[state.cull?.positions?.[seen.list.folder] || 0]?.id ?? null);
-  const [meta, setMeta] = useState(seen?.meta || {});
   const [opened, setOpened] = useState(null); // { id, info, asShot } | { id, error }
   const [s, setS] = useState(null);
   const [crop, setCrop] = useState(false);
@@ -83,21 +81,17 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const [sel, setSelState] = useState(null); // selected mask and part: { mask, part }
   const [overlay, setOverlay] = useStored('flightroom-mask-overlay-2', OVERLAY_DEFAULT);
   const [brush, setBrush] = useStored('flightroom-brush', BRUSH_DEFAULT);
-  const pendingMeta = useRef();
-  pendingMeta.current ||= new Set(Object.keys(meta));
-  const [scans] = useState(latestOnly);
-  const [loads] = useState(latestOnly);
   const stageApi = useRef({});
   const geoCache = useRef(null);
   const rxRef = useRef(null);
   const settingsCache = useRef(session.settings);
   const history = useRef(session.history);
   const dirty = useRef(false);
-  const positions = useRef();
-  positions.current = state.cull?.positions || {};
 
   // Shared with Culling; its "Likely rejects" is Culling's own.
   const [filter, setFilter] = useState(() => (seen?.filter && seen.filter !== 'rejects' ? seen.filter : 'all')); // see inFilter
+  // Same folder and position as the Culling tab.
+  const { list, setList, meta, requestMeta } = useFolder(bridge, folder, seen, filter, (res) => setCurrentId(res.photos[startAt(res, state.cull?.positions)]?.id ?? null));
   const layout = useLayout();
   // The crop tool lives in the right panel, so cropping shows the panel.
   useEffect(() => { if (crop && !layout.panel) toggle('panel'); }, [crop]);
@@ -118,58 +112,17 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   lastIndex.current = index;
   const photo = photos[index];
 
-  // Same folder and position as the Culling tab.
-  const open = useCallback(async (dir) => {
-    if (!bridge || !dir) return;
-    // Only the newest scan counts: an older folder's answer arriving late is dropped.
-    const latest = scans.next();
-    if (cachedFolder(dir)) {
-      const res = await bridge.scan(dir);
-      if (latest() && !res.error) setList((l) => (l?.photos && sameList(l.photos, res.photos) ? l : res));
-      return;
-    }
-    setList({ loading: true, folder: dir });
-    loads.next(); // metadata still coming for the folder before is dropped
-    const res = await bridge.scan(dir);
-    if (!latest()) return;
-    if (res.error) { setList({ error: res.error, folder: dir }); return; }
-    setMeta({});
-    pendingMeta.current = new Set();
-    const pos = Math.min(positions.current[res.folder] || 0, Math.max(0, res.photos.length - 1));
-    setCurrentId(res.photos[pos]?.id ?? null);
-    setList(res);
-  }, [bridge]);
-  useEffect(() => { if (folder) open(folder); }, [folder, open]);
-  useEffect(() => { if (list?.photos && list.folder) keepFolder(folder, { list, meta, filter }); }, [list, meta, filter]);
-
-  const lastPos = useRef(null);
-  useEffect(() => {
-    const pos = photo ? allPhotos.findIndex((p) => p.id === photo.id) : -1;
-    if (list?.folder && pos >= 0) {
-      lastPos.current = [list.folder, pos];
-      const t = setTimeout(() => actions.setCullPosition(list.folder, pos), 400);
-      return () => clearTimeout(t);
-    }
-  }, [photo?.id, list?.folder]);
-  // Leaving for Culling right after moving: hand over the position at once.
-  useEffect(() => () => { if (lastPos.current) actions.setCullPosition(...lastPos.current); }, []);
-
-  const requestMeta = useCallback((ids) => {
-    const want = ids.filter((id) => id && !pendingMeta.current.has(id));
-    if (!want.length || !bridge) return;
-    want.forEach((id) => pendingMeta.current.add(id));
-    const latest = loads.current();
-    bridge.meta(want).then((m) => { if (latest() && !m.error) setMeta((old) => ({ ...old, ...m })); });
-  }, [bridge]);
+  usePosition(actions, list?.folder, photo ? allPhotos.findIndex((p) => p.id === photo.id) : -1);
   useEffect(() => {
     if (!photo) return;
     requestMeta([photo.id, ...photos.slice(Math.max(0, index - 3), index + META_WINDOW).map((p) => p.id)]);
   }, [photo?.id, photos, requestMeta]);
 
-  // Free the RAW data a while after leaving the tab.
+  // Free the graphics card's copy of the photo on leaving the tab, and the RAW
+  // data a while after (coming straight back doesn't decode it again).
   useEffect(() => {
     clearTimeout(releaseTimer);
-    return () => { releaseTimer = setTimeout(() => app?.develop.close(), RELEASE_AFTER); };
+    return () => { dropStage(); releaseTimer = setTimeout(() => app?.develop.close(), RELEASE_AFTER); };
   }, []);
 
   // Open the current photo: decode its RAW and read its saved settings.
@@ -616,8 +569,29 @@ function sampleGrid(frame, edge = 320) {
   return { gw, gh, data: out };
 }
 
+// One canvas and renderer for every photo while Develop is open. A new WebGL
+// context per photo would compile the shaders again and keep another
+// screen-sized drawing buffer until garbage collection. Freed on leaving Develop.
+let stage = null; // { canvas, renderer }
+function stageRenderer() {
+  if (!stage || stage.renderer.gl.isContextLost()) {
+    const canvas = document.createElement('canvas');
+    canvas.style.width = canvas.style.height = '100%';
+    stage = { canvas, renderer: new Renderer(canvas) };
+  }
+  return stage;
+}
+function dropStage() {
+  if (!stage) return;
+  stage.renderer.dispose();
+  stage.renderer.gl.getExtension('WEBGL_lose_context')?.loseContext();
+  stage.canvas.remove();
+  stage = null;
+}
+
 function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCrop, apiRef, nextPhoto, before, picker, maskView, previewView, maskTool, retouch }) {
   const wrapRef = useRef();
+  const hostRef = useRef();
   const canvasRef = useRef();
   const rendererRef = useRef(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -639,10 +613,14 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
   }, []);
 
   useEffect(() => {
-    try { rendererRef.current = new Renderer(canvasRef.current); } catch (err) { setError(String(err.message || err)); }
+    let st;
+    try { st = stageRenderer(); } catch (err) { setError(String(err.message || err)); return; }
+    hostRef.current.appendChild(st.canvas);
+    canvasRef.current = st.canvas;
+    rendererRef.current = st.renderer;
     const lost = (e) => { e.preventDefault(); setError('The graphics card stopped the photo renderer'); setReady(false); };
-    canvasRef.current.addEventListener('webglcontextlost', lost);
-    return () => { rendererRef.current?.dispose(); rendererRef.current = null; };
+    st.canvas.addEventListener('webglcontextlost', lost);
+    return () => { st.canvas.removeEventListener('webglcontextlost', lost); st.canvas.remove(); rendererRef.current = null; };
   }, []);
 
   // How much AI Denoise to show; slider moves are let settle before the photo is fetched again.
@@ -981,7 +959,7 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
         <img className="dev-placeholder" src={imgUrl('preview', photo.id)} alt="" draggable={false}
           style={rot ? { transform: `rotate(${rot}deg)`, maxWidth: rot % 180 ? size.h : undefined, maxHeight: rot % 180 ? size.w : undefined } : undefined} />
       )}
-      <canvas ref={canvasRef} style={{ width: size.w, height: size.h, opacity: ready ? 1 : 0 }}
+      <div ref={hostRef} style={{ width: size.w, height: size.h, opacity: ready ? 1 : 0 }}
         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} />
       <div className="stage-top">
         {!ready && !error && <span className="pill-mini">Loading RAW…</span>}
