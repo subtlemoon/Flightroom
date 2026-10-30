@@ -34,17 +34,38 @@ function cached(key, load) {
   return p;
 }
 
+// Cache keys. A screen-sized bitmap is made for the screen it's on: one made
+// before the window moved to another screen (or the display scale changed) is
+// another size, and not used again.
+export const thumbKey = (id) => `thumb:${id}`;
+export const fitKey = (id, edge = fitEdge()) => `fit:${edge}:${id}`;
+export const fullKey = (id) => `full:${id}`;
+
+function drop(k) {
+  cache.get(k)?.then((b) => b.close(), () => {});
+  cache.delete(k);
+}
+
 // Frees the oldest bitmaps of each kind beyond its limit, never touching `keep`.
-// A full-size one (180 MB at 45 MP) is kept only for the photo on screen.
+// A full-size one (180 MB at 45 MP) is kept only for the photo on screen, and
+// screen-sized ones made for another screen size go first.
 export function prune(keep) {
+  const edge = fitEdge();
   for (const [kind, max] of Object.entries({ thumb: 24, fit: fitKept(), full: 0 })) {
-    const keys = [...cache.keys()].filter((k) => k.startsWith(`${kind}:`));
+    let keys = [...cache.keys()].filter((k) => k.startsWith(`${kind}:`));
+    if (kind === 'fit') {
+      for (const k of keys) if (!k.startsWith(`fit:${edge}:`) && !keep.has(k)) drop(k);
+      keys = keys.filter((k) => cache.has(k));
+    }
     for (const k of keys.slice(0, Math.max(0, keys.length - max))) {
-      if (keep.has(k)) continue;
-      cache.get(k).then((b) => b.close(), () => {});
-      cache.delete(k);
+      if (!keep.has(k)) drop(k);
     }
   }
+}
+
+// Frees the photo's full-size bitmap (a while after zooming out of it).
+export function releaseFull(id) {
+  drop(fullKey(id));
 }
 
 async function fetchBlob(url) {
@@ -59,10 +80,13 @@ const resizeTo = (edge, meta) => {
   return w >= h ? { resizeWidth: edge, resizeQuality: 'high' } : { resizeHeight: edge, resizeQuality: 'high' };
 };
 
-export const loadFit = (photo, meta) => cached(`fit:${photo.id}`, async () =>
-  createImageBitmap(await fetchBlob(imgUrl('preview', photo.id)), resizeTo(fitEdge(), meta)));
+export const loadFit = (photo, meta) => {
+  const edge = fitEdge();
+  return cached(fitKey(photo.id, edge), async () =>
+    createImageBitmap(await fetchBlob(imgUrl('preview', photo.id)), resizeTo(edge, meta)));
+};
 
-export const loadFull = (photo) => cached(`full:${photo.id}`, async () =>
+export const loadFull = (photo) => cached(fullKey(photo.id), async () =>
   createImageBitmap(await fetchBlob(imgUrl('preview', photo.id))));
 
 // Files without a small embedded preview (most JPEGs) get one made here once,
@@ -102,7 +126,7 @@ export async function decodeThumb(photo) {
   }
 }
 
-export const loadThumb = (photo) => cached(`thumb:${photo.id}`, () => decodeThumb(photo));
+export const loadThumb = (photo) => cached(thumbKey(photo.id), () => decodeThumb(photo));
 
 // For <img> tags in the filmstrip: a freshly made thumbnail, held until the
 // <img> has it (fallbackShown). It's saved to the thumbnail cache too, where the
