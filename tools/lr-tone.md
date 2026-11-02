@@ -64,10 +64,19 @@ full-edit export (mean |Laplacian| of the hair: Lightroom 21.6):
   local contrast (19.5).
 - Highlights/Shadows decided each pixel's lift from an edge-hugging base, so a
   lighter strand got less lift than the dark gap beside it, and the contrast
-  between them flattened (strand contrast with the curve: Lightroom 3.18,
-  Flightroom 2.12). The lift now comes from a neighbourhood that only follows
-  edges past about 0.8 stops (`LIFT_EDGE`): 2.79. Region colour error moves a
-  little (tone + curve 2.4 -> 2.7, full edit 3.8 -> 4.1).
+  between them flattened. 2.9.7 took the lift from the coarse guide instead,
+  which kept the strands but let the bright sky into the hair's neighbourhood:
+  the hair got less Shadows and came out 10 L* too dark. 2.9.8 takes it from
+  a strand-sized neighbourhood (rings of 4 and 8 px, following edges past
+  1 stop: `LIFT_R`, `LIFT_EDGE`): hair L* 32.5 (Lightroom 31.8), fine detail
+  24.7 (Lightroom 21.6); region error full edit 3.8, tone + curve 2.4.
+- Contrast keeps hue (brightest and darkest channel, the middle one in
+  between), as Adobe's tone curves do: per channel it turned strong reds pink.
+- Still open: the red suits are about 4-5 degrees pinker and, with the curve,
+  about 2 L* brighter than Lightroom. Lightroom's own Tone Slider export put
+  through the point curve reproduces its Tone Curve export exactly, so the
+  curve is right; the reds going into it carry a red channel about 0.02 high
+  (already at defaults).
 - Develop, smaller than 100%, now shows the view processed again from
   full-resolution raw data and scaled down through mipmaps once it settles
   (Renderer.refine), instead of only the 2x2-merged preview.

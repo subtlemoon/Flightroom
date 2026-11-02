@@ -99,7 +99,7 @@ uniform vec4 uTmB;        // tone mapper parameters B (filmic spline nodes)
 uniform float uTmHue;     // hue preservation factor (0..1)
 uniform float uHighlights, uShadows, uWhites, uBlacks;
 // Basic tone slider shapes (fitted to Lightroom; tools/lr-tone.md).
-const float HL_K = 1.1, HL_LO = 0.2, SH_K = 0.72, SH_HI = 0.9, LIFT_EDGE = 0.6;
+const float HL_K = 1.1, HL_LO = 0.2, SH_K = 0.72, SH_HI = 0.9, LIFT_EDGE = 1.0, LIFT_R = 4.0;
 const float WH_NEG = 0.13, WH_POS = 0.3, BL_NEG = 1.4, BL_POS = 1.0, BL_N = 2.36, BL_LIFT = 0.12, LIFT_GREY = 0.75;
 uniform float uTexture, uClarity, uDehaze, uVibrance, uSaturation;
 uniform float uAirY;
@@ -523,7 +523,10 @@ void main() {
   // only follows big edges (a head against the sky), so fine detail such as
   // hair strands and the gaps between them is lifted alike and keeps its
   // contrast, as in Lightroom (measured on JWL_7451).
-  float bw = disp(exp2(g.r + dEdge * (1.0 - exp(-dEdge * dEdge / LIFT_EDGE)) + exposure));
+  float lw = 0.5 * (ring(p, LIFT_R) + ring(p, 2.0 * LIFT_R));
+  float dl = l0 - lw;
+  lw += dl * (1.0 - exp(-dl * dl / LIFT_EDGE));
+  float bw = disp(exp2(lw + exposure));
   // Highlights and Shadows: weights and strengths fitted to Lightroom's measured
   // change per L* band at -100 / +100 (see tools/lr-tone.md).
   base += highlights * HL_K * smoothstep(HL_LO, 1.0, bw);
@@ -587,8 +590,15 @@ void main() {
     d = y > 1e-4 ? (y2 > y ? mix(d * (y2 / y), d + (y2 - y), LIFT_GREY) : d * (y2 / y)) : vec3(y2);
   }
   d = clamp(d, 0.0, 1.0);
-  vec3 s = d * d * (3.0 - 2.0 * d);
-  d = d + (uContrast + LA.y * 0.75) * (s - d);
+  // Contrast keeps hue (on the brightest and darkest channel, the middle one
+  // keeping its place, as Adobe's tone curves do): per channel it turned
+  // strong reds pink (measured on JWL_7451: 5 degrees of hue).
+  {
+    float ck = uContrast + LA.y * 0.75;
+    float hi = max(d.r, max(d.g, d.b)), lo = min(d.r, min(d.g, d.b));
+    float hi2 = hi + ck * (hi * hi * (3.0 - 2.0 * hi) - hi), lo2 = lo + ck * (lo * lo * (3.0 - 2.0 * lo) - lo);
+    d = hi - lo > 1e-5 ? lo2 + (d - lo) * ((hi2 - lo2) / (hi - lo)) : vec3(hi2);
+  }
   float cs = uContrastSat + LA.y;
   if (cs != 0.0) {
     float yc = dot(d, W709), mx = max(d.r, max(d.g, d.b)), sv = mx > 0.0 ? (mx - min(d.r, min(d.g, d.b))) / mx : 0.0;
