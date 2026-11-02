@@ -27,13 +27,17 @@ export const LOOKS = {
   agx: { exposure: 1.0, contrast: 0.3, saturation: 1.3, agx: true },
 };
 
-/** The base rendering: Lightroom's own profile when it's here (no extra contrast or colour), else the fitted look. */
+export const BASE = { exposure: 0.08, contrast: 0.19, sat: 1.12, builtInSat: 1.05 };
+
+/** The base rendering: Lightroom's own profile when it's here, else the fitted look. */
 export function lookFor(info, s) {
   const r = adobeRendering(info, s.profile);
+  // Lightroom's rendering with every slider at 0 has a little more exposure,
+  // contrast and saturation than Adobe's DNG SDK steps alone: fitted to
+  // Lightroom's own export of JWL_7451 at defaults (tools/lr-tone.md).
   // auto: the exposure Auto tone aims with (the fitted look's, which the profile's brightness is matched to).
-  // Built in (no Adobe colour tables): 7% less saturation, nearer Lightroom's
-  // Adobe Standard on skin and reds (tools/lr-tone.md).
-  return r ? { exposure: r.exposure, contrast: 0, saturation: r.dcp.builtIn ? 0.93 : 1, auto: LOOKS.adobe.exposure + r.exposure - BASELINE_EXPOSURE } : LOOKS[s.profile] || LOOKS.adobe;
+  if (!r) return LOOKS[s.profile] || LOOKS.adobe;
+  return { exposure: r.exposure + BASE.exposure, contrast: BASE.contrast, saturation: r.dcp.builtIn ? BASE.builtInSat : BASE.sat, auto: LOOKS.adobe.exposure + r.exposure - BASELINE_EXPOSURE };
 }
 
 /** The white point of the settings: the camera's own for As Shot (unrounded, as Lightroom uses it). */

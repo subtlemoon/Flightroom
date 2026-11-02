@@ -20,26 +20,34 @@ middle grey where the fitted look below had it. The fitted looks (`LOOKS` in
 
 The constants are `HL_*`, `SH_*`, `WH_*` and `BL_*` in `src/develop/shaders.js`.
 
-## Measured against Lightroom's export (2.9.3, built-in profile)
-JWL_7451.NEF rendered by the real pipeline (headless Chromium, the photo's
-settings, masks off), against Lightroom Classic's own export (sRGB, 2560 px).
-Lightroom's export is lens-corrected (Nikon Z's built-in profile): it is
-aligned by a radial fit (8.8% zoom, k1 0.056) before comparing.
+## Measured against Lightroom's own exports (2.9.5)
+JWL_7451.NEF rendered by the real pipeline (headless Chromium) with Lightroom's
+Z 7II Adobe Standard profile, against four Lightroom Classic exports of it:
+defaults, the Basic tone sliders only (Exposure -0.10, Contrast -95,
+Highlights -93, Shadows +96, Whites -92, Blacks +85), those plus the point
+curve (97->21, 176->209), and the full edit. Lightroom's exports are
+lens-corrected (Nikon Z's built-in profile), so Flightroom's render is aligned
+to them by a radial fit (8.8% zoom, k1 0.056) first.
 
-Region differences, Flightroom minus Lightroom, as dL* / dC*:
+Mean dE76 of the regions (sky, white suits, skin, red suits, trees, grass,
+road, black suit):
 
-| version | median dE | sky | white suits | skin | red suits | trees | grass | road |
-|---|---|---|---|---|---|---|---|---|
-| 2.9.2 (shoulder weighting) | 8.7 | +7.8/+1.0 | +9.2/+1.4 | -4.9/+7.3 | +4.5/+3.2 | -3.2/-4.0 | -1.9/-2.3 | +0.2/+2.4 |
-| 2.9.3 (tone-curve weighting) | 5.6 | -2.3/+3.4 | +0.4/+2.4 | -6.4/+6.7 | +4.0/+3.1 | -3.6/-4.4 | -2.5/-2.9 | -2.1/+2.2 |
-| 2.9.4 (Lightroom's Z 7II Adobe Standard .dcp) | 5.3 | -2.2/+3.2 | +0.6/+2.0 | -5.4/+4.6 | +5.9/+3.4 | -3.1/-4.8 | -1.4/-2.8 | -1.9/+1.9 |
+| export | 2.9.4 | 2.9.5 |
+|---|---|---|
+| defaults | 4.1 | 1.6 |
+| tone sliders | 7.2 | 3.2 |
+| tone sliders + curve | 6.5 | 5.3 |
+| full edit | 4.7 | 4.6 |
 
-Lightroom's own profile (hue/sat map 90x30, look table 36x8x16, default tone
-curve) only closes a little of what's left, so most of it comes from the
-Basic/Presence sliders at this edit's extremes (Contrast -95, Highlights -93,
-Shadows +96, Texture -25, Clarity -14) and the S curve: Lightroom keeps more
-local contrast, a neutral sky and brighter faces. Next: Lightroom exports with
-fewer settings to fit each one.
+What changed (fitted on these exports):
+- The base at defaults: +0.08 EV, contrast +0.19 (Contrast +25) and 12% more
+  saturation than the DNG SDK steps alone (`BASE` in renderer.js).
+- Brightening by Blacks/Whites is 75% added grey, 25% scaling
+  (`LIFT_GREY`): scaling made lifted dark reds 30 C* too strong.
+- Highlights 1.1 (was 0.9).
+
+What's left: the steep curve multiplies any tone error by about 2.4, so with
+it white suits are about 3 L* too bright and skin about 4 L* too dark.
 
 ## Targets
 

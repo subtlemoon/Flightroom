@@ -95,8 +95,8 @@ uniform vec4 uTmB;        // tone mapper parameters B (filmic spline nodes)
 uniform float uTmHue;     // hue preservation factor (0..1)
 uniform float uHighlights, uShadows, uWhites, uBlacks;
 // Basic tone slider shapes (fitted to Lightroom; tools/lr-tone.md).
-const float HL_K = 0.9, HL_LO = 0.2, SH_K = 0.72, SH_HI = 0.9;
-const float WH_NEG = 0.13, WH_POS = 0.3, BL_NEG = 1.4, BL_POS = 1.0, BL_N = 2.36, BL_LIFT = 0.12;
+const float HL_K = 1.1, HL_LO = 0.2, SH_K = 0.72, SH_HI = 0.9;
+const float WH_NEG = 0.13, WH_POS = 0.3, BL_NEG = 1.4, BL_POS = 1.0, BL_N = 2.36, BL_LIFT = 0.12, LIFT_GREY = 0.75;
 uniform float uTexture, uClarity, uDehaze, uVibrance, uSaturation;
 uniform float uAirY;
 uniform float uSharpen, uSharpenRadius, uSharpenDetail, uSharpenMasking;
@@ -563,7 +563,9 @@ void main() {
     // with Blacks +85: its darkest tones came out well above black).
     y2 += blacks < 0.0 ? blacks * BL_NEG * dk : blacks * (BL_POS * dk + BL_LIFT * (1.0 - y2));
     y2 = max(y2, 0.0);
-    d = y > 1e-4 ? d * (y2 / y) : vec3(y2);
+    // Brightening mostly adds grey (as Lightroom's lifted blacks look milky),
+    // rather than scaling the colour up with it; measured on JWL_7451.
+    d = y > 1e-4 ? (y2 > y ? mix(d * (y2 / y), d + (y2 - y), LIFT_GREY) : d * (y2 / y)) : vec3(y2);
   }
   d = clamp(d, 0.0, 1.0);
   vec3 s = d * d * (3.0 - 2.0 * d);
