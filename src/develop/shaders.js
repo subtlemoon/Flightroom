@@ -367,10 +367,13 @@ vec3 easeWhite(vec3 x) {
   return mix(x, k + (1.0 - k) * (1.0 - exp(-(x - k) / (1.0 - k))), step(k, x));
 }
 // Where light y sits from shadow to highlight, for weighting Highlights,
-// Shadows, Clarity and masks' luminance ranges: the shoulder and sRGB curve
-// these were fitted with, whatever the profile (weighting by the profile's
-// tone curve, tried in 2.9.1, made bright tones about 10 L* darker).
-float disp(float y) { return encode(vec3(shoulder1(max(y, 0.0)))).r; }
+// Shadows, Clarity and masks' luminance ranges: how bright it comes out with
+// the profile's tone curve (measured against Lightroom's export of JWL_7451,
+// tools/lr-tone.md), else the standard shoulder.
+float disp(float y) {
+  y = max(y, 0.0);
+  return uDcp > 0.5 && uToneMap < 0.5 ? encS1(toneAt(y)) : encode(vec3(shoulder1(y))).r;
+}
 
 // Colours outside the screen's range brought in by desaturating them, keeping
 // brightness; noise below black (brightness at or under 0) is black, not its

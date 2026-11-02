@@ -20,11 +20,22 @@ middle grey where the fitted look below had it. The fitted looks (`LOOKS` in
 
 The constants are `HL_*`, `SH_*`, `WH_*` and `BL_*` in `src/develop/shaders.js`.
 
-## Pending: measuring the profiles against Lightroom
-The comparison made for 2.9.2 turned out to use a Flightroom export, not
-Lightroom's, so it says nothing about Lightroom. The 0.93 saturation for the
-built-in profile and leaving Lightroom's installed profiles off come from it,
-and are to be redone against a real Lightroom export of JWL_7451.
+## Measured against Lightroom's export (2.9.3, built-in profile)
+JWL_7451.NEF rendered by the real pipeline (headless Chromium, the photo's
+settings, masks off), against Lightroom Classic's own export (sRGB, 2560 px).
+Lightroom's export is lens-corrected (Nikon Z's built-in profile): it is
+aligned by a radial fit (8.8% zoom, k1 0.056) before comparing.
+
+Region differences, Flightroom minus Lightroom, as dL* / dC*:
+
+| version | median dE | sky | white suits | skin | red suits | trees | grass | road |
+|---|---|---|---|---|---|---|---|---|
+| 2.9.2 (shoulder weighting) | 8.7 | +7.8/+1.0 | +9.2/+1.4 | -4.9/+7.3 | +4.5/+3.2 | -3.2/-4.0 | -1.9/-2.3 | +0.2/+2.4 |
+| 2.9.3 (tone-curve weighting) | 5.6 | -2.3/+3.4 | +0.4/+2.4 | -6.4/+6.7 | +4.0/+3.1 | -3.6/-4.4 | -2.5/-2.9 | -2.1/+2.2 |
+
+What's left depends on hue (reds, skin and blue-greys too strong, greens and
+yellows too weak, skin too dark): Adobe Standard's per-camera hue/saturation
+table, which only Lightroom's own profile file has.
 
 ## Targets
 

@@ -31,8 +31,8 @@ export const LOOKS = {
 export function lookFor(info, s) {
   const r = adobeRendering(info, s.profile);
   // auto: the exposure Auto tone aims with (the fitted look's, which the profile's brightness is matched to).
-  // Built in (no Adobe colour tables): 7% less saturation, provisional (see
-  // tools/lr-tone.md; to be measured against Lightroom's own export).
+  // Built in (no Adobe colour tables): 7% less saturation, nearer Lightroom's
+  // Adobe Standard on skin and reds (tools/lr-tone.md).
   return r ? { exposure: r.exposure, contrast: 0, saturation: r.dcp.builtIn ? 0.93 : 1, auto: LOOKS.adobe.exposure + r.exposure - BASELINE_EXPOSURE } : LOOKS[s.profile] || LOOKS.adobe;
 }
 
