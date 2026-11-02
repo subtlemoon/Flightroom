@@ -13,6 +13,9 @@ import { ROTATION } from '../cull/rotation.js';
 const GUIDE_EDGE = 320;
 // The base rendering under the sliders, per profile (params.js PROFILES).
 // Fitted to Lightroom's Adobe Color and to the Z7 II's own JPEGs.
+const LINEAR = [[0, 0], [255, 255]];
+const FLAT_CURVE = { curve: LINEAR, curveR: LINEAR, curveG: LINEAR, curveB: LINEAR, pShadows: 0, pDarks: 0, pLights: 0, pHighlights: 0 };
+
 export const LOOKS = {
   adobe: { exposure: 1.05, contrast: 0.4, saturation: 0.9 },
   camera: { exposure: 0.95, contrast: 0.4, saturation: 1.25 },
@@ -675,18 +678,28 @@ export class Renderer {
     }
     const saveHi = this.hi;
     this.hi = null;
-    this.render(info, s, geo, frame, outToFrame(w, h, frame, { scale: k, u: 0, v: 0 }), { target: this.histTarget });
-    this.hi = saveHi;
+    const o2f = outToFrame(w, h, frame, { scale: k, u: 0, v: 0 });
     const count = (px) => {
       if (!px) return null;
       const bins = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
       for (let i = 0; i < px.length; i += 4) { bins[0][px[i]]++; bins[1][px[i + 1]]++; bins[2][px[i + 2]]++; }
       return bins;
     };
-    if (later) return this.readLater(this.histTarget).then(count);
-    const px = new Uint8Array(w * h * 4);
-    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
-    return count(px);
+    const read = () => {
+      if (later) return this.readLater(this.histTarget).then(count);
+      const px = new Uint8Array(w * h * 4);
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      return count(px);
+    };
+    this.render(info, s, geo, frame, o2f, { target: this.histTarget });
+    const out = read();
+    // What goes into the tone curve (the photo without it), which Lightroom
+    // draws behind the curve. Reads are queued in order, so reusing the target is safe.
+    this.render(info, { ...s, ...FLAT_CURVE }, geo, frame, o2f, { target: this.histTarget });
+    const pre = read();
+    this.hi = saveHi;
+    const join = (a, b) => (a ? Object.assign(a, { pre: b }) : null);
+    return later ? Promise.all([out, pre]).then(([a, b]) => join(a, b)) : join(out, pre);
   }
 
   /** A small copy of the whole (cropped) photo, for the mask preview; pixels bottom row first. `later` as for histogram(). */

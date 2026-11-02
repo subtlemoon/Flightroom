@@ -994,6 +994,33 @@ pub fn save_text_file(path: String, text: String) -> Result<bool, String> {
 mod tests {
     use super::*;
 
+    /// FLIGHTROOM_RAW_DUMP=<raw file>: writes <raw>.frim (the 2560 px frame Develop
+    /// loads) and <raw>.json (what develop_open answers, with the sidecar's settings),
+    /// for comparing renders against Lightroom in a browser.
+    #[test]
+    fn raw_dump() {
+        let Ok(p) = std::env::var("FLIGHTROOM_RAW_DUMP") else { return };
+        let p = PathBuf::from(p);
+        let raw = Raw::decode(&p, String::new()).unwrap();
+        let (w, h, data) = raw.overview(2560, None);
+        std::fs::write(p.with_extension("frim"), frame(w, h, &data)).unwrap();
+        let text = std::fs::read_to_string(p.with_extension("xmp")).unwrap_or_default();
+        let doc = crate::xmp::Doc::new(&text);
+        let curves: HashMap<String, Vec<String>> = ["", "Red", "Green", "Blue"]
+            .iter()
+            .filter_map(|c| {
+                let name = format!("ToneCurvePV2012{c}");
+                doc.get_seq("crs", &name).map(|v| (name, v))
+            })
+            .collect();
+        let info = serde_json::json!({
+            "width": raw.w, "height": raw.h, "orientation": 1, "asShot": raw.wb,
+            "matrices": raw.matrices, "camera": format!("{} {}", raw.make, raw.model),
+            "settings": doc.all("crs"), "curves": curves, "own": doc.all("fr"), "denoised": false,
+        });
+        std::fs::write(p.with_extension("json"), info.to_string()).unwrap();
+    }
+
     #[test]
     fn area_weights_cover_each_source_pixel_once() {
         for (s, d) in [(10, 3), (4128, 2560), (7, 7), (5, 2)] {

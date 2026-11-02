@@ -7,7 +7,7 @@ import { Dropdown, Icon } from './ui.jsx';
 import { Slider } from './slider.jsx';
 import { CurveEditor } from './curve.jsx';
 import {
-  AI_TYPES, LOCAL_SECTIONS, MASK_PRESETS, MAX_MASKS, PART_LABEL, PART_TYPES, POINT_DEFAULT, aiName, maskRaster, newId, newMask, newPart, presetName,
+  AI_TYPES, LOCAL_DEF, LOCAL_SECTIONS, MASK_PRESETS, MAX_MASKS, PART_LABEL, PART_TYPES, POINT_DEFAULT, aiName, maskRaster, newId, newMask, newPart, presetName,
 } from '../develop/masks.js';
 import { CURVE_CHANNELS, LINEAR_CURVE } from '../develop/params.js';
 
@@ -319,13 +319,31 @@ export function MaskAdjust({ m, part, acts, brush, setBrush, options, setOptions
   const point = m.point && { ...POINT_DEFAULT, ...m.point };
   const curve = { ...Object.fromEntries(CURVE_CHANNELS.map(([k]) => [k, LINEAR_CURVE])), ...m.curve };
 
+  // Each section's own reset, as in Develop's panels.
+  const secKeys = (sec) => [...sec.sliders, ...(sec.grain || [])].map((sl) => sl.key);
+  const secEdited = (sec) => secKeys(sec).some((k) => m.adj?.[k] != null && m.adj[k] !== (LOCAL_DEF[k] ?? 0))
+    || (sec.id === 'color' && !!m.tint?.sat) || (sec.id === 'point' && !!m.point)
+    || (sec.id === 'curve' && (Object.values(m.curve || {}).some((c) => JSON.stringify(c) !== JSON.stringify(LINEAR_CURVE)) || (m.refineSat ?? 100) !== 100));
+  const secReset = (sec) => {
+    const adj = { ...m.adj };
+    for (const k of secKeys(sec)) delete adj[k];
+    acts.change(m.id, {
+      adj,
+      ...(sec.id === 'color' && { tint: null, fineHue: false }),
+      ...(sec.id === 'point' && { point: null }),
+      ...(sec.id === 'curve' && { curve: null, refineSat: 100 }),
+    });
+  };
   const section = (sec, body) => {
     const off = !!m.off?.[sec.id];
+    const dirty = secEdited(sec);
     return (
       <div key={sec.id} className={`mask-sec${open[sec.id] ? ' open' : ''}${off ? ' off' : ''}`}>
         <div className="mask-sec-head" role="button" tabIndex={0} onClick={() => toggle(sec.id)} onKeyDown={(e) => { if (e.key === 'Enter') toggle(sec.id); }}>
           <span className="dev-caret">{open[sec.id] ? '▾' : '▸'}</span>
           <span className="grow">{sec.title}</span>
+          {dirty && <button className="icon-btn tiny" title={`Reset ${sec.title}`}
+            onClick={(e) => { e.stopPropagation(); secReset(sec); }}><Icon name="reset" size={12} /></button>}
           <button className={`icon-btn tiny${off ? ' on' : ''}`} title={off ? `Turn ${sec.title} back on` : `Hide ${sec.title} to compare`}
             onClick={(e) => { e.stopPropagation(); acts.change(m.id, { off: { ...m.off, [sec.id]: !off } }); }}><Icon name={off ? 'eyeOff' : 'eye'} size={13} /></button>
         </div>

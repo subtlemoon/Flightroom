@@ -133,6 +133,27 @@ export function CullView({ store, onDevelop }) {
     setCurrentId(photos[n].id);
   }, [photos]);
 
+  // Photos selected along with the current one (Ctrl/Shift+click in the
+  // filmstrip, Ctrl+A): ratings and Export apply to all of them.
+  const [picked, setPicked] = useState(() => new Set());
+  useEffect(() => { if (photo && picked.size && !picked.has(photo.id)) setPicked(new Set()); }, [photo?.id]);
+  useEffect(() => { setPicked(new Set()); }, [list?.folder]);
+  const selectInStrip = (i, e) => {
+    const p = photos[i];
+    if (!p) return;
+    if (e?.ctrlKey || e?.metaKey) {
+      setPicked((old) => { const n = new Set(old); if (photo) n.add(photo.id); n.has(p.id) && p.id !== photo?.id ? n.delete(p.id) : n.add(p.id); return n; });
+      return;
+    }
+    if (e?.shiftKey && photo) {
+      const [a, b] = [Math.min(index, i), Math.max(index, i)];
+      setPicked(new Set(photos.slice(a, b + 1).map((x) => x.id)));
+      return;
+    }
+    setPicked(new Set());
+    go(i);
+  };
+
   const rememberApplied = (id, stars) => setAuto((a) => {
     const applied = { ...a.applied };
     if (stars == null) delete applied[id]; else applied[id] = stars;
@@ -154,7 +175,17 @@ export function CullView({ store, onDevelop }) {
     } else {
       setToast(rating ? `${'★'.repeat(rating)} saved to ${p.ratingIn === 'file' ? p.name : p.sidecar.split(/[\\/]/).pop()}` : `Rating cleared on ${p.name}`);
     }
+    return !res?.error;
   }, [bridge, list?.folder]);
+  // Rates the current photo, or every selected photo when there's a selection.
+  const ratePicked = useCallback(async (rating) => {
+    const many = picked.size > 1 ? allPhotos.filter((p) => picked.has(p.id)) : null;
+    if (!many) return rate(photo, rating);
+    const ok = await Promise.all(many.map((p) => rate(p, rating)));
+    const n = ok.filter(Boolean).length;
+    setToast(`${rating ? '★'.repeat(rating) + ' saved to' : 'Rating cleared on'} ${n} photos${n < many.length ? `, ${many.length - n} could not be saved` : ''}`);
+    return true;
+  }, [picked, allPhotos, photo, rate]);
 
   // Measures every photo not measured yet: the small embedded preview, and the
   // big one around the subject for its sharpness.
@@ -233,6 +264,13 @@ export function CullView({ store, onDevelop }) {
       if (e.target.closest?.('input, textarea, select, [contenteditable]') || exporting) return;
       // Ctrl+Shift+E: Export, as in Lightroom.
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'e' && allPhotos.length && !autoOpen) { e.preventDefault(); setExporting(true); return; }
+      // Ctrl+A selects every photo shown, as in Lightroom; Esc ends the selection.
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'a' && photos.length && !autoOpen) {
+        e.preventDefault();
+        setPicked(new Set(photos.map((p) => p.id)));
+        setToast(`${photos.length} photos selected: ratings and Export apply to all of them (Esc to clear)`);
+        return;
+      }
       if (e.ctrlKey || e.altKey || e.metaKey) return;
       if (!photos.length || autoOpen) return;
       if (e.key === 'Enter') {
@@ -255,6 +293,7 @@ export function CullView({ store, onDevelop }) {
       if (r !== undefined && !RESERVED_KEYS.includes(e.key)) {
         e.preventDefault();
         if (!e.repeat && photo) {
+          if (picked.size > 1) { ratePicked(r); return; }
           rate(photo, r);
           // A photo that leaves the current filter is replaced by the next one anyway.
           const stays = inFilter(filter, r);
@@ -267,11 +306,11 @@ export function CullView({ store, onDevelop }) {
       if (moves[e.key]) { e.preventDefault(); go(index + moves[e.key]); }
       else if (e.key === 'Home') { e.preventDefault(); go(0); }
       else if (e.key === 'End') { e.preventDefault(); go(photos.length - 1); }
-      else if (e.key === 'Escape') setZoom(null);
+      else if (e.key === 'Escape') { if (picked.size) setPicked(new Set()); else setZoom(null); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [photos, photo, index, keys, zKey, advance, filter, go, rate, autoOpen, suggestions, auto, exporting]);
+  }, [photos, photo, index, keys, zKey, advance, filter, go, rate, ratePicked, picked, autoOpen, suggestions, auto, exporting]);
 
   if (!bridge) {
     return <div className="view"><div className="hero-empty"><div className="hero-icon"><Icon name="photo" size={40} /></div><h2>Culling runs in the desktop app</h2><p className="muted">Open Flightroom on your PC to link a photo folder.</p></div></div>;
@@ -335,10 +374,10 @@ export function CullView({ store, onDevelop }) {
             <div className="stage-bottom">
               {curSug && <Suggestion sug={curSug} rating={curRating} applied={auto.applied[photo.id]} mayRate={autoMayRate(photo)} onAccept={() => rate(photo, curSug.stars, { byAuto: true })}
                 subject={!!auto.measured[photo.id]?.subject} onShowSubject={setShowSubject} />}
-              <Stars value={curRating} onRate={(r) => rate(photo, r)} keys={keys} />
+              <Stars value={curRating} onRate={(r) => ratePicked(r)} keys={keys} />
             </div>
           </Stage>
-          <Filmstrip photos={photos} index={index} meta={meta} suggestions={suggestions} onSelect={go} requestMeta={requestMeta} />
+          <Filmstrip photos={photos} index={index} meta={meta} suggestions={suggestions} onSelect={selectInStrip} requestMeta={requestMeta} picked={picked.size ? picked : null} />
         </>
       ) : (
         <div className="hero-empty">
@@ -349,7 +388,7 @@ export function CullView({ store, onDevelop }) {
         </div>
       )}
       {toast && <div className="cull-toast">{toast}</div>}
-      {exporting && <Suspense fallback={null}><ExportModal photo={photo} photos={allPhotos} shown={filter === 'rejects' ? allPhotos : photos} meta={meta} folder={list.folder}
+      {exporting && <Suspense fallback={null}><ExportModal photo={photo} photos={allPhotos} shown={filter === 'rejects' ? allPhotos : photos} picked={picked.size ? picked : null} meta={meta} folder={list.folder}
         onClose={() => setExporting(false)} onDone={(msg) => { setExporting(false); setToast(msg); }} /></Suspense>}
       {autoOpen && (
         <AutoRatePanel photos={allPhotos} measuredCount={measuredCount} suggestions={suggestions} run={autoRun}

@@ -23,7 +23,8 @@ function useHist() {
   return bins;
 }
 
-function histPath(bins, channel, size) {
+function histPath(all, channel, size) {
+  const bins = all?.pre || all; // what goes into the curve, as Lightroom shows it
   if (!bins) return null;
   const ch = HIST_CH[channel];
   const v = (i) => (ch == null ? (bins[0][i] + bins[1][i] + bins[2][i]) / 3 : bins[ch][i]);

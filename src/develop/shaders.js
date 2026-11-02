@@ -375,7 +375,7 @@ void main() {
   base += exposure;
 
   float bd = disp(exp2(base));
-  base += highlights * 1.3 * smoothstep(0.4, 1.0, bd);
+  base += highlights * 0.9 * smoothstep(0.4, 1.0, bd);
   base += shadows * 1.6 * (1.0 - smoothstep(0.0, 0.55, bd));
   float mid = smoothstep(0.03, 0.35, bd) * (1.0 - smoothstep(0.8, 1.0, bd));
   detail *= max(0.0, 1.0 + clarity * 0.9 * mid);
@@ -410,12 +410,17 @@ void main() {
   if (mn < 0.0) lin = y1 > 0.0 ? y1 + (lin - y1) * (y1 / (y1 - mn + 1e-6)) : vec3(0.0);
   lin = max(lin, vec3(0.0));
 
-  if (whites != 0.0) lin *= exp2(whites * 0.8 * smoothstep(0.55, 1.0, disp(dot(lin, W709))));
+  if (whites != 0.0) lin *= exp2(whites * 0.5 * smoothstep(0.55, 1.0, disp(dot(lin, W709))));
 
   vec3 mapped = uToneMap < 0.5 ? shoulder(lin) : uToneMap < 1.5 ? sigmoidMap(lin) : uToneMap < 2.5 ? agxMap(lin) : filmicMap(lin);
   vec3 d = encode(mapped);
-  float bp = -blacks * 0.06;
-  d = (d - bp) / (1.0 - bp);
+  // Blacks: negative crushes toward black; positive lifts the dark end like
+  // Lightroom (fitted to a Lightroom export), moving brightness only so colour stays.
+  if (blacks < 0.0) { float bp = -blacks * 0.06; d = (d - bp) / (1.0 - bp); }
+  else if (blacks > 0.0) {
+    float yd = dot(d, W709), bp = blacks * 0.3;
+    d += (yd + bp) / (1.0 + bp) - yd;
+  }
   d = clamp(d, 0.0, 1.0);
   vec3 s = d * d * (3.0 - 2.0 * d);
   d = d + (uContrast + LA.y * 0.75) * (s - d);
