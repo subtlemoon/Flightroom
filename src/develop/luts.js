@@ -49,14 +49,16 @@ export function parametric(s, x) {
 }
 
 // Four curves side by side (RGBA): the RGB curve with the region sliders, then
-// red, green and blue.
-export function curveTable(s) {
+// red, green and blue. `look` is a look's own point curve (Adobe Color's),
+// which comes before the photo's.
+export function curveTable(s, look = null) {
   const fns = [s.curve, s.curveR, s.curveG, s.curveB].map((c) => monotoneCurve((c || [[0, 0], [255, 255]]).map(([x, y]) => [x / 255, y / 255])));
+  const pre = look ? monotoneCurve(look.map(([x, y]) => [x / 255, y / 255])) : (x) => x;
   const out = new Float32Array(CURVE_SIZE * 4);
   // Any shape goes, falling ones included (a falling curve inverts the photo).
   for (let i = 0; i < CURVE_SIZE; i++) {
     const x = i / (CURVE_SIZE - 1);
-    out[i * 4] = Math.min(1, Math.max(0, fns[0](parametric(s, x))));
+    out[i * 4] = Math.min(1, Math.max(0, fns[0](parametric(s, Math.min(1, Math.max(0, pre(x)))))));
     for (let c = 1; c < 4; c++) out[i * 4 + c] = Math.min(1, Math.max(0, fns[c](x)));
   }
   return out;

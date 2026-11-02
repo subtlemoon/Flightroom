@@ -56,7 +56,7 @@ export function ExportModal({ photo, photos, shown = photos, picked = null, meta
         if (p.id !== photo?.id || !info) {
           pInfo = await app.develop.open(p);
           if (pInfo.error) throw new Error(pInfo.error);
-          pS = edits.get(p.id) || fromXmp(pInfo.settings, pInfo.curves, asShotTempTint(pInfo), pInfo.own);
+          pS = edits.get(p.id) || fromXmp(pInfo.settings, pInfo.curves, asShotTempTint(pInfo), pInfo.own, pInfo.look);
         }
         saved.push(await exportPhoto(p, pInfo, pS, { folder: target, longEdge, quality, replace, renderer, cancelled: () => cancel.current, onProgress: (part) => setRun((r) => r && { ...r, part }) }));
       } catch (err) {

@@ -3,7 +3,8 @@
 // develop pipeline (shaders.js) for just the pixels on screen.
 import { VERT, GUIDE_DOWN, BLUR, FINAL, DISPLAY } from './shaders.js';
 import { LUT_SIZE } from './icc.js';
-import { colorTransform, inv3, mul3 } from './color.js';
+import { colorTransform, inv3, mul3, neutralToXy, tempTintToXy } from './color.js';
+import { PP_TO_SRGB, SRGB_TO_PP, TONE_SIZE, adobeRendering, dcpTransform, hueSatFor, hueSatPixels, toneTable } from './adobe.js';
 import { CURVE_SIZE, HUE_SIZE, calibrationMatrix, curveTable, gradeTints, hueTable } from './luts.js';
 import { MAX_MASKS, POINT_DEFAULT, adjOf, lumRange, maskRaster } from './masks.js';
 import { tonemapUniforms } from './tonemap.js';
@@ -19,10 +20,30 @@ const FLAT_CURVE = { curve: LINEAR, curveR: LINEAR, curveG: LINEAR, curveB: LINE
 
 export const LOOKS = {
   adobe: { exposure: 1.05, contrast: 0.4, saturation: 0.9 },
+  // Without Lightroom's own profile for the camera, Adobe Standard looks like Adobe Color.
+  standard: { exposure: 1.05, contrast: 0.4, saturation: 0.9 },
   camera: { exposure: 0.95, contrast: 0.4, saturation: 1.25 },
   // darktable's AgX: its film-like curve, with a little contrast and colour on top as darktable sets it.
   agx: { exposure: 1.0, contrast: 0.3, saturation: 1.3, agx: true },
 };
+
+/** The base rendering: Lightroom's own profile when it's here (no extra contrast or colour), else the fitted look. */
+export function lookFor(info, s) {
+  const r = adobeRendering(info, s.profile);
+  return r ? { exposure: r.exposure, contrast: 0, saturation: 1 } : LOOKS[s.profile] || LOOKS.adobe;
+}
+
+/** The white point of the settings: the camera's own for As Shot (unrounded, as Lightroom uses it). */
+function whiteXy(info, s) {
+  if (s.wb === 'As Shot' && info.asShot?.every((m) => m > 0)) return neutralToXy(info.matrices, info.asShot.map((m) => 1 / m));
+  return tempTintToXy(s.temp, s.tint);
+}
+
+/** Multipliers and the matrix from camera RGB to linear sRGB for these settings (and how the profile's illuminants mix). */
+export function cameraTransform(info, s) {
+  const r = adobeRendering(info, s.profile);
+  return r ? dcpTransform(r.dcp, whiteXy(info, s)) : colorTransform(info, s.temp, s.tint);
+}
 
 export function parseFrame(buf) {
   const v = new DataView(buf);
@@ -302,6 +323,7 @@ export class Renderer {
     this.free(this.src); this.clearHi(); this.free(this.histTarget); this.free(this.prevTarget); this.free(this.lightTarget); this.free(this.thumbTarget); this.setDisplay(null);
     for (const t of this.guide || []) this.free(t);
     gl.deleteTexture(this.curveTex); gl.deleteTexture(this.hueTex); gl.deleteTexture(this.blank);
+    for (const t of [this.prof?.tone, this.prof?.hsm, this.prof?.laTex, this.prof?.lbTex]) if (t) gl.deleteTexture(t);
     gl.deleteBuffer(this.quad);
     for (const p of [this.down, this.blur, this.final]) gl.deleteProgram(p.p);
     for (const t of this.maskTex || []) gl.deleteTexture(t.tex);
@@ -337,19 +359,55 @@ export class Renderer {
   }
 
   colorUniforms(info, s) {
-    const key = `${s.temp}|${s.tint}|${s.redHue}|${s.redSat}|${s.greenHue}|${s.greenSat}|${s.blueHue}|${s.blueSat}`;
+    const key = `${s.profile}|${s.wb}|${s.temp}|${s.tint}|${s.redHue}|${s.redSat}|${s.greenHue}|${s.greenSat}|${s.blueHue}|${s.blueSat}`;
     if (this.colorKey !== key || this.colorInfo !== info) {
-      const { wb, matrix } = colorTransform(info, s.temp, s.tint);
-      this.color = { uWB: wb, uCam: glMat(mul3(calibrationMatrix(s), matrix)) };
+      const { wb, matrix, g } = cameraTransform(info, s);
+      this.color = { uWB: wb, uCam: glMat(mul3(calibrationMatrix(s), matrix)), ...this.profileUniforms(adobeRendering(info, s.profile), g) };
       this.colorKey = key;
       this.colorInfo = info;
     }
     return this.color;
   }
 
+  /** Lightroom's profile on the graphics card: its tables and tone curve (rebuilt when the profile or white changes). */
+  profileUniforms(r, g) {
+    const gl = this.gl;
+    const none = [0, 0, 0, 0];
+    if (!r) return { uDcp: 0, uHsm: this.blank, uLookA: this.blank, uLookB: this.blank, uTone: this.blank, uHsmDims: none, uLookADims: none, uLookBDims: none };
+    // Float tables, read exactly (texelFetch): no filtering.
+    const table = (old, w, h, data, format = gl.RGBA, internal = gl.RGBA32F) => {
+      if (old) gl.deleteTexture(old);
+      const t = this.texture(internal, w, h, format, gl.FLOAT, data);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      return t;
+    };
+    const p = (this.prof ||= {});
+    if (p.dcp !== r.dcp) {
+      p.tone = table(p.tone, TONE_SIZE, 1, toneTable(r.dcp), gl.RED, gl.R32F);
+      p.hsmG = null;
+    }
+    const mapTex = (old, map) => { const px = hueSatPixels(map); return table(old, px.w, px.h, px.data); };
+    const dims = (m) => [m.dims[0], m.dims[1], m.dims[2], m.srgb ? 1 : 0];
+    const hsm = hueSatFor(r.dcp, g);
+    if (hsm && (p.dcp !== r.dcp || p.hsmG !== g)) { p.hsm = mapTex(p.hsm, hsm); p.hsmG = g; }
+    const [la, lb] = r.tables;
+    if (p.la !== la) { p.laTex = la ? mapTex(p.laTex, la) : null; p.la = la; }
+    if (p.lb !== lb) { p.lbTex = lb ? mapTex(p.lbTex, lb) : null; p.lb = lb; }
+    p.dcp = r.dcp;
+    return {
+      uDcp: 1,
+      uHsm: hsm ? p.hsm : this.blank, uHsmDims: hsm ? dims(hsm) : none,
+      uLookA: la ? p.laTex : this.blank, uLookADims: la ? dims(la) : none,
+      uLookB: lb ? p.lbTex : this.blank, uLookBDims: lb ? dims(lb) : none,
+      uTone: p.tone,
+      uS2P: glMat(SRGB_TO_PP), uP2S: glMat(PP_TO_SRGB),
+    };
+  }
+
   /** Rebuilds the blurred brightness guide when the photo or white balance changes. */
   updateGuide(info, s) {
-    const key = `${s.temp}|${s.tint}|${s.redHue}|${s.redSat}|${s.greenHue}|${s.greenSat}|${s.blueHue}|${s.blueSat}`;
+    const key = `${s.profile}|${s.wb}|${s.temp}|${s.tint}|${s.redHue}|${s.redSat}|${s.greenHue}|${s.greenSat}|${s.blueHue}|${s.blueSat}`;
     if (this.guide && key === this.guideKey) return;
     const scale = GUIDE_EDGE / Math.max(this.src.w, this.src.h);
     const gw = Math.max(8, Math.round(this.src.w * scale)), gh = Math.max(8, Math.round(this.src.h * scale));
@@ -379,14 +437,16 @@ export class Renderer {
     this.airY = Math.min(1, 2 ** lum[Math.floor(lum.length * 0.995)]);
   }
 
-  updateLuts(s) {
+  updateLuts(s, info) {
     const gl = this.gl;
     // Only rebuilt when their own settings change (cheap to compare: the
-    // curves are kept as the same arrays until edited).
-    const c = [s.curve, s.curveR, s.curveG, s.curveB, s.pShadows, s.pDarks, s.pLights, s.pHighlights, s.pSplitS, s.pSplitM, s.pSplitH];
+    // curves are kept as the same arrays until edited). A look's curve (Adobe
+    // Color's) comes first.
+    const look = adobeRendering(info, s.profile)?.curve || null;
+    const c = [s.curve, s.curveR, s.curveG, s.curveB, s.pShadows, s.pDarks, s.pLights, s.pHighlights, s.pSplitS, s.pSplitM, s.pSplitH, look];
     if (!this.curveKey || c.some((x, i) => x !== this.curveKey[i])) {
       gl.bindTexture(gl.TEXTURE_2D, this.curveTex);
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, CURVE_SIZE, 1, gl.RGBA, gl.FLOAT, curveTable(s));
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, CURVE_SIZE, 1, gl.RGBA, gl.FLOAT, curveTable(s, look));
       this.curveKey = c;
     }
     const h = [];
@@ -497,7 +557,7 @@ export class Renderer {
       return;
     }
     this.updateGuide(info, s);
-    this.updateLuts(s);
+    this.updateLuts(s, info);
     this.updateMasks(s, geo);
     if (this.masks.length) this.updateMaskCurves();
     if ((s.dehaze || this.masks.some((m) => m.adj?.dehaze)) && this.airY == null) this.measureAir();
@@ -593,7 +653,7 @@ export class Renderer {
   /** The developed photo; out2ori may be shifted (a clone's source), sharper may stand in for this.hi. */
   drawPhoto(info, s, geo, frame, out2frame, out2ori, target, showClip, maskView, sharper) {
     const hi = sharper || this.hi;
-    const look = LOOKS[s.profile] || LOOKS.adobe;
+    const look = lookFor(info, s);
     const { cx, cy, half } = centred(geo);
     const [tS, tM, tH, tG] = gradeTints(s);
     const gradeLum = [s.gShadowLum, s.gMidLum, s.gHighLum, s.gGlobalLum].map((v) => (v || 0) / 100);

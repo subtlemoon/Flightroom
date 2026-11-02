@@ -2,6 +2,7 @@
 // sidecar files, app updates, and moving data over from GearCheck. The window
 // (React, in src/) talks to it through commands and the gcimg:// protocol.
 
+pub mod adobe;
 pub mod ai;
 pub mod develop;
 pub mod display;

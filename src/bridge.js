@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
+import { withAdobe } from './develop/adobe.js';
 
 const inApp = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
 
@@ -50,7 +51,7 @@ export const bridge = inApp ? {
   },
   // Develop: full RAW decoding and develop settings in the .xmp sidecar.
   develop: {
-    open: (photo) => call('develop_open', { id: photo.id, sidecar: photo.sidecar }),
+    open: (photo) => call('develop_open', { id: photo.id, sidecar: photo.sidecar }).then(withAdobe),
     read: (photo) => call('develop_read', { sidecar: photo.sidecar }),
     close: () => call('develop_close'),
     save: (sidecar, { set, remove, seqs, xml = {}, own = {} }) => call('develop_save', { args: { sidecar, set, remove, seqs, xml, own } }),

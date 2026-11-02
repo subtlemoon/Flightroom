@@ -21,8 +21,9 @@ import {
   COLORS, COLOR_HUES, CURVE_PRESETS, PROFILES, SECTIONS, SLIDER, SLIDERS, TONE_MAPPERS, VIGNETTE_STYLES, WB_PRESETS,
   curveName, defaults, fromXmp, isEdited, resetSection, sectionEdited, toXmp,
 } from '../develop/params.js';
-import { asShotTempTint, colorTransform, inv3, neutralToXy, xyToTempTint } from '../develop/color.js';
-import { Geometry, LOOKS, Renderer, ap, constrainedCrop, fitScale, mat, mm, outToFrame, parseFrame, sourceMap } from '../develop/renderer.js';
+import { asShotTempTint, inv3, neutralToXy, xyToTempTint } from '../develop/color.js';
+import { adobeRendering } from '../develop/adobe.js';
+import { Geometry, Renderer, ap, cameraTransform, constrainedCrop, fitScale, lookFor, mat, mm, outToFrame, parseFrame, sourceMap } from '../develop/renderer.js';
 import { ExportModal } from './export.jsx';
 import { activeToneMap } from '../develop/tonemap.js';
 import { useRetouch } from './retouch.jsx';
@@ -143,7 +144,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
       setOpened({ id: photo.id, info, asShot });
       // Settings whose save failed are saved again.
       dirty.current = session.unsaved.has(photo.id);
-      const st = settingsCache.current.get(photo.id) || fromXmp(info.settings, info.curves, asShot, info.own);
+      const st = settingsCache.current.get(photo.id) || fromXmp(info.settings, info.curves, asShot, info.own, info.look);
       setS(st);
       rxRef.current?.reset(st.layers);
     });
@@ -238,7 +239,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const autoTone = () => {
     const st = stageApi.current.stats?.(s);
     if (!st) return;
-    const look = LOOKS[s.profile] || LOOKS.adobe;
+    const look = lookFor(opened?.info, s);
     const exposure = Math.round(Math.min(4, Math.max(-4, Math.log2(0.17 / st.median) - look.exposure)) * 20) / 20;
     const k = 2 ** (exposure + look.exposure);
     const hiStops = Math.log2(Math.max(st.p99 * k, 1e-4));
@@ -272,7 +273,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
         const saved = await app.develop.read(p);
         if (saved?.error) return { skip: true };
         // Its as-shot colour isn't known without decoding; "As Shot" is written as just that.
-        const base = settingsCache.current.get(p.id) || fromXmp(saved.settings, saved.curves, NO_AS_SHOT, saved.own);
+        const base = settingsCache.current.get(p.id) || fromXmp(saved.settings, saved.curves, NO_AS_SHOT, saved.own, saved.look);
         const out = toXmp(applyTo(base, part, null));
         if (out.set.WhiteBalance === 'As Shot') { delete out.set.Temperature; delete out.set.Tint; out.remove.push('Temperature', 'Tint'); }
         return app.develop.save(p.sidecar, out);
@@ -937,7 +938,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
   apiRef.current.stats = (st) => {
     const g = grid.current;
     if (!g) return null;
-    const { wb, matrix: m } = colorTransform(info, st.temp, st.tint);
+    const { wb, matrix: m } = cameraTransform(info, st);
     const ys = new Float32Array(g.gw * g.gh);
     for (let i = 0; i < ys.length; i++) {
       const r = Math.min(1, g.data[i * 3] * wb[0]), gg = Math.min(1, g.data[i * 3 + 1] * wb[1]), b = Math.min(1, g.data[i * 3 + 2] * wb[2]);
@@ -1258,7 +1259,10 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
           </div>
         </div>
         <div className="dev-line dev-wb"><span className="muted">Profile</span>
-          <Dropdown value={s.profile || 'adobe'} options={PROFILES.map(([value, label]) => ({ value, label }))} onChange={(v) => update({ profile: v })} title="The starting look, as in Lightroom" />
+          <Dropdown value={s.profile || 'adobe'} options={PROFILES.map(([value, label]) => ({ value, label }))} onChange={(v) => update({ profile: v })}
+            title={s.profile === 'agx' ? 'darktable\'s AgX film look' : adobeRendering(info, s.profile)
+              ? 'Rendered with Lightroom\'s own profile for this camera, from Lightroom on this computer'
+              : 'Lightroom\'s profile for this camera isn\'t on this computer, so this is a close match instead'} />
         </div>
         <div className="dev-line dev-wb"><span className="muted">WB</span>
           <span className="dev-line">

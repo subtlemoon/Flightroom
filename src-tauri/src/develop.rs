@@ -45,6 +45,8 @@ pub struct Raw {
     matrices: Vec<(f32, [f32; 9])>,
     make: String,
     model: String,
+    /// The model as the file names it ("NIKON Z 7_2"), to find Lightroom's profiles.
+    exif_model: String,
 }
 
 fn illuminant_temp(name: &str) -> Option<f32> {
@@ -135,6 +137,7 @@ impl Raw {
             scale,
             wb,
             matrices,
+            exif_model: raw.model.clone(),
             make: raw.clean_make,
             model: raw.clean_model,
         })
@@ -588,6 +591,8 @@ pub struct Opened {
     camera: String,
     #[serde(flatten)]
     saved: Saved,
+    /// Lightroom's profiles (Adobe Standard, Camera Standard) and looks (Adobe Color) for this camera.
+    adobe: crate::adobe::Adobe,
     /// AI Denoise has been worked out for this photo.
     denoised: bool,
 }
@@ -600,6 +605,10 @@ pub async fn develop_open(app: AppHandle, id: String, sidecar: Option<String>) -
         let p = photos.allowed(&id).ok_or("This photo's folder isn't open")?;
         let raw = app.state::<Develop>().raw(&p, true)?;
         let orientation = photos.info(&p).map(|(_, i)| i.orientation).unwrap_or(1);
+        let text = sidecar_text(&photos, sidecar)?;
+        let cameras = crate::adobe::camera_names(&raw.make, &raw.model, &raw.exif_model);
+        let looks = app.path().app_local_data_dir().unwrap_or_default().join("looks");
+        let adobe = crate::adobe::for_camera(&cameras, text.as_deref(), &looks);
         Ok(Opened {
             width: raw.w,
             height: raw.h,
@@ -607,7 +616,8 @@ pub async fn develop_open(app: AppHandle, id: String, sidecar: Option<String>) -
             as_shot: raw.wb,
             matrices: raw.matrices.clone(),
             camera: format!("{} {}", raw.make, raw.model),
-            saved: saved(&photos, sidecar)?,
+            saved: saved(text.as_deref()),
+            adobe,
             denoised: denoise_file(&app, &raw).exists(),
         })
     })
@@ -624,15 +634,23 @@ pub struct Saved {
     curves: HashMap<String, Vec<String>>,
     /// Flightroom's own values (fr: names), such as its masks.
     own: HashMap<String, String>,
+    /// The name of Lightroom's look (crs:Look), such as "Adobe Color".
+    look: Option<String>,
 }
 
-fn saved(photos: &Photos, sidecar: Option<String>) -> Result<Saved, String> {
-    let text = match sidecar.and_then(|s| photos.allowed(&s)) {
-        Some(s) => photos::read_sidecar(&s)?,
-        None => None,
-    };
-    let doc = crate::xmp::Doc::new(text.as_deref().unwrap_or(""));
-    Ok(Saved {
+fn sidecar_text(photos: &Photos, sidecar: Option<String>) -> Result<Option<String>, String> {
+    match sidecar.and_then(|s| photos.allowed(&s)) {
+        Some(s) => photos::read_sidecar(&s),
+        None => Ok(None),
+    }
+}
+
+fn saved(text: Option<&str>) -> Saved {
+    // The look keeps its own settings (a CameraProfile and a curve among them):
+    // read without it, so they aren't taken for the photo's.
+    let (text, look) = crate::adobe::split_look(text.unwrap_or(""));
+    let doc = crate::xmp::Doc::new(&text);
+    Saved {
         settings: doc.all("crs"),
         curves: ["", "Red", "Green", "Blue"]
             .iter()
@@ -642,13 +660,14 @@ fn saved(photos: &Photos, sidecar: Option<String>) -> Result<Saved, String> {
             })
             .collect(),
         own: doc.all("fr"),
-    })
+        look: look.as_deref().and_then(crate::adobe::look_name),
+    }
 }
 
 /// A photo's saved settings without decoding it (for pasting settings and presets onto it).
 #[tauri::command]
 pub fn develop_read(app: AppHandle, sidecar: Option<String>) -> Result<Saved, String> {
-    saved(&app.state::<Photos>(), sidecar)
+    Ok(saved(sidecar_text(&app.state::<Photos>(), sidecar)?.as_deref()))
 }
 
 /// Frees memory a while after leaving the Develop tab: the RAW data and the AI models.
@@ -750,6 +769,9 @@ pub async fn develop_save(app: AppHandle, args: SaveArgs) -> Result<bool, String
         let sidecar = app.state::<Photos>().allowed(&args.sidecar).filter(|s| lib::ext_of(&s.to_string_lossy()) == ".xmp").ok_or("Invalid sidecar")?;
         edit_sidecar(&app, &sidecar, |old| {
             let base = old.filter(|t| t.contains("<rdf:Description")).unwrap_or_else(crate::xmp::empty);
+            // Lightroom's look is set aside while editing (its own curve and
+            // profile aren't the photo's), and put back unless it's removed.
+            let (base, look) = crate::adobe::split_look(&base);
             let mut doc = crate::xmp::Doc::new(&base);
             for name in &args.remove {
                 doc.remove("crs", name);
@@ -772,7 +794,10 @@ pub async fn develop_save(app: AppHandle, args: SaveArgs) -> Result<bool, String
                     doc.set_attr("fr", name, value, crate::xmp::FR_NS);
                 }
             }
-            doc.text
+            match look.filter(|_| !args.remove.iter().any(|n| n == "Look")) {
+                Some(look) => crate::adobe::put_look(&doc.text, &look),
+                None => doc.text,
+            }
         })?;
         Ok(true)
     })
@@ -1145,6 +1170,7 @@ mod tests {
             matrices: Vec::new(),
             make: String::new(),
             model: String::new(),
+            exif_model: String::new(),
         }
     }
 

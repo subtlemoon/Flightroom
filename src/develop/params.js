@@ -171,8 +171,10 @@ export const CURVE_PRESETS = [
 export const CURVE_CHANNELS = [['curve', '', 'RGB'], ['curveR', 'Red', 'Red'], ['curveG', 'Green', 'Green'], ['curveB', 'Blue', 'Blue']];
 
 // The starting look, as Lightroom's profile list names them. Adobe Color is
-// Lightroom's default; Camera Standard matches the camera's own JPEG.
-export const PROFILES = [['adobe', 'Adobe Color'], ['camera', 'Camera Standard'], ['agx', 'AgX (darktable)']];
+// Lightroom's default (Adobe Standard with a look on top); Camera Standard
+// matches the camera's own JPEG. With Lightroom on this computer they render
+// from its own profiles (adobe.js).
+export const PROFILES = [['adobe', 'Adobe Color'], ['standard', 'Adobe Standard'], ['camera', 'Camera Standard'], ['agx', 'AgX (darktable)']];
 
 // White balance presets for RAW files, as in Lightroom: [name, temp, tint].
 export const WB_PRESETS = [['As Shot'], ['Auto'], ['Daylight', 5500, 10], ['Cloudy', 6500, 10], ['Shade', 7500, 10], ['Tungsten', 2850, 0], ['Fluorescent', 3800, 21], ['Flash', 5500, 0], ['Custom']];
@@ -214,8 +216,11 @@ const signed = (v, decimals = 0) => {
   return Number(t) > 0 ? `+${t}` : Number(t) === 0 ? (0).toFixed(decimals) : t;
 };
 
-/** Settings from a sidecar's crs: values and point curves (anything missing keeps its default). */
-export function fromXmp(crs, curves, asShot, own = {}) {
+/**
+ * Settings from a sidecar's crs: values and point curves (anything missing
+ * keeps its default). `look` names Lightroom's look (crs:Look), if any.
+ */
+export function fromXmp(crs, curves, asShot, own = {}, look = null) {
   const s = defaults(asShot);
   const num = (k) => (crs[k] != null && crs[k] !== '' && Number.isFinite(Number(crs[k])) ? Number(crs[k]) : null);
   for (const sl of SLIDERS) {
@@ -224,7 +229,10 @@ export function fromXmp(crs, curves, asShot, own = {}) {
     const v = raw != null && raw !== '' && Number.isFinite(Number(raw)) ? Number(raw) : null;
     if (v != null) s[sl.key] = Math.min(sl.max, Math.max(sl.min, v));
   }
-  if (/^Camera /i.test(crs.CameraProfile || '')) s.profile = 'camera';
+  // Lightroom writes Adobe Color as Adobe Standard with the Adobe Color look.
+  const cp = crs.CameraProfile || '';
+  if (/^Camera /i.test(cp)) s.profile = 'camera';
+  else if (/^Adobe Standard/i.test(cp) && look !== 'Adobe Color') s.profile = 'standard';
   // AgX is Flightroom's own; Lightroom sees Adobe Color.
   if (own.Profile === 'agx') s.profile = 'agx';
   const tm = own.ToneMap;
@@ -283,9 +291,12 @@ export function toXmp(s) {
     else set[sl.crs] = sl.min >= 0 ? String(Math.round(v)) : signed(v, sl.decimals || 0);
   }
   const remove = [];
-  // No CameraProfile means Lightroom's default, Adobe Color.
+  // No CameraProfile means Lightroom's default, Adobe Color (and a look
+  // Lightroom wrote stays). Adobe Standard is without its look.
   if (s.profile === 'camera') set.CameraProfile = 'Camera Standard';
+  else if (s.profile === 'standard') set.CameraProfile = 'Adobe Standard';
   else remove.push('CameraProfile');
+  if (s.profile === 'standard' || s.profile === 'camera') remove.push('Look');
   // Lightroom picks the lens profile itself from the photo's lens details.
   if (s.lensProfile) set.LensProfileSetup = 'LensDefaults';
   if (s.crop) {

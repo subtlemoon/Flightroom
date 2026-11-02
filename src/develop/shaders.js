@@ -117,6 +117,13 @@ uniform vec4 uMP[16]; // point colour: hue (degrees), saturation, brightness, on
 uniform vec4 uMQ[16]; // point colour shifts: hue (degrees), saturation, luminance; range
 uniform vec4 uMS[16]; // point colour softness, own curve on, its refine saturation
 uniform sampler2D uMaskCurve; // each mask's curve, a row each (as uCurve)
+// Lightroom's camera profile (adobe.js), when it renders: its hue/sat map, its
+// look table and a look's (Adobe Color), and its tone curve. Dims: hue, sat
+// and value divisions, and 1 if sRGB-encoded; no hue divisions means none.
+uniform float uDcp;
+uniform sampler2D uHsm, uLookA, uLookB, uTone;
+uniform vec4 uHsmDims, uLookADims, uLookBDims;
+uniform mat3 uS2P, uP2S; // linear sRGB <-> linear ProPhoto, as Adobe's DNG SDK has them
 uniform float uPointView; // the mask whose point colour range is shown (-1: none)
 uniform float uMaskView;   // the mask shown on top (-1: none)
 uniform vec3 uMaskColor;
@@ -279,6 +286,87 @@ vec3 rotateHue(vec3 c, float deg) {
   return m + v * co + cross(k, v) * s;
 }
 
+// Adobe's DNG SDK steps (dng_reference.cpp), on linear ProPhoto RGB.
+vec3 rgbToHsv6(vec3 c) {
+  float v = max(c.r, max(c.g, c.b)), gap = v - min(c.r, min(c.g, c.b));
+  if (gap <= 0.0) return vec3(0.0, 0.0, v);
+  float h = c.r == v ? (c.g - c.b) / gap : c.g == v ? 2.0 + (c.b - c.r) / gap : 4.0 + (c.r - c.g) / gap;
+  if (h < 0.0) h += 6.0;
+  return vec3(h, gap / v, v);
+}
+vec3 hsv6ToRgb(vec3 c) {
+  float h = mod(c.x, 6.0), s = c.y, v = c.z;
+  if (s <= 0.0) return vec3(v);
+  float i = floor(h), f = h - i;
+  float p = v * (1.0 - s), q = v * (1.0 - s * f), t = v * (1.0 - s * (1.0 - f));
+  if (i < 1.0) return vec3(v, t, p);
+  if (i < 2.0) return vec3(q, v, p);
+  if (i < 3.0) return vec3(p, v, t);
+  if (i < 4.0) return vec3(p, q, v);
+  if (i < 5.0) return vec3(t, p, v);
+  return vec3(v, p, q);
+}
+float encS1(float x) { return x <= 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0 / 2.4) - 0.055; }
+float decS1(float x) { return x <= 0.04045 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4); }
+vec3 hsmAt(sampler2D t, int hues, int v, int h, int s) { return texelFetch(t, ivec2(s, v * hues + h), 0).rgb; }
+// RefBaselineHueSatMap: hue shift (degrees), saturation and value scale, by hue, saturation and value.
+vec3 hueSatMap(sampler2D t, vec4 dims, vec3 rgb) {
+  int hues = int(dims.x), sats = int(dims.y), vals = int(dims.z);
+  vec3 c = rgbToHsv6(rgb);
+  bool enc = dims.w > 0.5 && c.z <= 1.0;
+  float ve = enc ? encS1(c.z) : c.z;
+  float hS = hues < 2 ? 0.0 : c.x * float(hues) / 6.0, sS = c.y * float(sats - 1);
+  int h0 = int(hS), h1 = h0 + 1, s0 = min(int(sS), sats - 2);
+  if (h0 >= hues - 1) { h0 = hues - 1; h1 = 0; }
+  float hf = hS - float(h0), sf = sS - float(s0);
+  vec3 d;
+  if (vals < 2) {
+    d = mix(mix(hsmAt(t, hues, 0, h0, s0), hsmAt(t, hues, 0, h1, s0), hf), mix(hsmAt(t, hues, 0, h0, s0 + 1), hsmAt(t, hues, 0, h1, s0 + 1), hf), sf);
+  } else {
+    float vS = clamp(ve, 0.0, 1.0) * float(vals - 1);
+    int v0 = min(int(vS), vals - 2);
+    float vf = vS - float(v0);
+    vec3 a = mix(mix(hsmAt(t, hues, v0, h0, s0), hsmAt(t, hues, v0, h1, s0), hf), mix(hsmAt(t, hues, v0, h0, s0 + 1), hsmAt(t, hues, v0, h1, s0 + 1), hf), sf);
+    vec3 b = mix(mix(hsmAt(t, hues, v0 + 1, h0, s0), hsmAt(t, hues, v0 + 1, h1, s0), hf), mix(hsmAt(t, hues, v0 + 1, h0, s0 + 1), hsmAt(t, hues, v0 + 1, h1, s0 + 1), hf), sf);
+    d = mix(a, b, vf);
+  }
+  c.x += d.x * (6.0 / 360.0);
+  c.y = min(c.y * d.y, 1.0);
+  ve *= d.z;
+  if (c.z <= 1.0) ve = clamp(ve, 0.0, 1.0);
+  c.z = enc ? decS1(ve) : ve;
+  return hsv6ToRgb(c);
+}
+float toneAt(float x) {
+  int n = textureSize(uTone, 0).x;
+  float p = clamp(x, 0.0, 1.0) * float(n - 1);
+  int i = min(int(p), n - 2);
+  return mix(texelFetch(uTone, ivec2(i, 0), 0).r, texelFetch(uTone, ivec2(i + 1, 0), 0).r, p - float(i));
+}
+// RefBaselineRGBTone: the curve on the brightest and darkest channels; the
+// middle one keeps its place between them, so hues stay.
+vec3 rgbTone(vec3 c) {
+  c = clamp(c, 0.0, 1.0);
+  float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b));
+  float tmx = toneAt(mx), tmn = toneAt(mn);
+  if (mx - mn <= 0.0) return vec3(tmx);
+  return tmn + (tmx - tmn) * (c - mn) / (mx - mn);
+}
+// Light past white (which the SDK clips) eased in over the last 5%.
+vec3 easeWhite(vec3 x) {
+  const float k = 0.95;
+  return mix(x, k + (1.0 - k) * (1.0 - exp(-(x - k) / (1.0 - k))), step(k, x));
+}
+// Colours outside the screen's range brought in by desaturating them, keeping
+// brightness; noise below black (brightness at or under 0) is black, not its
+// leftover positive channels, which showed as purple speckle in high-ISO shadows.
+vec3 intoRange(vec3 lin) {
+  float y = dot(lin, W709);
+  float mn = min(lin.r, min(lin.g, lin.b));
+  if (mn < 0.0) lin = y > 0.0 ? y + (lin - y) * (y / (y - mn + 1e-6)) : vec3(0.0);
+  return max(lin, vec3(0.0));
+}
+
 float hash(vec2 q) { return fract(sin(dot(q, vec2(127.1, 311.7))) * 43758.5453); }
 float vnoise(vec2 q) {
   vec2 i = floor(q), f = fract(q);
@@ -373,6 +461,9 @@ void main() {
     if (nrColor > 0.0) { float yl = dot(lin, W709); lin = yl + (csum / cw) * max(yl, CHROMA_FLOOR); }
   }
 
+  // Lightroom's profile: its hue/saturation map, before exposure.
+  if (uDcp > 0.5 && uHsmDims.x > 0.0) lin = uP2S * hueSatMap(uHsm, uHsmDims, max(uS2P * lin, vec3(0.0)));
+
   // Lens vignetting (positive brightens the corners) and calibration's shadow tint.
   if (uLensVig != 0.0) {
     float w = smoothstep(uLensVigMid * 0.6, 1.0, sqrt(r2));
@@ -430,15 +521,17 @@ void main() {
     }
   }
 
-  // Bring colours outside the screen's range back in by desaturating them.
-  float y1 = dot(lin, W709);
-  float mn = min(lin.r, min(lin.g, lin.b));
-  // Noise below black (brightness at or under 0) is black, not its leftover
-  // positive channels, which showed as purple speckle in high-ISO shadows.
-  if (mn < 0.0) lin = y1 > 0.0 ? y1 + (lin - y1) * (y1 / (y1 - mn + 1e-6)) : vec3(0.0);
-  lin = max(lin, vec3(0.0));
-
-  vec3 mapped = uToneMap < 0.5 ? shoulder(lin) : uToneMap < 1.5 ? sigmoidMap(lin) : uToneMap < 2.5 ? agxMap(lin) : filmicMap(lin);
+  vec3 mapped;
+  if (uDcp > 0.5 && uToneMap < 0.5) {
+    // Lightroom's profile: look tables, then the tone curve, in ProPhoto RGB.
+    vec3 pp = max(uS2P * lin, vec3(0.0));
+    if (uLookADims.x > 0.0) pp = hueSatMap(uLookA, uLookADims, pp);
+    if (uLookBDims.x > 0.0) pp = hueSatMap(uLookB, uLookBDims, pp);
+    mapped = intoRange(uP2S * rgbTone(easeWhite(pp)));
+  } else {
+    lin = intoRange(lin);
+    mapped = uToneMap < 0.5 ? shoulder(lin) : uToneMap < 1.5 ? sigmoidMap(lin) : uToneMap < 2.5 ? agxMap(lin) : filmicMap(lin);
+  }
   vec3 d = encode(mapped);
   // Whites and Blacks act on the screen values, as in Lightroom, fitted to its
   // measured change per L* band at -100 (see tools/lr-tone.md). Brightness
