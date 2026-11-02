@@ -8,7 +8,7 @@ import { Slider } from './slider.jsx';
 import { AI_TYPES, aiName, newAiPart } from '../develop/masks.js';
 
 // Which download each AI tool needs (names from the models' manifest).
-const FEATURE = { subject: 'subject', background: 'subject', sky: 'landscape', landscape: 'landscape', people: 'people', denoise: 'denoise' };
+const FEATURE = { subject: 'subject', background: 'subject', sky: 'landscape', landscape: 'landscape', people: 'people', skin: 'people', denoise: 'denoise' };
 const FEATURE_LABEL = { subject: 'Subject and Background', landscape: 'Sky and Landscape', people: 'People', denoise: 'AI Denoise' };
 const TASK = Object.fromEntries(AI_TYPES.map(([k, , task]) => [k, task]));
 const mb = (n) => `${Math.max(1, Math.round(n / 1e6))} MB`;
@@ -54,6 +54,15 @@ function AiDownload({ feature, size, onDone }) {
 }
 
 // --- AI masks -----------------------------------------------------------------------
+
+// Everyone's face and body skin as one selection (Lightroom's People > all > skin).
+function allSkin(results) {
+  const parts = results.filter((x) => /:(face|skin)$/.test(x.name));
+  if (!parts.length) return null;
+  const data = new Uint8Array(parts[0].data);
+  for (const p of parts.slice(1)) for (let i = 0; i < data.length; i++) data[i] = Math.max(data[i], p.data[i]);
+  return { w: parts[0].w, h: parts[0].h, data };
+}
 
 const cache = new Map(); // `${photo}|${task}` -> results, for the last few
 const PERSON_PARTS = [['', 'Entire person'], ['face', 'Face skin'], ['skin', 'Body skin'], ['hair', 'Hair'], ['clothes', 'Clothes']];
@@ -127,6 +136,10 @@ export function useAiMasks({ photo, picture, acts, ensure, toast }) {
       } else if (type === 'sky') {
         if (named('sky')) make([['sky', named('sky')]], target);
         else toast('No sky found in this photo');
+      } else if (type === 'skin') {
+        const skin = allSkin(r);
+        if (skin) make([['allSkin', skin]], target);
+        else toast('No skin found in this photo');
       } else if (!r.length) toast(type === 'people' ? 'No people found in this photo' : 'Nothing found to select');
       else setPick({ type, results: r, target });
     } catch (err) {
@@ -144,6 +157,7 @@ export function useAiMasks({ photo, picture, acts, ensure, toast }) {
       const { r } = await results(TASK[type]);
       const named = (n) => r.find((x) => x.name === n);
       if (type === 'sky') { if (!named('sky')) toast('No sky found in this photo'); return named('sky') || null; }
+      if (type === 'skin') { const skin = allSkin(r); if (!skin) toast('No skin found in this photo'); return skin; }
       const sub = named('subject');
       return sub && (type === 'background' ? { ...sub, data: sub.data.map((v) => 255 - v) } : sub);
     } catch (err) {

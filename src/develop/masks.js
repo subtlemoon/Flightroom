@@ -86,12 +86,13 @@ export const AI_TYPES = [
   ['sky', 'Sky', 'landscape'],
   ['background', 'Background', 'subject'],
   ['people', 'People', 'people'],
+  ['skin', 'Skin', 'people'],
   ['landscape', 'Landscape', 'landscape'],
 ];
 export const AI_LABEL = {
   subject: 'Subject', background: 'Background', sky: 'Sky', water: 'Water', vegetation: 'Vegetation', mountains: 'Mountains',
   architecture: 'Architecture', 'natural-ground': 'Natural ground', 'artificial-ground': 'Artificial ground',
-  face: 'Face skin', skin: 'Body skin', hair: 'Hair', clothes: 'Clothes',
+  face: 'Face skin', skin: 'Body skin', allSkin: 'Skin', hair: 'Hair', clothes: 'Clothes',
 };
 /** "person-2:face" -> "Person 2 · Face skin". */
 export const aiName = (kind) => kind.split(':').map((k) => AI_LABEL[k] || k.replace(/^person-(\d+)$/, 'Person $1')).join(' · ');

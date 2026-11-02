@@ -713,6 +713,90 @@ fn person_parts(ai: &Ai, crop: &Img) -> Result<Img, String> {
     Ok(Img { w: 256, h: 256, c: 6, v: p })
 }
 
+/// Side of the grid a person's parts are worked out on (their square, in pixels).
+const PARTS_GRID: usize = 768;
+
+/// A person's parts in detail, over their square (bx, by, side in picture
+/// pixels), on a PARTS_GRID grid: the whole square once, then nine half-size
+/// squares (each at twice the detail), then the face close up, blended with
+/// feathered edges. The selfie model is made for close-ups, so on a whole
+/// person at 256 x 256 skin spilt into hair and suits; this costs eleven runs
+/// of a small model instead of one, for edges that follow the person.
+fn person_parts_fine(ai: &Ai, rgb: &Img, bx: f32, by: f32, side: f32) -> Result<Img, String> {
+    let r = PARTS_GRID;
+    let mut acc = vec![0f32; r * r * 6];
+    let mut wsum = vec![0f32; r * r];
+    let whole = person_parts(ai, &rgb.crop_resize(bx, by, side, side, 256, 256))?.resize(r, r);
+    for (k, v) in whole.v.iter().enumerate() {
+        acc[k] = v * 0.5;
+    }
+    for w in &mut wsum {
+        *w = 0.5;
+    }
+    // One run on a square of the grid (x, y, s in grid cells), weighted by wt.
+    let add = |x: f32, y: f32, s: f32, wt: f32, acc: &mut Vec<f32>, wsum: &mut Vec<f32>| -> Result<(), String> {
+        let k = side / r as f32;
+        let parts = person_parts(ai, &rgb.crop_resize(bx + x * k, by + y * k, s * k, s * k, 256, 256))?;
+        let (gx0, gy0) = (x.floor().max(0.0) as usize, y.floor().max(0.0) as usize);
+        let (gx1, gy1) = (((x + s).ceil() as usize).min(r), ((y + s).ceil() as usize).min(r));
+        for gy in gy0..gy1 {
+            let ty = (gy as f32 + 0.5 - y) / s;
+            if !(0.0..=1.0).contains(&ty) {
+                continue;
+            }
+            for gx in gx0..gx1 {
+                let tx = (gx as f32 + 0.5 - x) / s;
+                if !(0.0..=1.0).contains(&tx) {
+                    continue;
+                }
+                // Feathered edges, so the squares blend without seams.
+                let win = (tx.min(1.0 - tx) * 6.0).min(1.0) * (ty.min(1.0 - ty) * 6.0).min(1.0) * wt;
+                if win <= 0.0 {
+                    continue;
+                }
+                let (u, v) = (tx * 256.0 - 0.5, ty * 256.0 - 0.5);
+                let at = gy * r + gx;
+                for ch in 0..6 {
+                    acc[at * 6 + ch] += parts.at(u, v, ch) * win;
+                }
+                wsum[at] += win;
+            }
+        }
+        Ok(())
+    };
+    let s = r as f32 / 2.0;
+    for y in [0.0, (r as f32 - s) / 2.0, r as f32 - s] {
+        for x in [0.0, (r as f32 - s) / 2.0, r as f32 - s] {
+            add(x, y, s, 1.0, &mut acc, &mut wsum)?;
+        }
+    }
+    // The face close up, where its edges (hairline, ears, eyes) matter most.
+    let (mut x0, mut y0, mut x1, mut y1, mut n) = (r, r, 0, 0, 0);
+    for gy in 0..r {
+        for gx in 0..r {
+            let at = gy * r + gx;
+            if acc[at * 6 + 3] / wsum[at] > 0.5 {
+                x0 = x0.min(gx);
+                y0 = y0.min(gy);
+                x1 = x1.max(gx);
+                y1 = y1.max(gy);
+                n += 1;
+            }
+        }
+    }
+    if n > 50 {
+        let fs = ((x1 - x0).max(y1 - y0) as f32 * 2.2).max(64.0);
+        let (cx, cy) = ((x0 + x1) as f32 / 2.0, (y0 + y1) as f32 / 2.0);
+        add(cx - fs / 2.0, cy - fs / 2.0, fs, 3.0, &mut acc, &mut wsum)?;
+    }
+    for (k, w) in wsum.iter().enumerate() {
+        for ch in 0..6 {
+            acc[k * 6 + ch] /= w;
+        }
+    }
+    Ok(Img { w: r, h: r, c: 6, v: acc })
+}
+
 /// Separate people: connected areas of the person map (grid cells), biggest first.
 fn people_boxes(person: &Img, min_cells: usize) -> Vec<(usize, usize, usize, usize)> {
     let (w, h) = (person.w, person.h);
@@ -793,8 +877,8 @@ fn masks(ai: &Ai, task: &str, rgb: &Img) -> Result<Vec<(String, Img)>, String> {
                 let (cx, cy) = ((x0 + x1) as f32 * 0.5 * sx, (y0 + y1) as f32 * 0.5 * sy);
                 let side = ((x1 - x0) as f32 * sx).max((y1 - y0) as f32 * sy) * 1.3;
                 let (bx, by) = (cx - side / 2.0, cy - side / 2.0);
-                let crop = rgb.crop_resize(bx, by, side, side, 256, 256);
-                let parts = person_parts(ai, &crop)?;
+                let parts = person_parts_fine(ai, rgb, bx, by, side)?;
+                let grid = PARTS_GRID as f32;
                 // Back into the picture: each part, inside the person's square.
                 let place = |f: &dyn Fn(&[f32]) -> f32| -> Img {
                     let mut v = vec![0.0f32; rgb.w * rgb.h];
@@ -802,7 +886,7 @@ fn masks(ai: &Ai, task: &str, rgb: &Img) -> Result<Vec<(String, Img)>, String> {
                     let (px1, py1) = (((bx + side) as usize).min(rgb.w), ((by + side) as usize).min(rgb.h));
                     for y in py0..py1 {
                         for x in px0..px1 {
-                            let (u, w) = ((x as f32 + 0.5 - bx) / side * 256.0 - 0.5, (y as f32 + 0.5 - by) / side * 256.0 - 0.5);
+                            let (u, w) = ((x as f32 + 0.5 - bx) / side * grid - 0.5, (y as f32 + 0.5 - by) / side * grid - 0.5);
                             let mut cell = [0.0f32; 6];
                             for (ch, c) in cell.iter_mut().enumerate() {
                                 *c = parts.at(u, w, ch);
@@ -1172,6 +1256,18 @@ mod tests {
         let w = u32::from_le_bytes(pic[0..4].try_into().unwrap()) as usize;
         let h = u32::from_le_bytes(pic[4..8].try_into().unwrap()) as usize;
         let rgb = Img { w, h, c: 3, v: pic[8..].iter().map(|&b| b as f32 / 255.0).collect() };
+        // FLIGHTROOM_AI_TASKS=people,landscape runs only those tasks (no BiRefNet needed).
+        if let Ok(only) = std::env::var("FLIGHTROOM_AI_TASKS") {
+            for task in only.split(',') {
+                let t = std::time::Instant::now();
+                let m = masks(&ai, task, &rgb).unwrap();
+                eprintln!("{task}: {:?} in {:?}", m.iter().map(|x| x.0.clone()).collect::<Vec<_>>(), t.elapsed());
+                for (name, img) in m {
+                    std::fs::write(dir.join(format!("out-{name}.gray")), img.to_u8()).unwrap();
+                }
+            }
+            return;
+        }
         let t = std::time::Instant::now();
         let _ = ai.session("birefnet.onnx");
         eprintln!("load {:?}", t.elapsed());
