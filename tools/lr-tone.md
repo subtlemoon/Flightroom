@@ -56,6 +56,22 @@ Left: the full edit's colourful parts are a few C* weak (Saturation -8 seems
 stronger than Lightroom's; not separable from these exports), and white suits
 and the road about 2.5-3 L* bright.
 
+## Fine detail (2.9.7): hair, skin, and Develop's view
+Measured on the top-left driver's hair, full resolution, against Lightroom's
+full-edit export (mean |Laplacian| of the hair: Lightroom 21.6):
+- Negative Texture smoothed hair strands as much as skin (17.6). Lightroom's
+  spares strong detail: Flightroom's now fades out from 0.08 to 0.25 stops of
+  local contrast (19.5).
+- Highlights/Shadows decided each pixel's lift from an edge-hugging base, so a
+  lighter strand got less lift than the dark gap beside it, and the contrast
+  between them flattened (strand contrast with the curve: Lightroom 3.18,
+  Flightroom 2.12). The lift now comes from a neighbourhood that only follows
+  edges past about 0.8 stops (`LIFT_EDGE`): 2.79. Region colour error moves a
+  little (tone + curve 2.4 -> 2.7, full edit 3.8 -> 4.1).
+- Develop, smaller than 100%, now shows the view processed again from
+  full-resolution raw data and scaled down through mipmaps once it settles
+  (Renderer.refine), instead of only the 2x2-merged preview.
+
 ## Targets
 
 ### Change per L* band at -100 (+100 for Shadows)

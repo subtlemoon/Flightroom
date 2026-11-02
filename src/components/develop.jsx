@@ -744,6 +744,42 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
     return () => clearTimeout(t);
   }, [ready, view, W, H, cropMode, frame, toSource, dn]);
 
+  // Full quality once a frame settles: the view processed again from
+  // full-resolution raw data and scaled down properly (Renderer.refine), as
+  // Lightroom shows a photo smaller than 100%. Any new frame cancels it. The
+  // full-resolution parts are kept, so changing a slider only redraws.
+  const refineGen = useRef(0);
+  const refineTimer = useRef(null);
+  const regions = useRef({ key: '', map: new Map(), bytes: 0 });
+  const fetchRegionKept = async (rect) => {
+    const c = regions.current, ck = `${photo.id}|${dn}`;
+    if (c.key !== ck) { c.key = ck; c.map = new Map(); c.bytes = 0; }
+    const key = `${rect.x},${rect.y},${rect.w},${rect.h}`;
+    let f = c.map.get(key);
+    if (f) { c.map.delete(key); c.map.set(key, f); return f; }
+    f = await fetchFrame(app.develop.regionUrl(photo, { ...rect, ow: rect.w, oh: rect.h }, dn));
+    c.map.set(key, f); c.bytes += f.data.byteLength;
+    while (c.bytes > 600e6 && c.map.size > 1) { const [k0, f0] = c.map.entries().next().value; c.map.delete(k0); c.bytes -= f0.data.byteLength; }
+    return f;
+  };
+  useEffect(() => () => { clearTimeout(refineTimer.current); refineGen.current++; regions.current = { key: '', map: new Map(), bytes: 0 }; }, [photo?.id]);
+  // The sensor rectangle an output tile (gl pixels, y up) needs, with room for sharpening and noise reduction.
+  const regionFor = (o2f, tx, ty, ow, oh) => {
+    const a = (frame.angle * Math.PI) / 180;
+    const pts = [];
+    for (let i = 0; i <= 4; i++) for (const [x, y] of [[tx + (ow * i) / 4, ty], [tx + (ow * i) / 4, ty + oh], [tx, ty + (oh * i) / 4], [tx + ow, ty + (oh * i) / 4]]) {
+      const fx = o2f[0] * x + o2f[1] * y + o2f[2], fy = o2f[3] * x + o2f[4] * y + o2f[5];
+      const ox = frame.cx + Math.cos(a) * fx * frame.hw - Math.sin(a) * fy * frame.hh;
+      const oy = frame.cy + Math.sin(a) * fx * frame.hw + Math.cos(a) * fy * frame.hh;
+      const [px, py] = toSource(ox, oy);
+      pts.push([px * geo.sw, py * geo.sh]);
+    }
+    const m = 24 + 4 * (s.sharpenRadius || 1);
+    const x0 = Math.max(0, Math.floor(Math.min(...pts.map((q) => q[0])) - m)), x1 = Math.min(geo.sw, Math.ceil(Math.max(...pts.map((q) => q[0])) + m));
+    const y0 = Math.max(0, Math.floor(Math.min(...pts.map((q) => q[1])) - m)), y1 = Math.min(geo.sh, Math.ceil(Math.max(...pts.map((q) => q[1])) + m));
+    return x1 - x0 < 2 || y1 - y0 < 2 ? null : { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  };
+
   // A Retouch stroke being painted; dropped once the settings hold it.
   const liveRef = useRef(null);
   const draw = (light = false) => {
@@ -756,10 +792,21 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
     // Dropped once the settings hold the stroke (or the moved layer's place).
     if (live && s.layers?.some((l) => (live.op ? l.ops.includes(live.op) || l.mask?.ops.includes(live.op) : l.id === live.layerId && l.tf === live.tf))) live = liveRef.current = null;
     const opts = { showClip: clip, maskView, live };
+    const gen = ++refineGen.current;
+    clearTimeout(refineTimer.current);
     if (light && !live && !r.keepsUp) r.renderLight(info, s, geo, frame, W, H, v, opts);
     else {
-      r.render(info, s, geo, frame, outToFrame(W, H, frame, v), opts);
+      const o2f = outToFrame(W, H, frame, v);
+      r.render(info, s, geo, frame, o2f, opts);
       r.timeFrame();
+      if (!live && !cropMode && toSource) {
+        refineTimer.current = setTimeout(() => {
+          r.refine({ info, s, geo, frame, out2frame: o2f, opts,
+            regionFor: (tx, ty, ow, oh) => regionFor(o2f, tx, ty, ow, oh),
+            fetchRegion: fetchRegionKept,
+            current: () => gen === refineGen.current && rendererRef.current === r });
+        }, 250);
+      }
     }
   };
 

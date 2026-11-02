@@ -99,7 +99,7 @@ uniform vec4 uTmB;        // tone mapper parameters B (filmic spline nodes)
 uniform float uTmHue;     // hue preservation factor (0..1)
 uniform float uHighlights, uShadows, uWhites, uBlacks;
 // Basic tone slider shapes (fitted to Lightroom; tools/lr-tone.md).
-const float HL_K = 1.1, HL_LO = 0.2, SH_K = 0.72, SH_HI = 0.9;
+const float HL_K = 1.1, HL_LO = 0.2, SH_K = 0.72, SH_HI = 0.9, LIFT_EDGE = 0.6;
 const float WH_NEG = 0.13, WH_POS = 0.3, BL_NEG = 1.4, BL_POS = 1.0, BL_N = 2.36, BL_LIFT = 0.12, LIFT_GREY = 0.75;
 uniform float uTexture, uClarity, uDehaze, uVibrance, uSaturation;
 uniform float uAirY;
@@ -519,15 +519,25 @@ void main() {
   base += exposure;
 
   float bd = disp(exp2(base));
+  // How much Highlights and Shadows act comes from a wider neighbourhood that
+  // only follows big edges (a head against the sky), so fine detail such as
+  // hair strands and the gaps between them is lifted alike and keeps its
+  // contrast, as in Lightroom (measured on JWL_7451).
+  float bw = disp(exp2(g.r + dEdge * (1.0 - exp(-dEdge * dEdge / LIFT_EDGE)) + exposure));
   // Highlights and Shadows: weights and strengths fitted to Lightroom's measured
   // change per L* band at -100 / +100 (see tools/lr-tone.md).
-  base += highlights * HL_K * smoothstep(HL_LO, 1.0, bd);
-  base += shadows * SH_K * (1.0 - smoothstep(0.0, SH_HI, bd));
+  base += highlights * HL_K * smoothstep(HL_LO, 1.0, bw);
+  base += shadows * SH_K * (1.0 - smoothstep(0.0, SH_HI, bw));
   float mid = smoothstep(0.03, 0.35, bd) * (1.0 - smoothstep(0.8, 1.0, bd));
   detail *= max(0.0, 1.0 + clarity * 0.9 * mid);
 
   float l1 = base + detail;
-  if (texAmt != 0.0) l1 += texAmt * 0.9 * (l0 - ring(p, 3.0)) * (0.4 + 0.6 * mid);
+  // Negative Texture smooths fine, low-contrast texture (skin) but spares
+  // strong detail such as hair strands, as Lightroom's does (measured on JWL_7451).
+  if (texAmt != 0.0) {
+    float th = l0 - ring(p, 3.0);
+    l1 += texAmt * 0.9 * th * (0.4 + 0.6 * mid) * (texAmt < 0.0 ? 1.0 - smoothstep(0.08, 0.25, abs(th)) : 1.0);
+  }
   if (sharpen > 0.0) {
     float hp = l0 - ring(p, uSharpenRadius);
     float limit = 0.06 + uSharpenDetail * 0.6;
@@ -747,6 +757,15 @@ void main() {
 // Screen colour correction (icc.js): the finished sRGB picture -> this
 // screen's own colours. uLut holds, per channel, the screen value for linear
 // light t² at t = 0..1.
+// A finished picture (or a full-resolution tile of one) drawn into uRect of
+// the target, scaled down through its mipmaps.
+export const COPY = `#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform vec4 uRect; // x, y, w, h in target pixels
+out vec4 o;
+void main() { o = texture(uTex, (gl_FragCoord.xy - uRect.xy) / uRect.zw); }`;
+
 export const DISPLAY = `#version 300 es
 precision highp float;
 uniform sampler2D uTex;

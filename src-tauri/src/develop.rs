@@ -1032,6 +1032,13 @@ mod tests {
         let raw = Raw::decode(&p, String::new()).unwrap();
         let (w, h, data) = raw.overview(2560, None);
         std::fs::write(p.with_extension("frim"), frame(w, h, &data)).unwrap();
+        // FLIGHTROOM_RAW_REGION=x,y,w,h also writes that part at full resolution (demosaiced).
+        if let Ok(r) = std::env::var("FLIGHTROOM_RAW_REGION") {
+            let v: Vec<usize> = r.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+            if let [x, y, rw, rh] = v[..] {
+                std::fs::write(p.with_extension("region.frim"), raw.region(x, y, rw, rh, rw, rh, None)).unwrap();
+            }
+        }
         let text = std::fs::read_to_string(p.with_extension("xmp")).unwrap_or_default();
         let doc = crate::xmp::Doc::new(&text);
         let curves: HashMap<String, Vec<String>> = ["", "Red", "Green", "Blue"]

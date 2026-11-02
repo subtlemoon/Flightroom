@@ -1,7 +1,7 @@
 // Draws a RAW photo with develop settings using WebGL2. The decoded photo lives
 // on the graphics card as half-float camera RGB; every redraw runs the whole
 // develop pipeline (shaders.js) for just the pixels on screen.
-import { VERT, GUIDE_DOWN, BLUR, FINAL, DISPLAY } from './shaders.js';
+import { VERT, GUIDE_DOWN, BLUR, FINAL, DISPLAY, COPY } from './shaders.js';
 import { LUT_SIZE } from './icc.js';
 import { colorTransform, inv3, mul3, neutralToXy, tempTintToXy } from './color.js';
 import { BASELINE_EXPOSURE, PP_TO_SRGB, SRGB_TO_PP, TONE_SIZE, adobeRendering, dcpTransform, hueSatFor, hueSatPixels, toneTable } from './adobe.js';
@@ -252,6 +252,7 @@ export class Renderer {
     this.down = program(gl, GUIDE_DOWN);
     this.blur = program(gl, BLUR);
     this.final = program(gl, FINAL);
+    this.copy = program(gl, COPY);
     this.quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
@@ -333,7 +334,8 @@ export class Renderer {
     gl.deleteTexture(this.curveTex); gl.deleteTexture(this.hueTex); gl.deleteTexture(this.blank);
     for (const t of [this.prof?.tone, this.prof?.hsm, this.prof?.laTex, this.prof?.lbTex]) if (t) gl.deleteTexture(t);
     gl.deleteBuffer(this.quad);
-    for (const p of [this.down, this.blur, this.final]) gl.deleteProgram(p.p);
+    for (const p of [this.down, this.blur, this.final, this.copy]) gl.deleteProgram(p.p);
+    this.free(this.acc);
     for (const t of this.maskTex || []) gl.deleteTexture(t.tex);
     this.composer?.dispose();
     this.setOpHi(null);
@@ -850,6 +852,80 @@ export class Renderer {
   }
 
   /** Renders a w x h tile into an 8-bit buffer and returns its pixels (bottom row first). */
+  /** Like draw(), into just `rect` ([x, y, w, h], y up) of the target. */
+  drawRect(prog, target, rect, uniforms) {
+    const gl = this.gl;
+    gl.useProgram(prog.p);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fb : null);
+    gl.viewport(rect[0], rect[1], rect[2], rect[3]);
+    let unit = 0;
+    for (const [k, v] of Object.entries(uniforms)) {
+      const l = prog.loc[k];
+      if (l == null) continue;
+      if (v instanceof WebGLTexture) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, v); gl.uniform1i(l, unit++); } else gl.uniform4fv(l, v);
+    }
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  /**
+   * Full quality, as Lightroom shows a photo smaller than 100%: the view
+   * processed from full-resolution raw data (sharpening, texture and noise
+   * reduction at their real size), in tiles, each scaled down through its
+   * mipmaps into a screen-sized picture, which is then shown.
+   * regionFor(x, y, w, h) gives the sensor rectangle an output tile needs
+   * (or null); fetchRegion(rect) its demosaiced pixels; current() turns false
+   * once the view or settings change (the work stops, nothing is shown).
+   * Returns whether it was shown.
+   */
+  async refine({ info, s, geo, frame, out2frame, regionFor, fetchRegion, current, opts = {} }) {
+    const gl = this.gl, W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+    const o2o = mm(geo.frameToOriented(frame), out2frame);
+    const k = 1 / Math.hypot(o2o[0], o2o[3]); // output px per sensor px
+    if (!(k < 0.98) || !this.src) return false;
+    if (!this.acc || this.acc.w !== W || this.acc.h !== H) { this.free(this.acc); this.acc = this.target(W, H); }
+    const T = Math.max(64, Math.floor(Math.min(2048, this.maxTex) * k));
+    try {
+      for (let ty = 0; ty < H; ty += T) {
+        for (let tx = 0; tx < W; tx += T) {
+          if (!current() || this.disposed) return false;
+          const ow = Math.min(T, W - tx), oh = Math.min(T, H - ty);
+          const tw = Math.max(1, Math.round(ow / k)), th = Math.max(1, Math.round(oh / k));
+          const rect = regionFor(tx, ty, ow, oh);
+          const f = rect ? await fetchRegion(rect) : null;
+          if (!current() || this.disposed) return false;
+          let hi = null;
+          if (f) {
+            const r = [rect.x / geo.sw, rect.y / geo.sh, rect.w / geo.sw, rect.h / geo.sh];
+            hi = { tex: this.texture(gl.RGB16F, f.w, f.h, gl.RGB, gl.HALF_FLOAT, f.data), rect: r, safe: r };
+          }
+          // The tile's own full-resolution pixels stand in for the view's
+          // just while it renders (nothing else runs in between).
+          const keep = this.hi;
+          const t = this.target(tw, th);
+          this.hi = hi;
+          try {
+            this.render(info, s, geo, frame, mm(out2frame, mat(ow / tw, 0, tx, 0, oh / th, ty)), { ...opts, target: t });
+          } finally {
+            this.hi = keep;
+            if (hi) gl.deleteTexture(hi.tex);
+          }
+          gl.bindTexture(gl.TEXTURE_2D, t.tex);
+          gl.generateMipmap(gl.TEXTURE_2D);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+          this.drawRect(this.copy, this.acc, [tx, ty, ow, oh], { uTex: t.tex, uRect: [tx, ty, ow, oh] });
+          this.free(t);
+          await new Promise((res) => setTimeout(res, 0)); // let the page breathe between tiles
+        }
+      }
+    } catch (e) {
+      return false;
+    }
+    if (!current() || this.disposed) return false;
+    if (this.display) this.present(this.acc);
+    else this.drawRect(this.copy, null, [0, 0, W, H], { uTex: this.acc.tex, uRect: [0, 0, W, H] });
+    return true;
+  }
+
   renderTile(info, s, geo, frame, out2frame, w, h) {
     const gl = this.gl;
     const t = this.target(w, h, gl.RGBA8);
