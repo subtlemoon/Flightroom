@@ -295,7 +295,7 @@ export class Renderer {
   dispose() {
     const gl = this.gl;
     this.disposed = true;
-    this.free(this.src); this.clearHi(); this.free(this.histTarget); this.free(this.prevTarget);
+    this.free(this.src); this.clearHi(); this.free(this.histTarget); this.free(this.prevTarget); this.free(this.lightTarget);
     for (const t of this.guide || []) this.free(t);
     gl.deleteTexture(this.curveTex); gl.deleteTexture(this.hueTex); gl.deleteTexture(this.blank);
     gl.deleteBuffer(this.quad);
@@ -502,6 +502,25 @@ export class Renderer {
       ? this.drawPhoto(info, s, geo, frame, out2frame, mm(mat(1, 0, extra.shift[0], 0, 1, extra.shift[1]), extra.out2ori || out2ori), t, false, null, extra.op && this.opHi?.get(extra.op.id))
       : this.drawPhoto(info, s, geo, frame, out2frame, out2ori, t, showClip, maskView, null)), layers, geo, out2ori, target, live,
     [s, info, frame, this.src, this.hi, this.opHi, showClip, maskView && JSON.stringify(maskView)]);
+  }
+
+  /**
+   * The canvas at a fraction of its pixels, stretched up: about a quarter of
+   * the graphics work, for frames drawn while a setting is being dragged (a
+   * built-in Intel GPU can't keep up with the full pipeline at screen size).
+   */
+  renderLight(info, s, geo, frame, W, H, view, opts, f = 0.5) {
+    const gl = this.gl;
+    const w = Math.max(1, Math.round(W * f)), h = Math.max(1, Math.round(H * f));
+    if (!this.lightTarget || this.lightTarget.w !== w || this.lightTarget.h !== h) {
+      this.free(this.lightTarget);
+      this.lightTarget = this.target(w, h, gl.RGBA8);
+    }
+    this.render(info, s, geo, frame, outToFrame(w, h, frame, { ...view, scale: (view.scale * w) / W }), { ...opts, target: this.lightTarget });
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.lightTarget.fb);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+    gl.blitFramebuffer(0, 0, w, h, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.LINEAR);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
   /** The developed photo; out2ori may be shifted (a clone's source), sharper may stand in for this.hi. */

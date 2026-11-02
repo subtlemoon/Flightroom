@@ -581,6 +581,11 @@ function stageRenderer() {
   }
   return stage;
 }
+// After the context comes back from a reset: everything on the card is gone, so a new renderer.
+function restoreStage() {
+  stage.renderer = new Renderer(stage.canvas, { onScreen: true });
+  return stage.renderer;
+}
 function dropStage() {
   if (!stage) return;
   stage.renderer.dispose();
@@ -597,6 +602,7 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [ready, setReady] = useState(false); // RAW on the graphics card
   const [error, setError] = useState('');
+  const [glGen, setGlGen] = useState(0); // counts graphics resets survived
   const [view, setView] = useState(null); // null = fit; { scale (oriented px -> css px), u, v }
   const [hist, setHist] = useState(null);
   const drag = useRef(null);
@@ -618,9 +624,30 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
     hostRef.current.appendChild(st.canvas);
     canvasRef.current = st.canvas;
     rendererRef.current = st.renderer;
-    const lost = (e) => { e.preventDefault(); setError('The graphics card stopped the photo renderer'); setReady(false); };
+    // Windows resets a graphics driver that stops answering; the browser then
+    // hands the context back, and the photo is put on the card again. Only if
+    // that doesn't happen does the stage give up.
+    let giveUp = 0;
+    const lost = (e) => {
+      e.preventDefault();
+      setReady(false);
+      giveUp = setTimeout(() => setError('The graphics card stopped the photo renderer'), 8000);
+    };
+    const restored = () => {
+      clearTimeout(giveUp);
+      try { rendererRef.current = restoreStage(); } catch (err) { setError(String(err.message || err)); return; }
+      setError('');
+      setGlGen((g) => g + 1);
+    };
     st.canvas.addEventListener('webglcontextlost', lost);
-    return () => { st.canvas.removeEventListener('webglcontextlost', lost); st.canvas.remove(); rendererRef.current = null; };
+    st.canvas.addEventListener('webglcontextrestored', restored);
+    return () => {
+      clearTimeout(giveUp);
+      st.canvas.removeEventListener('webglcontextlost', lost);
+      st.canvas.removeEventListener('webglcontextrestored', restored);
+      st.canvas.remove();
+      rendererRef.current = null;
+    };
   }, []);
 
   // How much AI Denoise to show; slider moves are let settle before the photo is fetched again.
@@ -646,7 +673,7 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
       if (nextPhoto?.raw) fetch(app.develop.imageUrl(nextPhoto, fitEdge(), true)).catch(() => {});
     }, (err) => live && setError(String(err.message || err)));
     return () => { live = false; };
-  }, [!!info, dn]);
+  }, [!!info, dn, glGen]);
 
   const geo = useMemo(() => info && new Geometry(info.width, info.height, info.orientation), [info]);
   // In crop mode the whole photo shows (turned by the straighten angle) with the crop on top.
@@ -708,7 +735,7 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
 
   // A Retouch stroke being painted; dropped once the settings hold it.
   const liveRef = useRef(null);
-  const draw = () => {
+  const draw = (light = false) => {
     const r = rendererRef.current;
     const c = canvasRef.current;
     if (!r || !ready || !s || !info || !frame || !W || !H) return;
@@ -717,7 +744,9 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
     let live = liveRef.current;
     // Dropped once the settings hold the stroke (or the moved layer's place).
     if (live && s.layers?.some((l) => (live.op ? l.ops.includes(live.op) || l.mask?.ops.includes(live.op) : l.id === live.layerId && l.tf === live.tf))) live = liveRef.current = null;
-    r.render(info, s, geo, frame, outToFrame(W, H, frame, v), { showClip: clip, maskView, live });
+    const opts = { showClip: clip, maskView, live };
+    if (light && !live) r.renderLight(info, s, geo, frame, W, H, v, opts);
+    else r.render(info, s, geo, frame, outToFrame(W, H, frame, v), opts);
   };
 
   const drawRef = useRef(draw);
@@ -725,15 +754,29 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
 
   // Redraw when what's drawn changes, at most once per frame (other re-renders,
   // like the histogram arriving, don't redraw the photo).
+  // While a setting keeps changing (a slider or the curve being dragged) the
+  // frames are drawn light (renderer.renderLight), then once in full when it
+  // stops: built-in graphics (Intel Iris Xe) fell behind and Windows reset the
+  // driver, blacking out the screen for a few seconds.
   const raf = useRef(0);
   const drawn = useRef(null);
+  const lastChange = useRef(0);
+  const fullTimer = useRef(0);
   useEffect(() => {
     const key = [ready, s, info, frame, W, H, v.scale, v.u, v.v, clip, maskView && JSON.stringify(maskView)];
-    if (drawn.current && key.every((k, i) => k === drawn.current[i])) return;
+    const prev = drawn.current;
+    if (prev && key.every((k, i) => k === prev[i])) return;
+    const settingsOnly = prev && key.every((k, i) => i === 1 || k === prev[i]);
+    const now = performance.now();
+    const light = settingsOnly && now - lastChange.current < 150;
+    if (settingsOnly) lastChange.current = now;
     drawn.current = key;
     cancelAnimationFrame(raf.current);
-    raf.current = requestAnimationFrame(draw);
+    clearTimeout(fullTimer.current);
+    raf.current = requestAnimationFrame(() => draw(light));
+    if (light) fullTimer.current = setTimeout(() => drawRef.current(), 200);
   });
+  useEffect(() => () => { cancelAnimationFrame(raf.current); clearTimeout(fullTimer.current); }, []);
 
   // Retouch: a stroke shown while it's painted, at most once per frame.
   const liveRaf = useRef(0);
