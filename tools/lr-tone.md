@@ -20,19 +20,11 @@ middle grey where the fitted look below had it. The fitted looks (`LOOKS` in
 
 The constants are `HL_*`, `SH_*`, `WH_*` and `BL_*` in `src/develop/shaders.js`.
 
-## Measured against Lightroom (Flightroom 2.9.2, built-in profile)
-JWL_7451.NEF rendered by the real pipeline (headless Chromium, the photo's
-own settings, masks off) against Lightroom Classic's export, both 2560 px:
-
-| L* band (LR) | 0-10 | 10-20 | 20-30 | 30-40 | 40-50 | 50-60 | 60-70 | 70-80 | 80-90 |
-|--------------|------|-------|-------|-------|-------|-------|-------|-------|-------|
-| dL* (FR-LR)  | -0.1 | -0.2  | -0.2  | +0.2  | +0.2  | -0.1  | -0.1  | +0.1  | +0.1  |
-
-Region colour differences (dE76 of the means): sky 0.7, white suits 0.8,
-road 0.5, grass 0.8, red suits 1.7, trees 2.0, skin 2.3.
-
-Weighting Highlights/Shadows by the profile's tone curve (tried in 2.9.1)
-made the 70-90 bands 10 L* too dark, so the weighting stays on the fitted shoulder.
+## Pending: measuring the profiles against Lightroom
+The comparison made for 2.9.2 turned out to use a Flightroom export, not
+Lightroom's, so it says nothing about Lightroom. The 0.93 saturation for the
+built-in profile and leaving Lightroom's installed profiles off come from it,
+and are to be redone against a real Lightroom export of JWL_7451.
 
 ## Targets
 

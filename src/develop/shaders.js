@@ -368,9 +368,8 @@ vec3 easeWhite(vec3 x) {
 }
 // Where light y sits from shadow to highlight, for weighting Highlights,
 // Shadows, Clarity and masks' luminance ranges: the shoulder and sRGB curve
-// these were fitted with, whatever the profile (measured on JWL_7451 against
-// Lightroom's export: within 0.2 L* in every tone band; weighting by the
-// profile's tone curve instead made the sky 10 L* too dark).
+// these were fitted with, whatever the profile (weighting by the profile's
+// tone curve, tried in 2.9.1, made bright tones about 10 L* darker).
 float disp(float y) { return encode(vec3(shoulder1(max(y, 0.0)))).r; }
 
 // Colours outside the screen's range brought in by desaturating them, keeping

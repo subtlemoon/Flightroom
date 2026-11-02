@@ -241,8 +241,7 @@ function builtInProfile(info) {
 }
 
 // Lightroom's installed profiles render only once checked against Lightroom's
-// own output. The built-in profile is: on JWL_7451 it is within 0.2 L* of
-// Lightroom's export in every tone band (tools/lr-tone.md).
+// own output (tools/lr-tone.md); until then the built-in profile is used.
 let useInstalled = false;
 export function setUseInstalledProfiles(on) { useInstalled = !!on; }
 
