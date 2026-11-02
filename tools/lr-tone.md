@@ -56,6 +56,25 @@ Left: the full edit's colourful parts are a few C* weak (Saturation -8 seems
 stronger than Lightroom's; not separable from these exports), and white suits
 and the road about 2.5-3 L* bright.
 
+## Each slider on its own (2.9.9)
+Lightroom exports of JWL_7451 with one slider moved from defaults (Adobe
+Standard): Shadows +96, Blacks +85, Contrast -96, plus Camera Standard at
+defaults. The earlier fits were made on the combined edit, where errors
+cancelled: Blacks lifted twice as much as Lightroom's, Shadows lifted the
+deepest darks a third as much and reached too far up, Contrast pivoted too low
+and didn't take colour out. Each is now fitted on its own export:
+
+| slider | brightness per band | region error |
+|---|---|---|
+| Shadows +96 | within ~1 L* (`SH_K` 1.3 to `SH_HI` 0.65, `SH_DEEP` 0.8 below 0.2; colour held, `SH_C`) | 1.8 dE |
+| Blacks +85 | within ~1 L* (`BL_POS` 0.55, `BL_LIFT` 0.035, 90% added grey) | 1.0 dE |
+| Contrast -96 | within ~1 L* (S-curve around 0.6, 60% on brightness; `CON_*`, `CS_K` 0.25) | 1.3 dE |
+
+Highlights (0.5) and Whites (0.15), with no single exports yet, were then fitted
+on the combined tone sliders. Combined: tone sliders 2.0 dE (median 1.7),
+with the curve 2.7 (3.5), the full edit 4.3 (3.1). With the curve the red suits
+are still about 4-5 degrees pinker than Lightroom's.
+
 ## Fine detail (2.9.7): hair, skin, and Develop's view
 Measured on the top-left driver's hair, full resolution, against Lightroom's
 full-edit export (mean |Laplacian| of the hair: Lightroom 21.6):

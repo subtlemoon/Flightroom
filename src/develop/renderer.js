@@ -708,7 +708,7 @@ export class Renderer {
       uBg: [0.2275, 0.2275, 0.2275],
       ...this.colorUniforms(info, s),
       uExposure: s.exposure + look.exposure,
-      uContrast: look.contrast + (s.contrast / 100) * 0.75,
+      uContrast: look.contrast,
       uContrastSat: s.contrast / 100,
       ...tonemapUniforms(s),
       uHighlights: s.highlights / 100,

@@ -92,15 +92,23 @@ uniform float uContrast;
 uniform float uContrastSat; // the Contrast slider (-1..1), for the colour it changes
 // Contrast changes colour too, as in Lightroom, weak colours most (fitted on
 // Lightroom's exports of JWL_7451, tools/lr-tone.md).
-const float CS_K = 0.05, CS_V = 0.2;
+const float CS_K = 0.25, CS_V = 0.1;
+const float CON_K = 1.0, CON_PIVOT = 0.6, CON_LUM = 0.6;
+// An S-curve of strength k around CON_PIVOT (screen values 0-1).
+float conCurve(float x, float k) {
+  float p = CON_PIVOT;
+  float t = clamp(x < p ? 0.5 * x / p : 0.5 + 0.5 * (x - p) / (1.0 - p), 0.0, 1.0);
+  t += k * (t * t * (3.0 - 2.0 * t) - t);
+  return t < 0.5 ? 2.0 * p * t : p + (t - 0.5) * 2.0 * (1.0 - p);
+}
 uniform float uToneMap;   // 0: standard shoulder, 1: sigmoid, 2: AgX, 3: filmic RGB
 uniform vec4 uTmA;        // tone mapper parameters A (precomputed in tonemap.js)
 uniform vec4 uTmB;        // tone mapper parameters B (filmic spline nodes)
 uniform float uTmHue;     // hue preservation factor (0..1)
 uniform float uHighlights, uShadows, uWhites, uBlacks;
 // Basic tone slider shapes (fitted to Lightroom; tools/lr-tone.md).
-const float HL_K = 1.1, HL_LO = 0.2, SH_K = 0.72, SH_HI = 0.9, LIFT_EDGE = 1.0, LIFT_R = 4.0;
-const float WH_NEG = 0.13, WH_POS = 0.3, BL_NEG = 1.4, BL_POS = 1.0, BL_N = 2.36, BL_LIFT = 0.12, LIFT_GREY = 0.75;
+const float HL_K = 0.5, HL_LO = 0.2, SH_K = 1.3, SH_HI = 0.65, SH_DEEP = 0.8, SH_C = 0.3, LIFT_EDGE = 1.0, LIFT_R = 4.0;
+const float WH_NEG = 0.15, WH_POS = 0.3, BL_NEG = 1.4, BL_POS = 0.55, BL_N = 2.36, BL_LIFT = 0.035, LIFT_GREY = 0.9;
 uniform float uTexture, uClarity, uDehaze, uVibrance, uSaturation;
 uniform float uAirY;
 uniform float uSharpen, uSharpenRadius, uSharpenDetail, uSharpenMasking;
@@ -530,7 +538,8 @@ void main() {
   // Highlights and Shadows: weights and strengths fitted to Lightroom's measured
   // change per L* band at -100 / +100 (see tools/lr-tone.md).
   base += highlights * HL_K * smoothstep(HL_LO, 1.0, bw);
-  base += shadows * SH_K * (1.0 - smoothstep(0.0, SH_HI, bw));
+  float shLift = shadows * (SH_K * (1.0 - smoothstep(0.0, SH_HI, bw)) + SH_DEEP * (1.0 - smoothstep(0.0, 0.2, bw)));
+  base += shLift;
   float mid = smoothstep(0.03, 0.35, bd) * (1.0 - smoothstep(0.8, 1.0, bd));
   detail *= max(0.0, 1.0 + clarity * 0.9 * mid);
 
@@ -549,6 +558,8 @@ void main() {
     l1 += sharpen * clamp(hp, -limit, limit) * mask;
   } else if (sharpen < 0.0) l1 += max(sharpen, -1.0) * (l0 - ring(p, 1.5)); // a mask's negative Sharpness softens
   lin *= exp2(l1 - l0);
+  // Lightroom's Shadows lifts brightness but not colour with it.
+  if (shLift > 0.0) { float ys = dot(lin, W709); lin = ys + (lin - ys) * exp2(-SH_C * shLift); }
 
   if (dehaze != 0.0) {
     float air = uAirY * exp2(exposure);
@@ -594,10 +605,23 @@ void main() {
   // keeping its place, as Adobe's tone curves do): per channel it turned
   // strong reds pink (measured on JWL_7451: 5 degrees of hue).
   {
-    float ck = uContrast + LA.y * 0.75;
+    float ck = uContrast;
     float hi = max(d.r, max(d.g, d.b)), lo = min(d.r, min(d.g, d.b));
     float hi2 = hi + ck * (hi * hi * (3.0 - 2.0 * hi) - hi), lo2 = lo + ck * (lo * lo * (3.0 - 2.0 * lo) - lo);
     d = hi - lo > 1e-5 ? lo2 + (d - lo) * ((hi2 - lo2) / (hi - lo)) : vec3(hi2);
+  }
+  // The Contrast slider (and masks'): an S-curve around CON_PIVOT, on
+  // brightness (CON_LUM) or on the brightest and darkest channel.
+  {
+    float ck = CON_K * (uContrastSat + LA.y);
+    if (ck != 0.0) {
+      float y = clamp(dot(d, W709), 0.0, 1.0), y2 = conCurve(y, ck);
+      vec3 dl = y > 1e-4 ? d * (y2 / y) : vec3(y2);
+      float hi = max(d.r, max(d.g, d.b)), lo = min(d.r, min(d.g, d.b));
+      float hi2 = conCurve(hi, ck), lo2 = conCurve(lo, ck);
+      vec3 dh = hi - lo > 1e-5 ? lo2 + (d - lo) * ((hi2 - lo2) / (hi - lo)) : vec3(hi2);
+      d = mix(dh, dl, CON_LUM);
+    }
   }
   float cs = uContrastSat + LA.y;
   if (cs != 0.0) {
