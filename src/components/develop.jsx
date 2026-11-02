@@ -380,6 +380,8 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
       if (k === 'w' && ratingForKey(keys, e.key) === undefined) { if (s) setPicking((p) => (p === 'wb' ? false : 'wb')); return; }
       if (k === 'g' && onCull && ratingForKey(keys, e.key) === undefined) { onCull(); return; }
       if (k === 'r') { if (s) setCrop((c) => !c); return; }
+      // X while cropping: the ratio between landscape and portrait, as in Lightroom.
+      if (k === 'x' && crop && s && geo && ratingForKey(keys, e.key) === undefined) { cropTools(geo, s.crop, (c) => update({ crop: c })).flip(); return; }
       // Masks: K brush, M linear, Shift+M radial, O overlay, [ ] brush size.
       const free = ratingForKey(keys, e.key) === undefined;
       if (s && free && !before) {
@@ -604,6 +606,10 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
   const [error, setError] = useState('');
   const [glGen, setGlGen] = useState(0); // counts graphics resets survived
   const [view, setView] = useState(null); // null = fit; { scale (oriented px -> css px), u, v }
+  // A zoom is relative to the crop, so a new crop (or going in and out of
+  // cropping) starts again from the whole cropped photo, as in Lightroom.
+  const cropKey = s?.crop && JSON.stringify(s.crop);
+  useEffect(() => setView(null), [cropMode, cropKey]);
   const [hist, setHist] = useState(null);
   const drag = useRef(null);
   const hiReq = useRef(0);
@@ -1063,6 +1069,13 @@ function cropTools(geo, crop, onChange) {
       const r = f.hw >= f.hh ? Math.max(ratio, 1 / ratio) : Math.min(ratio, 1 / ratio);
       onChange({ ...geo.toCrop(fitInside(geo, { ...f, hh: f.hw / r })), aspect: r });
     },
+    // Landscape <-> portrait about the centre, kept inside the photo (a free crop turns as it is).
+    flip: () => {
+      const r = aspect === 0 ? f.hh / f.hw : 1 / (aspect || geo.ow / geo.oh);
+      const area = f.hw * f.hh;
+      const hw = Math.sqrt(area * r), hh = hw / r;
+      onChange({ ...geo.toCrop(fitInside(geo, { ...f, hw, hh })), aspect: aspect === 0 ? 0 : r });
+    },
   };
 }
 
@@ -1082,7 +1095,9 @@ function CropOverlay({ geo, view, k, size, crop, onChange, overlay }) {
     e.preventDefault();
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
-    drag.current = { mode, x: e.clientX, y: e.clientY, box: { ...box } };
+    // The ratio the drag starts from (the photo's own unless set; 0 = free).
+    const ratio = aspect || (aspect === 0 ? 0 : geo.ow / geo.oh);
+    drag.current = { mode, x: e.clientX, y: e.clientY, box: { ...box }, ratio, aspect };
     setDragging(true);
   };
   const move = (e) => {
@@ -1097,17 +1112,24 @@ function CropOverlay({ geo, view, k, size, crop, onChange, overlay }) {
       if (d.mode.includes('t')) { top += dy; height -= dy; }
       if (d.mode.includes('b')) height += dy;
       if (width < 24 || height < 24) return;
-      const ratio = aspect || (aspect === 0 ? 0 : geo.ow / geo.oh);
+      let ratio = d.ratio;
+      const corner = d.mode.length === 2;
+      // Like Lightroom: a corner pulled past the diagonal turns a locked
+      // ratio between landscape and portrait.
+      if (ratio && corner && Math.abs(ratio - 1) > 1e-3 && (height > width) !== (ratio < 1)) ratio = 1 / ratio;
       if (ratio) {
-        // Keep the ratio, anchored on the opposite side.
-        const h2 = width / ratio;
-        if (d.mode.includes('t')) top += height - h2;
-        height = h2;
+        // Keep the ratio from the side the pointer leads, anchored on the opposite side.
+        if (d.mode === 't' || d.mode === 'b' || (corner && ratio < 1)) width = height * ratio;
+        else height = width / ratio;
+        if (d.mode.includes('l')) left = d.box.left + d.box.width - width;
+        if (d.mode.includes('t')) top = d.box.top + d.box.height - height;
       }
+      if (ratio !== d.ratio) d.flipped = ratio;
+      else d.flipped = null;
     }
     const [ncx, ncy] = fromScreen(left + width / 2, top + height / 2);
     const next = { cx: ncx, cy: ncy, hw: width / 2 / k, hh: height / 2 / k, angle: f.angle };
-    if (inside(geo, next)) onChange({ ...geo.toCrop(next), aspect });
+    if (inside(geo, next)) onChange({ ...geo.toCrop(next), aspect: d.flipped ?? d.aspect });
   };
   const end = () => { drag.current = null; setDragging(false); };
 
