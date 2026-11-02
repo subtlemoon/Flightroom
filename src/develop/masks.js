@@ -52,7 +52,7 @@ export const LOCAL_SECTIONS = [
 ];
 export const LOCAL_SLIDERS = LOCAL_SECTIONS.flatMap((g) => [...g.sliders, ...(g.grain || [])]);
 const SECTION_OF = Object.fromEntries(LOCAL_SECTIONS.flatMap((g) => [...g.sliders, ...(g.grain || [])].map((sl) => [sl.key, g.id])));
-const LOCAL_DEF = Object.fromEntries(LOCAL_SLIDERS.map((sl) => [sl.key, sl.def]));
+export const LOCAL_DEF = Object.fromEntries(LOCAL_SLIDERS.map((sl) => [sl.key, sl.def]));
 
 /** A mask's slider value, 0 when its section's eye is off. */
 export const adjOf = (m, k) => (m.off?.[SECTION_OF[k]] ? LOCAL_DEF[k] : m.adj?.[k] ?? LOCAL_DEF[k]);
