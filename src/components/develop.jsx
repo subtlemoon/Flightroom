@@ -240,8 +240,9 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
     const st = stageApi.current.stats?.(s);
     if (!st) return;
     const look = lookFor(opened?.info, s);
-    const exposure = Math.round(Math.min(4, Math.max(-4, Math.log2(0.17 / st.median) - look.exposure)) * 20) / 20;
-    const k = 2 ** (exposure + look.exposure);
+    const base = look.auto ?? look.exposure;
+    const exposure = Math.round(Math.min(4, Math.max(-4, Math.log2(0.17 / st.median) - base)) * 20) / 20;
+    const k = 2 ** (exposure + base);
     const hiStops = Math.log2(Math.max(st.p99 * k, 1e-4));
     const loStops = Math.log2(Math.max(st.p02 * k, 1e-5));
     const r = (v) => Math.round(Math.min(100, Math.max(-100, v)));

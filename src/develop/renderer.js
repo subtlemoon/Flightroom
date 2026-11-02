@@ -4,7 +4,7 @@
 import { VERT, GUIDE_DOWN, BLUR, FINAL, DISPLAY } from './shaders.js';
 import { LUT_SIZE } from './icc.js';
 import { colorTransform, inv3, mul3, neutralToXy, tempTintToXy } from './color.js';
-import { PP_TO_SRGB, SRGB_TO_PP, TONE_SIZE, adobeRendering, dcpTransform, hueSatFor, hueSatPixels, toneTable } from './adobe.js';
+import { BASELINE_EXPOSURE, PP_TO_SRGB, SRGB_TO_PP, TONE_SIZE, adobeRendering, dcpTransform, hueSatFor, hueSatPixels, toneTable } from './adobe.js';
 import { CURVE_SIZE, HUE_SIZE, calibrationMatrix, curveTable, gradeTints, hueTable } from './luts.js';
 import { MAX_MASKS, POINT_DEFAULT, adjOf, lumRange, maskRaster } from './masks.js';
 import { tonemapUniforms } from './tonemap.js';
@@ -30,7 +30,8 @@ export const LOOKS = {
 /** The base rendering: Lightroom's own profile when it's here (no extra contrast or colour), else the fitted look. */
 export function lookFor(info, s) {
   const r = adobeRendering(info, s.profile);
-  return r ? { exposure: r.exposure, contrast: 0, saturation: 1 } : LOOKS[s.profile] || LOOKS.adobe;
+  // auto: the exposure Auto tone aims with (the fitted look's, which the profile's brightness is matched to).
+  return r ? { exposure: r.exposure, contrast: 0, saturation: 1, auto: LOOKS.adobe.exposure + r.exposure - BASELINE_EXPOSURE } : LOOKS[s.profile] || LOOKS.adobe;
 }
 
 /** The white point of the settings: the camera's own for As Shot (unrounded, as Lightroom uses it). */

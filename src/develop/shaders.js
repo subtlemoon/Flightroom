@@ -11,7 +11,17 @@ precision highp sampler2D;
 const vec3 W709 = vec3(0.2126, 0.7152, 0.0722);
 uniform vec3 uWB;
 uniform mat3 uCam;
-vec3 toLinear(vec3 cam) { return uCam * min(max(cam, vec3(0.0)) * uWB, vec3(1.0)); }
+// Camera RGB (sensor white = 1) -> linear sRGB. Where the sensor clips, one
+// channel (usually green) stops while the others keep rising, which tints
+// bright skies and white clothes pink; as any channel nears clipping the
+// colour eases to neutral white, as raw converters' highlight handling does.
+vec3 toLinear(vec3 cam) {
+  vec3 c = max(cam, vec3(0.0));
+  vec3 bal = min(c * uWB, vec3(1.0));
+  float clip = smoothstep(0.88, 0.97, max(c.r, max(c.g, c.b)));
+  bal = mix(bal, vec3(max(bal.r, max(bal.g, bal.b))), clip);
+  return uCam * bal;
+}
 `;
 
 // Small, blurred copy of the photo's brightness (log2) and haze (darkest
@@ -250,7 +260,6 @@ vec3 decodeS(vec3 v) { return mix(v / 12.92, pow((max(v, vec3(0.0)) + 0.055) / 1
 // Linear sRGB <-> linear ProPhoto (D50, Bradford), columns.
 const mat3 SRGB_TO_PP = mat3(0.529346, 0.098374, 0.016883, 0.330073, 0.873461, 0.117672, 0.140581, 0.028165, 0.865444);
 const mat3 PP_TO_SRGB = mat3(2.034076, -0.228813, -0.00857, -0.727334, 1.23173, -0.153287, -0.306742, -0.002917, 1.161856);
-float disp(float y) { return encode(vec3(shoulder1(max(y, 0.0)))).r; }
 
 // Colours outside sRGB (a channel below 0) pulled in smoothly, keeping hue,
 // as ACES's gamut compression does: each channel's distance from the
@@ -357,6 +366,14 @@ vec3 easeWhite(vec3 x) {
   const float k = 0.95;
   return mix(x, k + (1.0 - k) * (1.0 - exp(-(x - k) / (1.0 - k))), step(k, x));
 }
+// How bright light y comes out on screen with the base rendering: the
+// profile's tone curve with Lightroom's profile, else the standard shoulder.
+// Highlights, Shadows, Clarity and masks' luminance ranges are weighted by it.
+float disp(float y) {
+  y = max(y, 0.0);
+  return uDcp > 0.5 && uToneMap < 0.5 ? encS1(toneAt(y)) : encode(vec3(shoulder1(y))).r;
+}
+
 // Colours outside the screen's range brought in by desaturating them, keeping
 // brightness; noise below black (brightness at or under 0) is black, not its
 // leftover positive channels, which showed as purple speckle in high-ISO shadows.
