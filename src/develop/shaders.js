@@ -107,8 +107,8 @@ uniform vec4 uTmB;        // tone mapper parameters B (filmic spline nodes)
 uniform float uTmHue;     // hue preservation factor (0..1)
 uniform float uHighlights, uShadows, uWhites, uBlacks;
 // Basic tone slider shapes (fitted to Lightroom; tools/lr-tone.md).
-const float HL_K = 0.5, HL_LO = 0.2, SH_K = 1.3, SH_HI = 0.65, SH_DEEP = 0.8, SH_C = 0.3, LIFT_EDGE = 1.0, LIFT_R = 4.0;
-const float WH_NEG = 0.15, WH_POS = 0.3, BL_NEG = 1.4, BL_POS = 0.55, BL_N = 2.36, BL_LIFT = 0.035, LIFT_GREY = 0.9;
+const float HL_K = 1.0, HL_LO = 0.2, SH_K = 1.3, SH_HI = 0.65, SH_DEEP = 0.8, SH_C = 0.3, HL_X = 0.5, SH_X = 0.2, LIFT_EDGE = 1.0, LIFT_R = 4.0;
+const float WH_NEG = 0.24, WH_POS = 0.3, BL_NEG = 1.4, BL_POS = 0.55, BL_N = 2.36, BL_LIFT = 0.035, LIFT_GREY = 0.9;
 uniform float uTexture, uClarity, uDehaze, uVibrance, uSaturation;
 uniform float uAirY;
 uniform float uSharpen, uSharpenRadius, uSharpenDetail, uSharpenMasking;
@@ -537,8 +537,10 @@ void main() {
   float bw = disp(exp2(lw + exposure));
   // Highlights and Shadows: weights and strengths fitted to Lightroom's measured
   // change per L* band at -100 / +100 (see tools/lr-tone.md).
-  base += highlights * HL_K * smoothstep(HL_LO, 1.0, bw);
-  float shLift = shadows * (SH_K * (1.0 - smoothstep(0.0, SH_HI, bw)) + SH_DEEP * (1.0 - smoothstep(0.0, 0.2, bw)));
+  // Sliders overlap as in Lightroom: with Contrast already pulling the brights
+  // down Highlights does less, and with Blacks lifting the darks Shadows does less.
+  base += highlights * HL_K * smoothstep(HL_LO, 1.0, bw) * (1.0 - HL_X * max(-(uContrastSat + LA.y), 0.0));
+  float shLift = shadows * (SH_K * (1.0 - smoothstep(0.0, SH_HI, bw)) + SH_DEEP * (1.0 - smoothstep(0.0, 0.2, bw))) * (1.0 - SH_X * max(blacks, 0.0));
   base += shLift;
   float mid = smoothstep(0.03, 0.35, bd) * (1.0 - smoothstep(0.8, 1.0, bd));
   detail *= max(0.0, 1.0 + clarity * 0.9 * mid);
@@ -589,7 +591,7 @@ void main() {
   // only (colours scale with it), so saturation stays.
   if (whites != 0.0 || blacks != 0.0) {
     float y = clamp(dot(d, W709), 0.0, 1.0), y2 = y;
-    if (whites < 0.0) y2 += whites * WH_NEG * y2 * y2;
+    if (whites < 0.0) y2 += whites * WH_NEG * y2 * y2 * y2;
     else if (whites > 0.0) y2 *= 1.0 + whites * WH_POS * y2;
     float dk = y2 * pow(1.0 - min(y2, 1.0), BL_N);
     // Positive Blacks also lifts the black point (fitted to a Lightroom export
