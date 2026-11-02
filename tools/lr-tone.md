@@ -32,10 +32,14 @@ Region differences, Flightroom minus Lightroom, as dL* / dC*:
 |---|---|---|---|---|---|---|---|---|
 | 2.9.2 (shoulder weighting) | 8.7 | +7.8/+1.0 | +9.2/+1.4 | -4.9/+7.3 | +4.5/+3.2 | -3.2/-4.0 | -1.9/-2.3 | +0.2/+2.4 |
 | 2.9.3 (tone-curve weighting) | 5.6 | -2.3/+3.4 | +0.4/+2.4 | -6.4/+6.7 | +4.0/+3.1 | -3.6/-4.4 | -2.5/-2.9 | -2.1/+2.2 |
+| 2.9.4 (Lightroom's Z 7II Adobe Standard .dcp) | 5.3 | -2.2/+3.2 | +0.6/+2.0 | -5.4/+4.6 | +5.9/+3.4 | -3.1/-4.8 | -1.4/-2.8 | -1.9/+1.9 |
 
-What's left depends on hue (reds, skin and blue-greys too strong, greens and
-yellows too weak, skin too dark): Adobe Standard's per-camera hue/saturation
-table, which only Lightroom's own profile file has.
+Lightroom's own profile (hue/sat map 90x30, look table 36x8x16, default tone
+curve) only closes a little of what's left, so most of it comes from the
+Basic/Presence sliders at this edit's extremes (Contrast -95, Highlights -93,
+Shadows +96, Texture -25, Clarity -14) and the S curve: Lightroom keeps more
+local contrast, a neutral sky and brighter faces. Next: Lightroom exports with
+fewer settings to fit each one.
 
 ## Targets
 

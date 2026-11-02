@@ -240,9 +240,9 @@ function builtInProfile(info) {
   return dcp;
 }
 
-// Lightroom's installed profiles render only once checked against Lightroom's
-// own output (tools/lr-tone.md); until then the built-in profile is used.
-let useInstalled = false;
+// Lightroom's installed profiles: checked against Lightroom's own export of
+// JWL_7451 with the Z 7II's Adobe Standard (tools/lr-tone.md).
+let useInstalled = true;
 export function setUseInstalledProfiles(on) { useInstalled = !!on; }
 
 /**
