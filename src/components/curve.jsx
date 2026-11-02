@@ -31,7 +31,7 @@ function histPath(all, channel, size) {
   let max = 1;
   for (let i = 2; i < 254; i++) max = Math.max(max, v(i));
   let d = `M0,${size}`;
-  for (let i = 0; i < 256; i++) d += `L${((i / 255) * size).toFixed(1)},${(size - Math.min(1, Math.sqrt(v(i) / max)) * size * 0.9).toFixed(1)}`;
+  for (let i = 0; i < 256; i++) d += `L${((i / 255) * size).toFixed(1)},${(size - Math.min(1, v(i) / max) * size * 0.9).toFixed(1)}`;
   return `${d}L${size},${size}Z`;
 }
 

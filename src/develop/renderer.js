@@ -669,6 +669,9 @@ export class Renderer {
     const gradeLum = [s.gShadowLum, s.gMidLum, s.gHighLum, s.gGlobalLum].map((v) => (v || 0) / 100);
     const gradeOn = [...tS, ...tM, ...tH, ...tG, ...gradeLum].some((v) => v !== 0);
     const defringe = s.removeCA ? 0.5 : 0;
+    // The vignette follows the crop even when the frame shown is another (the whole photo, in crop mode).
+    const crop = geo.frame(s.crop);
+    const out2vig = mm(inv3(geo.frameToOriented(crop)), mm(geo.frameToOriented(frame), out2frame));
     this.draw(this.final, target, {
       uSrc: this.src.tex,
       uHi: hi ? hi.tex : this.blank,
@@ -704,7 +707,8 @@ export class Renderer {
       uGrain: [(s.grain || 0) / 100, (0.5 + ((s.grainSize ?? 25) / 100) * 3.5) * Math.max(1, Math.max(geo.ow, geo.oh) / 4000), (s.grainRough ?? 50) / 100],
       uOut2Crop: glMat(out2frame),
       uPhotoPx: [1 / geo.sw, 1 / geo.sh],
-      uCropAspect: frame.hw / frame.hh,
+      uOut2Vig: glMat(out2vig),
+      uCropAspect: crop.hw / crop.hh,
       uBg: [0.2275, 0.2275, 0.2275],
       ...this.colorUniforms(info, s),
       uExposure: s.exposure + look.exposure,

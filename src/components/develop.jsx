@@ -1432,6 +1432,20 @@ function ShotLine({ meta }) {
   return <span className="muted">{[meta.iso && `ISO ${meta.iso}`, meta.focalLength && `${Math.round(meta.focalLength)}mm`, meta.fNumber && `f/${+meta.fNumber.toFixed(1)}`, fmtShutter(meta.exposure)].filter(Boolean).join('  ')}</span>;
 }
 
+// Each channel's counts through a short [1 4 6 4 1] filter: the histogram is
+// counted from a small copy of the photo, which leaves it ragged.
+function smoothBins(bins) {
+  return bins.map((b) => {
+    const out = new Float32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let t = 0, n = 0;
+      [1, 4, 6, 4, 1].forEach((k, j) => { const x = i + j - 2; if (x >= 0 && x < 256) { t += k * b[x]; n += k; } });
+      out[i] = t / n;
+    }
+    return out;
+  });
+}
+
 function Histogram() {
   const ref = useRef();
   const [bins, setBins] = useState(null);
@@ -1449,14 +1463,19 @@ function Histogram() {
     const ctx = c.getContext('2d');
     ctx.clearRect(0, 0, w, h);
     if (!bins) return;
+    // Drawn as Lightroom draws it: counts to scale (not a square root, which
+    // stretched the low parts of the histogram up), lightly smoothed, and the
+    // channels added so that where all three overlap the histogram is grey,
+    // two make yellow, cyan or magenta, and one shows its own colour.
+    const smooth = smoothBins(bins);
     let max = 1;
-    for (const b of bins) for (let i = 2; i < 254; i++) max = Math.max(max, b[i]);
+    for (const b of smooth) for (let i = 2; i < 254; i++) max = Math.max(max, b[i]);
     ctx.globalCompositeOperation = 'lighter';
-    ['rgba(255,70,70,0.75)', 'rgba(70,220,90,0.75)', 'rgba(80,130,255,0.8)'].forEach((col, ch) => {
-      ctx.fillStyle = col;
+    [[0.55, 0.08, 0.08], [0.08, 0.55, 0.08], [0.08, 0.08, 0.55]].forEach((col, ch) => {
+      ctx.fillStyle = `rgb(${col.map((v) => Math.round(v * 255)).join(',')})`;
       ctx.beginPath();
       ctx.moveTo(0, h);
-      for (let i = 0; i < 256; i++) ctx.lineTo((i / 255) * w, h - Math.min(1, Math.sqrt(bins[ch][i] / max)) * h * 0.95);
+      for (let i = 0; i < 256; i++) ctx.lineTo((i / 255) * w, h - Math.min(1, smooth[ch][i] / max) * h * 0.95);
       ctx.lineTo(w, h);
       ctx.fill();
     });

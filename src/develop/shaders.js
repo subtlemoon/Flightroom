@@ -85,6 +85,7 @@ uniform float uLensVig, uLensVigMid;
 uniform float uDefringeP, uDefringeG;
 uniform float uShadowTint;
 uniform vec2 uPhotoPx;    // 1 / photo size in full-resolution pixels
+uniform mat3 uOut2Vig;    // output pixel -> the crop (-1..1), for the vignette: in crop mode the stage shows the whole photo
 uniform float uCropAspect;
 uniform vec3 uBg;
 uniform float uExposure;
@@ -107,7 +108,7 @@ uniform vec4 uTmB;        // tone mapper parameters B (filmic spline nodes)
 uniform float uTmHue;     // hue preservation factor (0..1)
 uniform float uHighlights, uShadows, uWhites, uBlacks;
 // Basic tone slider shapes (fitted to Lightroom; tools/lr-tone.md).
-const float HL_K = 1.0, HL_LO = 0.2, SH_K = 1.3, SH_HI = 0.65, SH_DEEP = 0.8, SH_C = 0.3, HL_X = 0.5, SH_X = 0.2, LIFT_EDGE = 1.0, LIFT_R = 4.0;
+const float HL_K = 1.3, HL_LO = 0.35, HL_TOP = 0.55, HL_T0 = 0.65, HL_T1 = 0.85, SH_K = 1.3, SH_HI = 0.65, SH_DEEP = 0.8, SH_C = 0.3, HL_X = 0.5, SH_X = 0.2, LIFT_EDGE = 1.0, LIFT_R = 4.0;
 const float WH_NEG = 0.24, WH_POS = 0.3, BL_NEG = 1.4, BL_POS = 0.55, BL_N = 2.36, BL_LIFT = 0.035, LIFT_GREY = 0.9;
 uniform float uTexture, uClarity, uDehaze, uVibrance, uSaturation;
 uniform float uAirY;
@@ -539,7 +540,10 @@ void main() {
   // change per L* band at -100 / +100 (see tools/lr-tone.md).
   // Sliders overlap as in Lightroom: with Contrast already pulling the brights
   // down Highlights does less, and with Blacks lifting the darks Shadows does less.
-  base += highlights * HL_K * smoothstep(HL_LO, 1.0, bw) * (1.0 - HL_X * max(-(uContrastSat + LA.y), 0.0));
+  // Highlights eases off again on the brightest areas themselves (a bright
+  // sky), leaving those to Whites: Lightroom's -93 takes L* 70-75 down 14 but
+  // L* 80-85 only 10, so the sky keeps its gradient rather than piling up.
+  base += highlights * HL_K * smoothstep(HL_LO, 1.0, bw) * (1.0 - HL_TOP * smoothstep(HL_T0, HL_T1, bd)) * (1.0 - HL_X * max(-(uContrastSat + LA.y), 0.0));
   float shLift = shadows * (SH_K * (1.0 - smoothstep(0.0, SH_HI, bw)) + SH_DEEP * (1.0 - smoothstep(0.0, 0.2, bw))) * (1.0 - SH_X * max(blacks, 0.0));
   base += shLift;
   float mid = smoothstep(0.03, 0.35, bd) * (1.0 - smoothstep(0.8, 1.0, bd));
@@ -731,9 +735,10 @@ void main() {
     d = lum >= 0.0 ? 1.0 - (1.0 - d) * (1.0 - lum * 0.5) : d * (1.0 + lum * 0.5);
   }
 
-  // Vignette, measured from the centre of the cropped frame.
+  // Vignette, measured from the centre of the crop (also while the crop is being
+  // set, when the whole photo shows), as Lightroom's Post-Crop Vignetting is.
   if (uVignette != 0.0) {
-    vec2 q = (uOut2Crop * vec3(gl_FragCoord.xy, 1.0)).xy;
+    vec2 q = (uOut2Vig * vec3(gl_FragCoord.xy, 1.0)).xy;
     float r = uVigRound;
     vec2 qs = q * (r > 0.0 ? vec2(mix(1.0, uCropAspect, r), 1.0) / mix(1.0, max(uCropAspect, 1.0), r) : vec2(1.0));
     float pw = 2.0 + max(-r, 0.0) * 6.0;
