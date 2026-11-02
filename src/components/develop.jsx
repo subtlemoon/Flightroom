@@ -26,6 +26,7 @@ import { Geometry, LOOKS, Renderer, ap, constrainedCrop, fitScale, mat, mm, outT
 import { ExportModal } from './export.jsx';
 import { activeToneMap } from '../develop/tonemap.js';
 import { useRetouch } from './retouch.jsx';
+import { screenColorOn, screenProfile } from '../develop/icc.js';
 import { RetouchStage } from './rtstage.jsx';
 import { OptionsBar, RetouchPanels, ToolRail } from './rtpanels.jsx';
 import { MenuBar, RetouchDialogs } from './rtmenus.jsx';
@@ -762,6 +763,20 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
 
   const drawRef = useRef(draw);
   drawRef.current = draw;
+
+  // Colours corrected for this screen (Settings), as Lightroom does.
+  useEffect(() => {
+    let live = true;
+    const apply = () => screenProfile().then((p) => {
+      const r = rendererRef.current;
+      if (!live || !r) return;
+      r.setDisplay(screenColorOn() ? p.transform : null);
+      drawRef.current();
+    });
+    apply();
+    window.addEventListener('screen-color', apply);
+    return () => { live = false; window.removeEventListener('screen-color', apply); };
+  }, [glGen]);
 
   // Redraw when what's drawn changes, at most once per frame (other re-renders,
   // like the histogram arriving, don't redraw the photo).

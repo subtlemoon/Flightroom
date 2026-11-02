@@ -1,7 +1,8 @@
 // Draws a RAW photo with develop settings using WebGL2. The decoded photo lives
 // on the graphics card as half-float camera RGB; every redraw runs the whole
 // develop pipeline (shaders.js) for just the pixels on screen.
-import { VERT, GUIDE_DOWN, BLUR, FINAL } from './shaders.js';
+import { VERT, GUIDE_DOWN, BLUR, FINAL, DISPLAY } from './shaders.js';
+import { LUT_SIZE } from './icc.js';
 import { colorTransform, inv3, mul3 } from './color.js';
 import { CURVE_SIZE, HUE_SIZE, calibrationMatrix, curveTable, gradeTints, hueTable } from './luts.js';
 import { MAX_MASKS, POINT_DEFAULT, adjOf, lumRange, maskRaster } from './masks.js';
@@ -298,7 +299,7 @@ export class Renderer {
   dispose() {
     const gl = this.gl;
     this.disposed = true;
-    this.free(this.src); this.clearHi(); this.free(this.histTarget); this.free(this.prevTarget); this.free(this.lightTarget); this.free(this.thumbTarget);
+    this.free(this.src); this.clearHi(); this.free(this.histTarget); this.free(this.prevTarget); this.free(this.lightTarget); this.free(this.thumbTarget); this.setDisplay(null);
     for (const t of this.guide || []) this.free(t);
     gl.deleteTexture(this.curveTex); gl.deleteTexture(this.hueTex); gl.deleteTexture(this.blank);
     gl.deleteBuffer(this.quad);
@@ -491,6 +492,10 @@ export class Renderer {
    */
   render(info, s, geo, frame, out2frame, { target = null, showClip = false, maskView = null, live = null } = {}) {
     if (!this.src) return;
+    if (!target && this.display) {
+      this.renderScreen(info, s, geo, frame, out2frame, { showClip, maskView, live });
+      return;
+    }
     this.updateGuide(info, s);
     this.updateLuts(s);
     this.updateMasks(s, geo);
@@ -549,10 +554,40 @@ export class Renderer {
       this.lightTarget = this.target(w, h, gl.RGBA8);
     }
     this.render(info, s, geo, frame, outToFrame(w, h, frame, { ...view, scale: (view.scale * w) / W }), { ...opts, target: this.lightTarget });
+    if (this.display) { this.present(this.lightTarget); return; }
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.lightTarget.fb);
     gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
     gl.blitFramebuffer(0, 0, w, h, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.LINEAR);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  /**
+   * Corrects what the canvas shows for this screen (icc.js displayTransform),
+   * or stops correcting (null). Only the canvas: exports, the histogram and
+   * previews stay sRGB.
+   */
+  setDisplay(tr) {
+    const gl = this.gl;
+    if (this.display) { gl.deleteTexture(this.display.lut); gl.deleteProgram(this.display.prog.p); }
+    this.free(this.screenTarget);
+    this.screenTarget = null;
+    this.display = tr && !this.disposed ? { m: tr.m, lut: this.texture(gl.RGBA16F, LUT_SIZE, 1, gl.RGBA, gl.FLOAT, tr.lut), prog: program(gl, DISPLAY) } : null;
+  }
+
+  /** A screen-sized render, then corrected onto the canvas. */
+  renderScreen(info, s, geo, frame, out2frame, opts) {
+    const gl = this.gl, W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+    if (!this.screenTarget || this.screenTarget.w !== W || this.screenTarget.h !== H) {
+      this.free(this.screenTarget);
+      this.screenTarget = this.target(W, H);
+    }
+    this.render(info, s, geo, frame, out2frame, { ...opts, target: this.screenTarget });
+    this.present(this.screenTarget);
+  }
+
+  present(t) {
+    const gl = this.gl, d = this.display;
+    this.draw(d.prog, null, { uTex: t.tex, uLut: d.lut, uDispM: d.m, uSize: [gl.drawingBufferWidth, gl.drawingBufferHeight], uLutN: LUT_SIZE });
   }
 
   /** The developed photo; out2ori may be shifted (a clone's source), sharper may stand in for this.hi. */
@@ -722,6 +757,16 @@ export class Renderer {
   /** The colour on the canvas around (x, y) (canvas px, y up) as last drawn, 0-1. */
   readShown(x, y) {
     const gl = this.gl;
+    // With screen correction, the photo's own colours from before it.
+    const t = this.display && this.screenTarget;
+    if (t) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb);
+      const px = new Float32Array(9 * 4);
+      gl.readPixels(Math.max(0, x - 1), Math.max(0, y - 1), 3, 3, gl.RGBA, gl.FLOAT, px);
+      const c = [0, 0, 0];
+      for (let i = 0; i < 9; i++) for (let k = 0; k < 3; k++) c[k] += Math.min(1, Math.max(0, px[i * 4 + k])) / 9;
+      return c;
+    }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     const px = new Uint8Array(9 * 4);
     gl.readPixels(Math.max(0, x - 1), Math.max(0, y - 1), 3, 3, gl.RGBA, gl.UNSIGNED_BYTE, px);
