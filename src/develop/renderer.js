@@ -295,7 +295,7 @@ export class Renderer {
   dispose() {
     const gl = this.gl;
     this.disposed = true;
-    this.free(this.src); this.clearHi(); this.free(this.histTarget); this.free(this.prevTarget); this.free(this.lightTarget);
+    this.free(this.src); this.clearHi(); this.free(this.histTarget); this.free(this.prevTarget); this.free(this.lightTarget); this.free(this.thumbTarget);
     for (const t of this.guide || []) this.free(t);
     gl.deleteTexture(this.curveTex); gl.deleteTexture(this.hueTex); gl.deleteTexture(this.blank);
     gl.deleteBuffer(this.quad);
@@ -690,17 +690,17 @@ export class Renderer {
   }
 
   /** A small copy of the whole (cropped) photo, for the mask preview; pixels bottom row first. `later` as for histogram(). */
-  preview(info, s, geo, frame, w, h, maskView, later = false) {
+  preview(info, s, geo, frame, w, h, maskView, later = false, slot = 'prevTarget') {
     const gl = this.gl;
-    if (!this.prevTarget || this.prevTarget.w !== w || this.prevTarget.h !== h) {
-      this.free(this.prevTarget);
-      this.prevTarget = this.target(w, h, gl.RGBA8);
+    if (!this[slot] || this[slot].w !== w || this[slot].h !== h) {
+      this.free(this[slot]);
+      this[slot] = this.target(w, h, gl.RGBA8);
     }
     const saveHi = this.hi;
     this.hi = null;
-    this.render(info, s, geo, frame, outToFrame(w, h, frame, { scale: fitScale(w, h, frame), u: 0, v: 0 }), { target: this.prevTarget, maskView });
+    this.render(info, s, geo, frame, outToFrame(w, h, frame, { scale: fitScale(w, h, frame), u: 0, v: 0 }), { target: this[slot], maskView });
     this.hi = saveHi;
-    if (later) return this.readLater(this.prevTarget);
+    if (later) return this.readLater(this[slot]);
     const px = new Uint8Array(w * h * 4);
     gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
     return px;

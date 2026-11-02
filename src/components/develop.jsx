@@ -13,6 +13,7 @@ import { Filmstrip, photoRating } from './cull.jsx';
 import { imgUrl, ROTATION } from '../cull/previews.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
 import { cachedFolder, startAt, useFolder, usePosition } from '../cull/folder.js';
+import { pixelsToUrl, setDevelopedThumb } from '../develop/thumbs.js';
 import { keepSettings, session } from '../develop/session.js';
 import { createSaver } from '../develop/saver.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey } from '../cull/keys.js';
@@ -479,7 +480,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
               <p className="muted">{opened.error === 'notRaw' ? `${photo.name} is a JPEG. Pick a RAW file (NEF and most other cameras' RAW) to edit it here.` : opened.error}</p>
             </div>
           ) : photo ? (
-            <DevelopStage key={photo.id} photo={photo} meta={curMeta} info={info} s={shown} cropMode={crop} cropOverlay={cropOverlay} clip={clip}
+            <DevelopStage key={photo.id} photo={photo} meta={curMeta} info={info} s={shown} editS={s} cropMode={crop} cropOverlay={cropOverlay} clip={clip}
               onCrop={(c) => update({ crop: c })} apiRef={stageApi} nextPhoto={photos[index + way.current] || photos[index - way.current]} before={before} picker={picker}
               maskView={editing && !retouch ? mainMaskView : null} previewView={layout.nav && !retouch ? maskView(selMask, overlay) || 'none' : null}
               maskTool={editing && selPart && !picker && !retouch ? { part: selPart, brush, onPart: (patch) => acts.changePart(selMask.id, selPart.id, patch) } : null}
@@ -533,6 +534,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
 // --- the photo ---------------------------------------------------------------
 
 const PREVIEW_W = 224, PREVIEW_H = 168; // css px
+const THUMB_EDGE = 320; // device px, the filmstrip's developed thumbnails
 const fitEdge = () => Math.min(4096, Math.round(Math.max(screen.width, screen.height) * (window.devicePixelRatio || 1)));
 
 async function fetchFrame(url) {
@@ -596,7 +598,7 @@ function dropStage() {
   stage = null;
 }
 
-function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCrop, apiRef, nextPhoto, before, picker, maskView, previewView, maskTool, retouch }) {
+function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip, onCrop, apiRef, nextPhoto, before, picker, maskView, previewView, maskTool, retouch }) {
   const wrapRef = useRef();
   const hostRef = useRef();
   const canvasRef = useRef();
@@ -878,6 +880,23 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
     }, 60);
     return () => { live = false; clearTimeout(t); };
   }, [ready, s, info, previewKey]);
+  // The filmstrip's thumbnail of this photo as developed (crop and all), a
+  // moment after the last change.
+  useEffect(() => {
+    if (!ready || !editS || !info || !geo) return;
+    let live = true;
+    const t = setTimeout(() => {
+      const r = rendererRef.current;
+      if (!r) return;
+      const f = geo.frame(editS.crop);
+      const k = THUMB_EDGE / (2 * Math.max(f.hw, f.hh));
+      const w = Math.max(8, Math.round(2 * f.hw * k)), h = Math.max(8, Math.round(2 * f.hh * k));
+      r.preview(info, editS, geo, f, w, h, null, true, 'thumbTarget')
+        .then((px) => (live && px ? pixelsToUrl(px, w, h) : null))
+        .then((url) => { if (url) setDevelopedThumb(photo.id, url); }, () => {});
+    }, 400);
+    return () => { live = false; clearTimeout(t); };
+  }, [ready, editS, info]);
   useEffect(() => { apiRef.current.hist = hist; window.dispatchEvent(new CustomEvent('develop:hist', { detail: hist })); }, [hist]);
 
   // Zoom: the spot you click stays under the pointer, at 100%.

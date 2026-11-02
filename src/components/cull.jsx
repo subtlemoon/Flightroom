@@ -7,6 +7,7 @@ import { loadAnalysis, measure, saveAnalysis, suggest, upright } from '../cull/a
 import { Cancelled, measurePool } from '../cull/measure-pool.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
 import { cachedFolder, startAt, useFolder, usePosition } from '../cull/folder.js';
+import { useDevelopedThumb } from '../develop/thumbs.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zoomLevel } from '../cull/keys.js';
 
 // A photo in the culling view, as listed by the desktop side:
@@ -771,13 +772,15 @@ function FilmstripRow({ photos, index, meta, suggestions, onSelect, requestMeta,
 
 function Thumb({ photo, meta, suggested, active, picked, left, onClick }) {
   const [src, setSrc] = useState(() => imgUrl('thumb', photo.id));
+  // Edited in Develop this session: the photo as developed (already upright and cropped).
+  const developed = useDevelopedThumb(photo.id);
   const rating = photoRating(photo, meta);
-  const rot = ROTATION[meta?.orientation] || 0;
+  const rot = developed ? 0 : ROTATION[meta?.orientation] || 0;
   const onError = () => { if (src.startsWith(FILES)) thumbFallbackUrl(photo).then(setSrc, () => {}); };
   const onLoad = () => { if (!src.startsWith(FILES)) fallbackShown(photo); };
   return (
     <button className={`thumb${active ? ' active' : ''}${picked ? ' picked' : ''}`} style={{ left }} onClick={onClick} onMouseDown={(e) => e.preventDefault()} title={photo.name}>
-      <img src={src} alt="" decoding="async" draggable={false} onError={onError} onLoad={onLoad} style={rot ? { transform: `rotate(${rot}deg)` } : undefined} />
+      <img src={developed || src} alt="" decoding="async" draggable={false} onError={developed ? undefined : onError} onLoad={developed ? undefined : onLoad} style={rot ? { transform: `rotate(${rot}deg)` } : undefined} />
       {rating > 0 ? <span className="thumb-stars">{'★'.repeat(rating)}</span>
         : suggested > 0 && <span className="thumb-stars ghost" title="Suggested by auto-rate">{'☆'.repeat(suggested)}</span>}
     </button>

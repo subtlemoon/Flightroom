@@ -385,7 +385,7 @@ export class Composer {
       t.acc = [null, null];
       Object.defineProperty(t.acc, 0, { get: () => t.acc0 });
       Object.defineProperty(t.acc, 1, { get: () => t.acc1 });
-      if (this.sets.size >= 4) { // screen, light (while dragging), histogram, preview
+      if (this.sets.size >= 5) { // screen, light (while dragging), histogram, preview, filmstrip thumbnail
         const [old, o] = this.sets.entries().next().value;
         this.sets.delete(old);
         this.freeSet(o);
