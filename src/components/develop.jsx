@@ -1378,9 +1378,36 @@ function Histogram() {
   return <canvas className="dev-hist" ref={ref} title="Histogram. Corner boxes light up when shadows (left) or highlights (right) clip; press J to see where." />;
 }
 
+// --- icon tabs (Lightroom's "Adjust:" row) -----------------------------------------
+
+const TAB_ICONS = {
+  parametric: <svg viewBox="0 0 20 20"><path d="M3 16c4 0 4-12 7-12s3 6 7 6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /><path d="M3 12c4 0 5-6 8-6s3 3 6 3" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" opacity=".55" /></svg>,
+  point: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" fill="#e9ecf2" /></svg>,
+  red: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6" fill="none" stroke="#ff5f5f" strokeWidth="2" /></svg>,
+  green: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6" fill="none" stroke="#4fd46e" strokeWidth="2" /></svg>,
+  blue: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6" fill="none" stroke="#5c95ff" strokeWidth="2" /></svg>,
+  threeWay: <svg viewBox="0 0 20 20"><circle cx="10" cy="5.5" r="3.4" fill="#e9ecf2" /><circle cx="5.5" cy="13.5" r="3.4" fill="#e9ecf2" /><circle cx="14.5" cy="13.5" r="3.4" fill="#e9ecf2" /></svg>,
+  shadows: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" fill="#1b1e25" stroke="#e9ecf2" strokeWidth="1.6" /></svg>,
+  midtones: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" fill="#6b707b" stroke="#e9ecf2" strokeWidth="1.6" /></svg>,
+  highlights: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" fill="#e9ecf2" stroke="#e9ecf2" strokeWidth="1.6" /></svg>,
+  global: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" fill="none" stroke="#e9ecf2" strokeWidth="1.6" /><path d="M10 3.5a6.5 6.5 0 0 1 0 13z" fill="#e9ecf2" /></svg>,
+};
+
+// tabs: [key, icon, title], null = a divider.
+function IconTabs({ tabs, value, onChange }) {
+  return (
+    <div className="dev-icontabs">
+      <span className="muted">Adjust</span>
+      {tabs.map((t, i) => (t ? (
+        <button key={t[0]} className={value === t[0] ? 'on' : ''} title={t[2]} onClick={() => onChange(t[0])}>{TAB_ICONS[t[1]]}</button>
+      ) : <i key={`d${i}`} className="dev-icontabs-div" />))}
+    </div>
+  );
+}
+
 // --- tone curve ----------------------------------------------------------------
 
-const CURVE_MODES = [['parametric', 'Parametric'], ['curve', 'Point'], ['curveR', 'Red'], ['curveG', 'Green'], ['curveB', 'Blue']];
+const CURVE_MODES = [['parametric', 'parametric', 'Parametric curve'], ['curve', 'point', 'Point curve'], null, ['curveR', 'red', 'Red channel'], ['curveG', 'green', 'Green channel'], ['curveB', 'blue', 'Blue channel']];
 
 function ToneCurve({ s, set, update }) {
   const [mode, setMode] = useState(() => localStorage.getItem('flightroom-curve-mode') || 'parametric');
@@ -1388,9 +1415,7 @@ function ToneCurve({ s, set, update }) {
   const parametricMode = mode === 'parametric';
   return (
     <>
-      <div className="seg small full">
-        {CURVE_MODES.map(([k, label]) => <button key={k} className={mode === k ? 'on' : ''} onClick={() => pick(k)}>{label}</button>)}
-      </div>
+      <IconTabs tabs={CURVE_MODES} value={mode} onChange={pick} />
       <CurveEditor s={s} channel={parametricMode ? 'curve' : mode} readOnly={parametricMode} set={set} />
       {mode === 'curve' && (
         <div className="dev-line dev-wb"><span className="muted">Point curve</span>
@@ -1452,16 +1477,14 @@ function ColorMixer({ s, set }) {
 // --- color grading ---------------------------------------------------------------
 
 const WHEELS = [['gMid', 'Midtones'], ['gShadow', 'Shadows'], ['gHigh', 'Highlights'], ['gGlobal', 'Global']];
-const GRADE_VIEWS = [['3way', '3-Way'], ['gShadow', 'Shadows'], ['gMid', 'Midtones'], ['gHigh', 'Highlights'], ['gGlobal', 'Global']];
+const GRADE_VIEWS = [['3way', 'threeWay', '3-Way'], null, ['gShadow', 'shadows', 'Shadows'], ['gMid', 'midtones', 'Midtones'], ['gHigh', 'highlights', 'Highlights'], null, ['gGlobal', 'global', 'Global']];
 
 function ColorGrading({ s, set }) {
   const [view, setView] = useState('3way');
   const wheels = view === '3way' ? WHEELS.slice(0, 3) : WHEELS.filter(([k]) => k === view);
   return (
     <>
-      <div className="seg small full">
-        {GRADE_VIEWS.map(([k, label]) => <button key={k} className={view === k ? 'on' : ''} onClick={() => setView(k)}>{label}</button>)}
-      </div>
+      <IconTabs tabs={GRADE_VIEWS} value={view} onChange={setView} />
       <div className={`dev-wheels${view === '3way' ? '' : ' one'}`}>
         {wheels.map(([k, title]) => <Wheel key={k} k={k} title={title} s={s} set={set} big={view !== '3way'} />)}
       </div>
@@ -1502,13 +1525,12 @@ function Wheel({ k, title, s, set, big }) {
   return (
     <div className={`dev-wheel${k === 'gMid' ? ' wheel-mid' : ''}`}>
       <div className="dev-wheel-title">{title}</div>
-      <div className="dev-wheel-disc" ref={ref} title="Drag to tint; double-click to reset"
+      <div className="dev-wheel-disc" ref={ref} title={`Hue ${hue}, saturation ${sat}. Drag to tint (Shift: saturation only), double-click to reset`}
         onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); drag.current = {}; apply(e); }}
         onPointerMove={(e) => drag.current && apply(e)} onPointerUp={end} onLostPointerCapture={end}
         onDoubleClick={() => { set(`${k}Hue`, 0); set(`${k}Sat`, 0); }}>
         <span className="dev-wheel-knob" style={{ left: `${50 + Math.cos(a) * r * 50}%`, top: `${50 - Math.sin(a) * r * 50}%` }} />
       </div>
-      <div className="dev-wheel-read">H {hue}  ·  S {sat}</div>
       {big && <><Slider sl={SLIDER[`${k}Hue`]} value={hue} def={0} onSet={set} /><Slider sl={SLIDER[`${k}Sat`]} value={sat} def={0} onSet={set} /></>}
       <Slider sl={{ ...SLIDER[`${k}Lum`], gradient: 'lum' }} value={s[`${k}Lum`]} def={0} onSet={set} />
     </div>
