@@ -19,7 +19,7 @@ export function MyGearView({ store, onOpenGear, onBrowse, onCustom }) {
         <div className="grow">
           <div className="eyebrow">Library</div>
           <h1>My Gear</h1>
-          <p className="muted">{counts.body} bodies · {counts.lens} lenses · {counts.accessory} accessories</p>
+          <p className="muted">{counts.body} {counts.body === 1 ? 'body' : 'bodies'} · {counts.lens} {counts.lens === 1 ? 'lens' : 'lenses'} · {counts.accessory} {counts.accessory === 1 ? 'accessory' : 'accessories'}</p>
         </div>
         <button className="btn" onClick={onCustom}><Icon name="edit" size={16} />Add custom gear</button>
         <button className="btn btn-primary" onClick={onBrowse}><Icon name="plus" size={16} />Add from catalog</button>
@@ -60,7 +60,7 @@ export function CatalogView({ store, onOpenGear, onCustom }) {
           const owned = state.owned.includes(g.id);
           return (
             <GearCard key={g.id} item={g} owned={owned} onOpen={onOpenGear}
-              action={<button className={owned ? 'btn btn-sm' : 'btn btn-sm btn-primary'} onClick={() => actions.toggleOwned(g.id)}>
+              action={<button className="btn btn-sm" onClick={() => actions.toggleOwned(g.id)}>
                 <Icon name={owned ? 'check' : 'plus'} size={14} />{owned ? 'Owned' : 'Add'}</button>} />
           );
         })}
@@ -257,7 +257,7 @@ export function SettingsView({ store }) {
         <div className="update-row">
           <p className="muted grow start-page-text">The page Flightroom opens on.</p>
           <Dropdown value={state.settings.startPage || 'home'} onChange={(v) => actions.setSettings({ startPage: v })}
-            options={[...START_PAGES.map((p) => ({ value: p.id, label: p.label })), ...state.groups.map((g) => ({ value: `group:${g.id}`, label: `${g.icon} ${g.name}`, hint: 'Group' }))]} />
+            options={[...START_PAGES.map((p) => ({ value: p.id, label: p.label })), ...state.groups.map((g) => ({ value: `group:${g.id}`, label: g.name, hint: 'Group' }))]} />
         </div>
       </section>
       <CullingCard store={store} />

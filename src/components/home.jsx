@@ -1,4 +1,4 @@
-import { Icon } from './ui.jsx';
+import { GroupDot, Icon } from './ui.jsx';
 
 // Pages the app can open on (Settings > Start page). Groups are added by id.
 export const START_PAGES = [
@@ -22,11 +22,6 @@ export function startView(state) {
 
 const folderName = (f) => f.split(/[\\/]/).pop();
 
-const greeting = () => {
-  const h = new Date().getHours();
-  return h < 5 ? 'Late night' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
-};
-
 export function HomeView({ store, go, onOpenFolder }) {
   const { state, gear, news } = store;
   const recent = state.cull?.recent || [];
@@ -42,14 +37,14 @@ export function HomeView({ store, go, onOpenFolder }) {
     <div className="view home">
       <header className="view-head">
         <div className="grow">
-          <div className="eyebrow">{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</div>
-          <h1>{greeting()}</h1>
+          <div className="eyebrow">Home</div>
+          <h1>{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</h1>
         </div>
       </header>
 
       <div className="home-grid">
         <section className="home-card home-cull">
-          <div className="home-card-head"><Icon name="photo" size={18} /><h3>Culling</h3></div>
+          <div className="home-card-head"><Icon name="photo" size={16} /><h3>Culling</h3></div>
           {last ? (
             <>
               <div className="home-big">{folderName(last)}</div>
@@ -79,7 +74,7 @@ export function HomeView({ store, go, onOpenFolder }) {
         </section>
 
         <section className="home-card">
-          <div className="home-card-head"><Icon name="bag" size={18} /><h3>My kit</h3></div>
+          <div className="home-card-head"><Icon name="bag" size={16} /><h3>My kit</h3></div>
           <div className="home-big">{bodies.map((b) => `${b.brand} ${b.model}`).join(', ') || 'No camera yet'}</div>
           <p className="muted small">{lenses.length} lenses · {mine.length - bodies.length - lenses.length} accessories</p>
           <div className="home-list">
@@ -90,7 +85,7 @@ export function HomeView({ store, go, onOpenFolder }) {
 
         {month && (
           <section className="home-card">
-            <div className="home-card-head"><Icon name="news" size={18} /><h3>News · {month.title}</h3></div>
+            <div className="home-card-head"><Icon name="news" size={16} /><h3>News · {month.title}</h3></div>
             {month.forYou && <p className="home-text">{month.forYou}</p>}
             <p className="muted small">{month.items.length} announcements</p>
             <div className="row home-actions"><button className="btn" onClick={() => go({ name: 'news' })}>Read the news</button></div>
@@ -98,17 +93,17 @@ export function HomeView({ store, go, onOpenFolder }) {
         )}
 
         <section className="home-card">
-          <div className="home-card-head"><Icon name="grid" size={18} /><h3>Groups</h3></div>
+          <div className="home-card-head"><Icon name="grid" size={16} /><h3>Groups</h3></div>
           <div className="home-list">
             {state.groups.map((g) => (
               <button key={g.id} className="home-list-item" onClick={() => go({ name: 'group', groupId: g.id })}>
-                <span>{g.icon}</span><span className="grow">{g.name}</span><span className="muted small">{g.presets.length} presets</span>
+                <GroupDot color={g.color} /><span className="grow">{g.name}</span><span className="muted small">{g.presets.length} preset{g.presets.length === 1 ? '' : 's'}</span>
               </button>
             ))}
           </div>
         </section>
       </div>
-      <p className="muted small home-foot">You can choose which page Flightroom opens on in Settings.</p>
+      <p className="muted small home-foot">Choose the page Flightroom opens on in Settings</p>
     </div>
   );
 }

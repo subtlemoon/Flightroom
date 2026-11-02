@@ -1,7 +1,7 @@
 import { bridge as app } from './bridge.js';
 import { Component, Suspense, lazy, useEffect, useState } from 'react';
 import { useStore } from './store.js';
-import { Icon, PanelHandle } from './components/ui.jsx';
+import { GroupDot, Icon, PanelHandle } from './components/ui.jsx';
 import { toggle, toggleSides, useLayout } from './layout.js';
 import { GearDetail, GearForm } from './components/gear.jsx';
 import { GroupForm, GroupView, PresetView } from './components/groups.jsx';
@@ -33,7 +33,7 @@ export default function App() {
 
   const usedIn = (id) => state.groups.flatMap((g) => g.presets
     .filter((p) => [...p.bodyIds, ...p.lensIds, ...p.accessoryIds].includes(id))
-    .map((p) => `${g.icon} ${g.name} › ${p.name}`));
+    .map((p) => `${g.name} › ${p.name}`));
 
   let main;
   if (view.name === 'home') {
@@ -84,7 +84,7 @@ export default function App() {
     <div className={`app${rail ? ' rail' : layout.nav ? '' : ' nav-hidden'}`}>
       <nav className="sidebar" aria-hidden={!rail && !layout.nav}>
         <div className="logo">
-          <div className="logo-mark"><Icon name="lens" size={20} /></div>
+          <div className="logo-mark"><Icon name="lens" size={18} /></div>
           <div><div className="logo-name">Flightroom</div><div className="logo-sub">Cull · develop · plan</div></div>
         </div>
         {navBtn('home', 'Home', 'home')}
@@ -99,9 +99,9 @@ export default function App() {
         <div className="nav-label">Groups<button className="icon-btn tiny" onClick={() => setNewGroup(true)} aria-label="New group"><Icon name="plus" size={14} /></button></div>
         <div className="group-list">
           {state.groups.map((g) => (
-            <button key={g.id} className={`nav-item group${view.name === 'group' && view.groupId === g.id ? ' active' : ''}`} style={{ '--accent': g.color }}
+            <button key={g.id} className={`nav-item group${view.name === 'group' && view.groupId === g.id ? ' active' : ''}`}
               onClick={() => setView({ name: 'group', groupId: g.id })} title={rail ? g.name : undefined}>
-              <span className="group-emoji">{g.icon}</span><span className="grow">{g.name}</span><span className="nav-count">{g.presets.length}</span>
+              <span className="nav-dot"><GroupDot color={g.color} /></span><span className="grow">{g.name}</span><span className="nav-count">{g.presets.length}</span>
             </button>
           ))}
         </div>
@@ -170,8 +170,8 @@ function UpdateReady() {
   }, [bridge]);
   if (status?.state !== 'ready') return null;
   return (
-    <div className="update-ready">
-      <div className="grow"><div className="update-ready-title">Update ready</div><div className="nav-sub">{status.message.replace(' will install when you close Flightroom', '')}</div></div>
+    <div className="update-box">
+      <div className="grow"><div className="update-box-title">Update ready</div><div className="nav-sub">{status.message.replace(' will install when you close Flightroom', '')}</div></div>
       <button className="btn btn-sm btn-primary" onClick={() => bridge.installUpdate()}>Restart</button>
     </div>
   );

@@ -123,7 +123,7 @@ const paths = {
 
 export function Icon({ name, size = 18 }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {paths[name]}
     </svg>
   );
@@ -140,6 +140,9 @@ export function PanelHandle({ side, open, onClick, title }) {
     </button>
   );
 }
+
+// A group's colour: groups are told apart by a small dot, not an emoji.
+export const GroupDot = ({ color }) => <span className="group-dot" style={{ background: color }} />;
 
 export const LEVEL_META = {
   ok: { label: 'Compatible', short: 'OK', sym: '✓' },
