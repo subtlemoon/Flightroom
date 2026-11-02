@@ -24,6 +24,12 @@ fn handle(app: &tauri::AppHandle, req: &tauri::http::Request<Vec<u8>>) -> photos
     }
 }
 
+/// WebView2 switches for every window (all windows share one browser, so the
+/// same list each time). wry's defaults first, which setting any replaces;
+/// then the fast graphics card on laptops with two: WebView2 otherwise draws
+/// on the built-in Intel/AMD one even when a GeForce or Radeon is there.
+const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --force_high_performance_gpu";
+
 fn main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
     #[cfg_attr(not(windows), allow(unused_variables))]
     let win = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
@@ -32,6 +38,7 @@ fn main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         .min_inner_size(960.0, 640.0)
         .background_color(tauri::window::Color(11, 13, 18, 255))
         .disable_drag_drop_handler()
+        .additional_browser_args(BROWSER_ARGS)
         .build()?;
     #[cfg(windows)]
     {
@@ -75,6 +82,7 @@ fn updating_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         .skip_taskbar(true)
         .center()
         .background_color(tauri::window::Color(11, 13, 18, 255))
+        .additional_browser_args(BROWSER_ARGS)
         .build()?;
     Ok(())
 }

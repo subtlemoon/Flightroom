@@ -380,6 +380,8 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
       if (k === 'w' && ratingForKey(keys, e.key) === undefined) { if (s) setPicking((p) => (p === 'wb' ? false : 'wb')); return; }
       if (k === 'g' && onCull && ratingForKey(keys, e.key) === undefined) { onCull(); return; }
       if (k === 'r') { if (s) setCrop((c) => !c); return; }
+      // X while cropping: the ratio between landscape and portrait, as in Lightroom.
+      if (k === 'x' && crop && s && geo && ratingForKey(keys, e.key) === undefined) { cropTools(geo, s.crop, (c) => update({ crop: c })).flip(); return; }
       // Masks: K brush, M linear, Shift+M radial, O overlay, [ ] brush size.
       const free = ratingForKey(keys, e.key) === undefined;
       if (s && free && !before) {
@@ -577,9 +579,14 @@ function stageRenderer() {
   if (!stage || stage.renderer.gl.isContextLost()) {
     const canvas = document.createElement('canvas');
     canvas.style.width = canvas.style.height = '100%';
-    stage = { canvas, renderer: new Renderer(canvas) };
+    stage = { canvas, renderer: new Renderer(canvas, { onScreen: true }) };
   }
   return stage;
+}
+// After the context comes back from a reset: everything on the card is gone, so a new renderer.
+function restoreStage() {
+  stage.renderer = new Renderer(stage.canvas, { onScreen: true });
+  return stage.renderer;
 }
 function dropStage() {
   if (!stage) return;
@@ -597,7 +604,12 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [ready, setReady] = useState(false); // RAW on the graphics card
   const [error, setError] = useState('');
+  const [glGen, setGlGen] = useState(0); // counts graphics resets survived
   const [view, setView] = useState(null); // null = fit; { scale (oriented px -> css px), u, v }
+  // A zoom is relative to the crop, so a new crop (or going in and out of
+  // cropping) starts again from the whole cropped photo, as in Lightroom.
+  const cropKey = s?.crop && JSON.stringify(s.crop);
+  useEffect(() => setView(null), [cropMode, cropKey]);
   const [hist, setHist] = useState(null);
   const drag = useRef(null);
   const hiReq = useRef(0);
@@ -618,9 +630,30 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
     hostRef.current.appendChild(st.canvas);
     canvasRef.current = st.canvas;
     rendererRef.current = st.renderer;
-    const lost = (e) => { e.preventDefault(); setError('The graphics card stopped the photo renderer'); setReady(false); };
+    // Windows resets a graphics driver that stops answering; the browser then
+    // hands the context back, and the photo is put on the card again. Only if
+    // that doesn't happen does the stage give up.
+    let giveUp = 0;
+    const lost = (e) => {
+      e.preventDefault();
+      setReady(false);
+      giveUp = setTimeout(() => setError('The graphics card stopped the photo renderer'), 8000);
+    };
+    const restored = () => {
+      clearTimeout(giveUp);
+      try { rendererRef.current = restoreStage(); } catch (err) { setError(String(err.message || err)); return; }
+      setError('');
+      setGlGen((g) => g + 1);
+    };
     st.canvas.addEventListener('webglcontextlost', lost);
-    return () => { st.canvas.removeEventListener('webglcontextlost', lost); st.canvas.remove(); rendererRef.current = null; };
+    st.canvas.addEventListener('webglcontextrestored', restored);
+    return () => {
+      clearTimeout(giveUp);
+      st.canvas.removeEventListener('webglcontextlost', lost);
+      st.canvas.removeEventListener('webglcontextrestored', restored);
+      st.canvas.remove();
+      rendererRef.current = null;
+    };
   }, []);
 
   // How much AI Denoise to show; slider moves are let settle before the photo is fetched again.
@@ -646,7 +679,7 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
       if (nextPhoto?.raw) fetch(app.develop.imageUrl(nextPhoto, fitEdge(), true)).catch(() => {});
     }, (err) => live && setError(String(err.message || err)));
     return () => { live = false; };
-  }, [!!info, dn]);
+  }, [!!info, dn, glGen]);
 
   const geo = useMemo(() => info && new Geometry(info.width, info.height, info.orientation), [info]);
   // In crop mode the whole photo shows (turned by the straighten angle) with the crop on top.
@@ -708,7 +741,7 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
 
   // A Retouch stroke being painted; dropped once the settings hold it.
   const liveRef = useRef(null);
-  const draw = () => {
+  const draw = (light = false) => {
     const r = rendererRef.current;
     const c = canvasRef.current;
     if (!r || !ready || !s || !info || !frame || !W || !H) return;
@@ -717,7 +750,12 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
     let live = liveRef.current;
     // Dropped once the settings hold the stroke (or the moved layer's place).
     if (live && s.layers?.some((l) => (live.op ? l.ops.includes(live.op) || l.mask?.ops.includes(live.op) : l.id === live.layerId && l.tf === live.tf))) live = liveRef.current = null;
-    r.render(info, s, geo, frame, outToFrame(W, H, frame, v), { showClip: clip, maskView, live });
+    const opts = { showClip: clip, maskView, live };
+    if (light && !live && !r.keepsUp) r.renderLight(info, s, geo, frame, W, H, v, opts);
+    else {
+      r.render(info, s, geo, frame, outToFrame(W, H, frame, v), opts);
+      r.timeFrame();
+    }
   };
 
   const drawRef = useRef(draw);
@@ -725,15 +763,30 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
 
   // Redraw when what's drawn changes, at most once per frame (other re-renders,
   // like the histogram arriving, don't redraw the photo).
+  // While a setting keeps changing (a slider or the curve being dragged) on
+  // graphics too slow for full-size frames (renderer.keepsUp), the frames are
+  // drawn light (renderer.renderLight), then once in full when it stops:
+  // built-in graphics (Intel Iris Xe) fell behind and Windows reset the
+  // driver, blacking out the screen for a few seconds.
   const raf = useRef(0);
   const drawn = useRef(null);
+  const lastChange = useRef(0);
+  const fullTimer = useRef(0);
   useEffect(() => {
     const key = [ready, s, info, frame, W, H, v.scale, v.u, v.v, clip, maskView && JSON.stringify(maskView)];
-    if (drawn.current && key.every((k, i) => k === drawn.current[i])) return;
+    const prev = drawn.current;
+    if (prev && key.every((k, i) => k === prev[i])) return;
+    const settingsOnly = prev && key.every((k, i) => i === 1 || k === prev[i]);
+    const now = performance.now();
+    const light = settingsOnly && now - lastChange.current < 150;
+    if (settingsOnly) lastChange.current = now;
     drawn.current = key;
     cancelAnimationFrame(raf.current);
-    raf.current = requestAnimationFrame(draw);
+    clearTimeout(fullTimer.current);
+    raf.current = requestAnimationFrame(() => draw(light));
+    if (light && !rendererRef.current?.keepsUp) fullTimer.current = setTimeout(() => drawRef.current(), 200);
   });
+  useEffect(() => () => { cancelAnimationFrame(raf.current); clearTimeout(fullTimer.current); }, []);
 
   // Retouch: a stroke shown while it's painted, at most once per frame.
   const liveRaf = useRef(0);
@@ -1016,6 +1069,13 @@ function cropTools(geo, crop, onChange) {
       const r = f.hw >= f.hh ? Math.max(ratio, 1 / ratio) : Math.min(ratio, 1 / ratio);
       onChange({ ...geo.toCrop(fitInside(geo, { ...f, hh: f.hw / r })), aspect: r });
     },
+    // Landscape <-> portrait about the centre, kept inside the photo (a free crop turns as it is).
+    flip: () => {
+      const r = aspect === 0 ? f.hh / f.hw : 1 / (aspect || geo.ow / geo.oh);
+      const area = f.hw * f.hh;
+      const hw = Math.sqrt(area * r), hh = hw / r;
+      onChange({ ...geo.toCrop(fitInside(geo, { ...f, hw, hh })), aspect: aspect === 0 ? 0 : r });
+    },
   };
 }
 
@@ -1035,7 +1095,9 @@ function CropOverlay({ geo, view, k, size, crop, onChange, overlay }) {
     e.preventDefault();
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
-    drag.current = { mode, x: e.clientX, y: e.clientY, box: { ...box } };
+    // The ratio the drag starts from (the photo's own unless set; 0 = free).
+    const ratio = aspect || (aspect === 0 ? 0 : geo.ow / geo.oh);
+    drag.current = { mode, x: e.clientX, y: e.clientY, box: { ...box }, ratio, aspect };
     setDragging(true);
   };
   const move = (e) => {
@@ -1050,17 +1112,24 @@ function CropOverlay({ geo, view, k, size, crop, onChange, overlay }) {
       if (d.mode.includes('t')) { top += dy; height -= dy; }
       if (d.mode.includes('b')) height += dy;
       if (width < 24 || height < 24) return;
-      const ratio = aspect || (aspect === 0 ? 0 : geo.ow / geo.oh);
+      let ratio = d.ratio;
+      const corner = d.mode.length === 2;
+      // Like Lightroom: a corner pulled past the diagonal turns a locked
+      // ratio between landscape and portrait.
+      if (ratio && corner && Math.abs(ratio - 1) > 1e-3 && (height > width) !== (ratio < 1)) ratio = 1 / ratio;
       if (ratio) {
-        // Keep the ratio, anchored on the opposite side.
-        const h2 = width / ratio;
-        if (d.mode.includes('t')) top += height - h2;
-        height = h2;
+        // Keep the ratio from the side the pointer leads, anchored on the opposite side.
+        if (d.mode === 't' || d.mode === 'b' || (corner && ratio < 1)) width = height * ratio;
+        else height = width / ratio;
+        if (d.mode.includes('l')) left = d.box.left + d.box.width - width;
+        if (d.mode.includes('t')) top = d.box.top + d.box.height - height;
       }
+      if (ratio !== d.ratio) d.flipped = ratio;
+      else d.flipped = null;
     }
     const [ncx, ncy] = fromScreen(left + width / 2, top + height / 2);
     const next = { cx: ncx, cy: ncy, hw: width / 2 / k, hh: height / 2 / k, angle: f.angle };
-    if (inside(geo, next)) onChange({ ...geo.toCrop(next), aspect });
+    if (inside(geo, next)) onChange({ ...geo.toCrop(next), aspect: d.flipped ?? d.aspect });
   };
   const end = () => { drag.current = null; setDragging(false); };
 
@@ -1309,9 +1378,36 @@ function Histogram() {
   return <canvas className="dev-hist" ref={ref} title="Histogram. Corner boxes light up when shadows (left) or highlights (right) clip; press J to see where." />;
 }
 
+// --- icon tabs (Lightroom's "Adjust:" row) -----------------------------------------
+
+const TAB_ICONS = {
+  parametric: <svg viewBox="0 0 20 20"><path d="M3 16c4 0 4-12 7-12s3 6 7 6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /><path d="M3 12c4 0 5-6 8-6s3 3 6 3" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" opacity=".55" /></svg>,
+  point: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" fill="#e9ecf2" /></svg>,
+  red: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6" fill="none" stroke="#ff5f5f" strokeWidth="2" /></svg>,
+  green: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6" fill="none" stroke="#4fd46e" strokeWidth="2" /></svg>,
+  blue: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6" fill="none" stroke="#5c95ff" strokeWidth="2" /></svg>,
+  threeWay: <svg viewBox="0 0 20 20"><circle cx="10" cy="5.5" r="3.4" fill="#e9ecf2" /><circle cx="5.5" cy="13.5" r="3.4" fill="#e9ecf2" /><circle cx="14.5" cy="13.5" r="3.4" fill="#e9ecf2" /></svg>,
+  shadows: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" fill="#1b1e25" stroke="#e9ecf2" strokeWidth="1.6" /></svg>,
+  midtones: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" fill="#6b707b" stroke="#e9ecf2" strokeWidth="1.6" /></svg>,
+  highlights: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" fill="#e9ecf2" stroke="#e9ecf2" strokeWidth="1.6" /></svg>,
+  global: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" fill="none" stroke="#e9ecf2" strokeWidth="1.6" /><path d="M10 3.5a6.5 6.5 0 0 1 0 13z" fill="#e9ecf2" /></svg>,
+};
+
+// tabs: [key, icon, title], null = a divider.
+function IconTabs({ tabs, value, onChange }) {
+  return (
+    <div className="dev-icontabs">
+      <span className="muted">Adjust</span>
+      {tabs.map((t, i) => (t ? (
+        <button key={t[0]} className={value === t[0] ? 'on' : ''} title={t[2]} onClick={() => onChange(t[0])}>{TAB_ICONS[t[1]]}</button>
+      ) : <i key={`d${i}`} className="dev-icontabs-div" />))}
+    </div>
+  );
+}
+
 // --- tone curve ----------------------------------------------------------------
 
-const CURVE_MODES = [['parametric', 'Parametric'], ['curve', 'Point'], ['curveR', 'Red'], ['curveG', 'Green'], ['curveB', 'Blue']];
+const CURVE_MODES = [['parametric', 'parametric', 'Parametric curve'], ['curve', 'point', 'Point curve'], null, ['curveR', 'red', 'Red channel'], ['curveG', 'green', 'Green channel'], ['curveB', 'blue', 'Blue channel']];
 
 function ToneCurve({ s, set, update }) {
   const [mode, setMode] = useState(() => localStorage.getItem('flightroom-curve-mode') || 'parametric');
@@ -1319,9 +1415,7 @@ function ToneCurve({ s, set, update }) {
   const parametricMode = mode === 'parametric';
   return (
     <>
-      <div className="seg small full">
-        {CURVE_MODES.map(([k, label]) => <button key={k} className={mode === k ? 'on' : ''} onClick={() => pick(k)}>{label}</button>)}
-      </div>
+      <IconTabs tabs={CURVE_MODES} value={mode} onChange={pick} />
       <CurveEditor s={s} channel={parametricMode ? 'curve' : mode} readOnly={parametricMode} set={set} />
       {mode === 'curve' && (
         <div className="dev-line dev-wb"><span className="muted">Point curve</span>
@@ -1383,16 +1477,14 @@ function ColorMixer({ s, set }) {
 // --- color grading ---------------------------------------------------------------
 
 const WHEELS = [['gMid', 'Midtones'], ['gShadow', 'Shadows'], ['gHigh', 'Highlights'], ['gGlobal', 'Global']];
-const GRADE_VIEWS = [['3way', '3-Way'], ['gShadow', 'Shadows'], ['gMid', 'Midtones'], ['gHigh', 'Highlights'], ['gGlobal', 'Global']];
+const GRADE_VIEWS = [['3way', 'threeWay', '3-Way'], null, ['gShadow', 'shadows', 'Shadows'], ['gMid', 'midtones', 'Midtones'], ['gHigh', 'highlights', 'Highlights'], null, ['gGlobal', 'global', 'Global']];
 
 function ColorGrading({ s, set }) {
   const [view, setView] = useState('3way');
   const wheels = view === '3way' ? WHEELS.slice(0, 3) : WHEELS.filter(([k]) => k === view);
   return (
     <>
-      <div className="seg small full">
-        {GRADE_VIEWS.map(([k, label]) => <button key={k} className={view === k ? 'on' : ''} onClick={() => setView(k)}>{label}</button>)}
-      </div>
+      <IconTabs tabs={GRADE_VIEWS} value={view} onChange={setView} />
       <div className={`dev-wheels${view === '3way' ? '' : ' one'}`}>
         {wheels.map(([k, title]) => <Wheel key={k} k={k} title={title} s={s} set={set} big={view !== '3way'} />)}
       </div>
@@ -1412,22 +1504,33 @@ function Wheel({ k, title, s, set, big }) {
     if (h < 0) h += 360;
     return [h % 360, Math.min(100, Math.round(Math.hypot(x, y) * 100))];
   };
+  // One change per screen frame, however fast the mouse reports.
   const apply = (e) => {
     const [h, sa] = at(e);
-    if (!e.shiftKey) set(`${k}Hue`, h);
+    const d = drag.current;
+    d.want = [e.shiftKey ? null : h, sa];
+    if (!d.raf) d.raf = requestAnimationFrame(() => { d.raf = 0; commit(d); });
+  };
+  const commit = (d) => {
+    const [h, sa] = d.want;
+    if (h !== null) set(`${k}Hue`, h);
     set(`${k}Sat`, sa);
+  };
+  const end = () => {
+    const d = drag.current;
+    drag.current = null;
+    if (d?.raf) { cancelAnimationFrame(d.raf); commit(d); }
   };
   const a = (hue * Math.PI) / 180, r = sat / 100;
   return (
     <div className={`dev-wheel${k === 'gMid' ? ' wheel-mid' : ''}`}>
       <div className="dev-wheel-title">{title}</div>
-      <div className="dev-wheel-disc" ref={ref} title="Drag to tint; double-click to reset"
-        onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); drag.current = true; apply(e); }}
-        onPointerMove={(e) => drag.current && apply(e)} onPointerUp={() => { drag.current = null; }}
+      <div className="dev-wheel-disc" ref={ref} title={`Hue ${hue}, saturation ${sat}. Drag to tint (Shift: saturation only), double-click to reset`}
+        onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); drag.current = {}; apply(e); }}
+        onPointerMove={(e) => drag.current && apply(e)} onPointerUp={end} onLostPointerCapture={end}
         onDoubleClick={() => { set(`${k}Hue`, 0); set(`${k}Sat`, 0); }}>
         <span className="dev-wheel-knob" style={{ left: `${50 + Math.cos(a) * r * 50}%`, top: `${50 - Math.sin(a) * r * 50}%` }} />
       </div>
-      <div className="dev-wheel-read">H {hue}  ·  S {sat}</div>
       {big && <><Slider sl={SLIDER[`${k}Hue`]} value={hue} def={0} onSet={set} /><Slider sl={SLIDER[`${k}Sat`]} value={sat} def={0} onSet={set} /></>}
       <Slider sl={{ ...SLIDER[`${k}Lum`], gradient: 'lum' }} value={s[`${k}Lum`]} def={0} onSet={set} />
     </div>

@@ -263,6 +263,9 @@ float vnoise(vec2 q) {
 }
 
 void main() {
+  // Outside the crop (zoomed in and panned past its edge): background.
+  vec2 cq = (uOut2Crop * vec3(gl_FragCoord.xy, 1.0)).xy;
+  if (abs(cq.x) > 1.001 || abs(cq.y) > 1.001) { o = vec4(uBg, 1.0); return; }
   vec2 ori = (uOut2Ori * vec3(gl_FragCoord.xy, 1.0)).xy;
   // Transform (perspective), then the lens: from the finished photo back to the sensor.
   vec2 n = (ori - uOriCenter) / uOriHalf;

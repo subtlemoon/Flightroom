@@ -505,7 +505,10 @@ kbd { font: inherit; font-size: 10.5px; padding: 1px 5px; border-radius: 5px; bo
 .dev-curve line.diag { stroke: rgba(255,255,255,.12); stroke-dasharray: 3 4; }
 .dev-curve path { fill: none; stroke: #eef1f6; stroke-width: 1.6; }
 .dev-curve circle { fill: #0b0d12; stroke: #eef1f6; stroke-width: 1.6; }
-.dev-curve-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+.dev-curve svg path.hist { fill: rgba(238, 241, 246, .1); stroke: none; }
+.dev-curve.ch-r svg path.hist { fill: rgba(255, 106, 106, .14); } .dev-curve.ch-g svg path.hist { fill: rgba(93, 220, 122, .12); } .dev-curve.ch-b svg path.hist { fill: rgba(106, 160, 255, .14); }
+.dev-curve path.combined { stroke: rgba(238, 241, 246, .35); stroke-width: 1.2; stroke-dasharray: 4 3; }
+.dev-curve-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 28px; margin-top: 4px; }
 .dev-mixer { display: flex; flex-direction: column; gap: 2px; }
 .dev-mixer .seg { margin-bottom: 6px; }
 .crop-shade { position: absolute; inset: 0; background: rgba(0,0,0,.55); pointer-events: none; }
@@ -555,7 +558,7 @@ kbd { font: inherit; font-size: 10.5px; padding: 1px 5px; border-radius: 5px; bo
 .dev-check input { accent-color: var(--accent); }
 .seg.full { display: flex; }
 .seg.full button { flex: 1; padding: 4px 4px; }
-.dev-curve-read { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dev-curve-read { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .dev-curve.ch-r path { stroke: #ff6a6a; } .dev-curve.ch-g path { stroke: #5ddc7a; } .dev-curve.ch-b path { stroke: #6aa0ff; }
 .dev-curve.readonly svg { cursor: default; }
 .dev-dots { display: flex; justify-content: space-between; margin: 4px 2px 6px; }
@@ -572,7 +575,17 @@ kbd { font: inherit; font-size: 10.5px; padding: 1px 5px; border-radius: 5px; bo
   background: radial-gradient(circle, #8a8f9a 0%, rgba(138,143,154,0) 70%), conic-gradient(from 90deg, #f44, #fa4, #ff4, #4f4, #4ff, #44f, #f4f, #f44); box-shadow: inset 0 0 0 1px rgba(0,0,0,.5); }
 .dev-wheel-disc::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: rgba(11,13,18,.35); }
 .dev-wheel-knob { position: absolute; z-index: 1; width: 10px; height: 10px; margin: -5px; border-radius: 50%; border: 2px solid #fff; background: rgba(0,0,0,.4); pointer-events: none; }
-.dev-wheel-read { font-size: 10.5px; color: var(--muted); text-align: center; font-variant-numeric: tabular-nums; }
+.dev-wheel .dev-slider { grid-template-columns: 0 1fr 40px; column-gap: 0; }
+.dev-wheel .dev-slider-value { width: 40px; }
+.dev-wheel .dev-slider-label { display: none; }
+.dev-icontabs { display: flex; align-items: center; justify-content: center; gap: 2px; margin: 2px 0 6px; }
+.dev-icontabs > .muted { font-size: 12px; margin-right: 6px; }
+.dev-icontabs button { position: relative; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: #e9ecf2; cursor: pointer; opacity: .6; }
+.dev-icontabs button svg { width: 19px; height: 19px; }
+.dev-icontabs button:hover { opacity: 1; background: rgba(255, 255, 255, .06); }
+.dev-icontabs button.on { opacity: 1; }
+.dev-icontabs button.on::after { content: ''; position: absolute; bottom: -3px; left: 50%; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: #e9ecf2; }
+.dev-icontabs-div { width: 1px; height: 16px; margin: 0 5px; background: var(--line); }
 .dev-track.grad-hue-red::before { background: linear-gradient(90deg, #ff3d8b, #ff4040, #ff9a3d); }
 .dev-track.grad-hue-green::before { background: linear-gradient(90deg, #b8e03d, #3ddc6a, #3ddcc0); }
 .dev-track.grad-hue-blue::before { background: linear-gradient(90deg, #3dd0ff, #3d6bff, #9a3dff); }

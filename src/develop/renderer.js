@@ -202,9 +202,15 @@ export const MASK_STYLES = ['color', 'both', 'outline', 'matte', 'image'];
 export const fitScale = (W, H, f, margin = 0) => Math.min((W - margin * 2) / (2 * f.hw), (H - margin * 2) / (2 * f.hh));
 
 export class Renderer {
-  constructor(canvas) {
+  /**
+   * `onScreen`: the canvas is shown on the page. Its picture is then kept
+   * between frames (preserveDrawingBuffer): with the default swap, some
+   * Windows graphics drivers flash an empty or older frame while the photo
+   * redraws every frame (dragging a slider or the curve).
+   */
+  constructor(canvas, { onScreen = false } = {}) {
     this.canvas = canvas;
-    const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, premultipliedAlpha: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
+    const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, premultipliedAlpha: false, preserveDrawingBuffer: onScreen, powerPreference: 'high-performance' });
     if (!gl || gl.isContextLost()) throw new Error('WebGL2 is not available on this graphics card');
     if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('This graphics card has no float rendering');
     gl.getExtension('OES_texture_float_linear');
@@ -289,7 +295,7 @@ export class Renderer {
   dispose() {
     const gl = this.gl;
     this.disposed = true;
-    this.free(this.src); this.clearHi(); this.free(this.histTarget); this.free(this.prevTarget);
+    this.free(this.src); this.clearHi(); this.free(this.histTarget); this.free(this.prevTarget); this.free(this.lightTarget);
     for (const t of this.guide || []) this.free(t);
     gl.deleteTexture(this.curveTex); gl.deleteTexture(this.hueTex); gl.deleteTexture(this.blank);
     gl.deleteBuffer(this.quad);
@@ -496,6 +502,54 @@ export class Renderer {
       ? this.drawPhoto(info, s, geo, frame, out2frame, mm(mat(1, 0, extra.shift[0], 0, 1, extra.shift[1]), extra.out2ori || out2ori), t, false, null, extra.op && this.opHi?.get(extra.op.id))
       : this.drawPhoto(info, s, geo, frame, out2frame, out2ori, t, showClip, maskView, null)), layers, geo, out2ori, target, live,
     [s, info, frame, this.src, this.hi, this.opHi, showClip, maskView && JSON.stringify(maskView)]);
+  }
+
+  /**
+   * Times how long the graphics card takes to finish what was just sent (a
+   * full-size frame), without waiting for it: a fence, checked every
+   * millisecond. Kept as a running average in this.fullMs. One at a time.
+   */
+  timeFrame() {
+    const gl = this.gl;
+    if (this.timing || this.disposed) return;
+    const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    if (!sync) return;
+    gl.flush();
+    const t0 = performance.now();
+    this.timing = true;
+    const poll = () => {
+      if (this.disposed || gl.isContextLost()) { this.timing = false; return; }
+      if (gl.clientWaitSync(sync, 0, 0) === gl.TIMEOUT_EXPIRED && performance.now() - t0 < 2000) { setTimeout(poll, 1); return; }
+      const ms = performance.now() - t0;
+      gl.deleteSync(sync);
+      this.timing = false;
+      this.fullMs = this.fullMs == null ? ms : this.fullMs * 0.6 + ms * 0.4;
+    };
+    setTimeout(poll, 1);
+  }
+
+  /** Whether full-size frames keep up with dragging (about 40 a second); unknown counts as yes. */
+  get keepsUp() {
+    return this.fullMs == null || this.fullMs < 25;
+  }
+
+  /**
+   * The canvas at a fraction of its pixels, stretched up: about a quarter of
+   * the graphics work, for frames drawn while a setting is being dragged (a
+   * built-in Intel GPU can't keep up with the full pipeline at screen size).
+   */
+  renderLight(info, s, geo, frame, W, H, view, opts, f = 0.5) {
+    const gl = this.gl;
+    const w = Math.max(1, Math.round(W * f)), h = Math.max(1, Math.round(H * f));
+    if (!this.lightTarget || this.lightTarget.w !== w || this.lightTarget.h !== h) {
+      this.free(this.lightTarget);
+      this.lightTarget = this.target(w, h, gl.RGBA8);
+    }
+    this.render(info, s, geo, frame, outToFrame(w, h, frame, { ...view, scale: (view.scale * w) / W }), { ...opts, target: this.lightTarget });
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.lightTarget.fb);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+    gl.blitFramebuffer(0, 0, w, h, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.LINEAR);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
   /** The developed photo; out2ori may be shifted (a clone's source), sharper may stand in for this.hi. */
