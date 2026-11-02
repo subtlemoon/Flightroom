@@ -6,7 +6,7 @@ import { clearPreviews, decodeThumb, drawPhoto, fallbackShown, fitEdge, fitKept,
 import { loadAnalysis, measure, saveAnalysis, suggest, upright } from '../cull/analyze.js';
 import { Cancelled, measurePool } from '../cull/measure-pool.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
-import { cachedFolder, startAt, useFolder, usePosition } from '../cull/folder.js';
+import { cachedFolder, setWithSubfolders, startAt, useFolder, usePosition, withSubfolders } from '../cull/folder.js';
 import { useDevelopedThumb } from '../develop/thumbs.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zoomLevel } from '../cull/keys.js';
 
@@ -40,6 +40,7 @@ export function CullView({ store, onDevelop }) {
   const [filter, setFilter] = useState(seen?.filter || 'all'); // see inFilter
   const [zoom, setZoom] = useState(null); // null | { cx, cy }
   const [toast, setToast] = useState('');
+  const [subs, setSubs] = useState(withSubfolders);
   // Auto-rating: saved measurements and which stars it wrote, the run in progress,
   // and whether its panel is open.
   const [auto, setAuto] = useState(() => (seen ? loadAnalysis(seen.list.folder) : { measured: {}, applied: {} }));
@@ -352,6 +353,9 @@ export function CullView({ store, onDevelop }) {
         </div>
         <label className="toggle-row cull-advance" title="Go to the next photo after rating">
           <input type="checkbox" checked={advance} onChange={() => actions.setCullSettings({ cullAdvance: !advance })} />Auto-advance
+        </label>
+        <label className="toggle-row" title="Also show the photos in folders inside this one (not the Exported folder)">
+          <input type="checkbox" checked={subs} onChange={() => { setWithSubfolders(!subs); setSubs(!subs); open(folder, true); }} />Subfolders
         </label>
         <button className="btn btn-sm" onClick={() => open(folder, true)} title="Look for new files"><Icon name="refresh" size={14} />Reload</button>
         {onDevelop && <button className="btn btn-sm" onClick={onDevelop} disabled={!photo} title="Edit this photo (D)"><Icon name="develop" size={14} />Develop</button>}

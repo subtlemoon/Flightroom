@@ -27,6 +27,7 @@ export function ExportModal({ photo, photos, shown = photos, picked = null, meta
   const [longEdge, setLongEdge] = useState(() => Number(localStorage.getItem('flightroom-export-edge') || 0));
   const [quality, setQuality] = useState(() => Number(localStorage.getItem('flightroom-export-quality') || 92));
   const [dest, setDest] = useState(() => localStorage.getItem('flightroom-export-dest') || '');
+  const [replace, setReplace] = useState(() => localStorage.getItem('flightroom-export-replace') === '1');
   const [run, setRun] = useState(null); // { done, total, current, part }
   const cancel = useRef(false);
   const sep = folder.includes('\\') ? '\\' : '/';
@@ -39,6 +40,7 @@ export function ExportModal({ photo, photos, shown = photos, picked = null, meta
       localStorage.setItem('flightroom-export-edge', String(longEdge));
       localStorage.setItem('flightroom-export-quality', String(quality));
       localStorage.setItem('flightroom-export-dest', dest);
+      localStorage.setItem('flightroom-export-replace', replace ? '1' : '0');
     } catch {}
     cancel.current = false;
     const saved = [];
@@ -56,7 +58,7 @@ export function ExportModal({ photo, photos, shown = photos, picked = null, meta
           if (pInfo.error) throw new Error(pInfo.error);
           pS = edits.get(p.id) || fromXmp(pInfo.settings, pInfo.curves, asShotTempTint(pInfo), pInfo.own);
         }
-        saved.push(await exportPhoto(p, pInfo, pS, { folder: target, longEdge, quality, renderer, cancelled: () => cancel.current, onProgress: (part) => setRun((r) => r && { ...r, part }) }));
+        saved.push(await exportPhoto(p, pInfo, pS, { folder: target, longEdge, quality, replace, renderer, cancelled: () => cancel.current, onProgress: (part) => setRun((r) => r && { ...r, part }) }));
       } catch (err) {
         if (String(err.message) !== 'cancelled') failed.push(`${p.name}: ${err.message || err}`);
       }
@@ -106,7 +108,11 @@ export function ExportModal({ photo, photos, shown = photos, picked = null, meta
             <button className="btn btn-sm" onClick={async () => { const d = await app.develop.pickFolder('Export to'); if (d) setDest(d); }}>Change</button>
             {dest && <button className="btn btn-sm btn-ghost" onClick={() => setDest('')}>Use "Exported"</button>}
           </div>
-          <p className="muted small">JPEGs in sRGB, with the camera and lens details. Existing files are never overwritten.{!photo?.raw && which === 'this' ? ' Only RAW files can be exported.' : ''}</p>
+          <div className="export-row"><span title="When a JPEG of the same name is already in the folder">Existing</span>
+            <Dropdown value={replace ? 'replace' : 'number'} onChange={(v) => setReplace(v === 'replace')}
+              options={[{ value: 'number', label: 'Keep both (add -2, -3…)' }, { value: 'replace', label: 'Replace the old file' }]} />
+          </div>
+          <p className="muted small">JPEGs in sRGB, with the camera and lens details.{!photo?.raw && which === 'this' ? ' Only RAW files can be exported.' : ''}</p>
         </div>
       )}
     </Modal>

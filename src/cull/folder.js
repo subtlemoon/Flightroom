@@ -7,6 +7,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 let last = null; // { folder, list, meta, filter }
 
+// Whether a folder's subfolders are read with it (Culling's Subfolders button; on unless turned off).
+export const withSubfolders = () => { try { return localStorage.getItem('flightroom-subfolders') !== '0'; } catch { return true; } };
+export const setWithSubfolders = (on) => { try { localStorage.setItem('flightroom-subfolders', on ? '1' : '0'); } catch {} };
+
 export const cachedFolder = (folder) => (folder && last?.folder === folder && last.list ? last : null);
 
 export function keepFolder(folder, part) {
@@ -53,13 +57,13 @@ export function useFolder(bridge, folder, seen, filter, fresh) {
     if (!bridge || !dir) return;
     const latest = scans.next();
     if (!reload && cachedFolder(dir)) {
-      const res = await bridge.scan(dir);
+      const res = await bridge.scan(dir, withSubfolders());
       if (latest() && !res.error) setList((l) => (l?.photos && sameList(l.photos, res.photos) ? l : res));
       return;
     }
     setList({ loading: true, folder: dir });
     loads.next(); // metadata still coming for the folder before is dropped
-    const res = await bridge.scan(dir);
+    const res = await bridge.scan(dir, withSubfolders());
     if (!latest()) return;
     if (res.error) { setList({ error: res.error, folder: dir }); return; }
     setMeta({});

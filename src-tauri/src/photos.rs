@@ -372,25 +372,57 @@ pub struct Scan {
     photos: Vec<Photo>,
 }
 
-#[tauri::command]
-pub async fn cull_scan(app: AppHandle, folder: String) -> Result<Scan, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let dir = clean(&folder);
-        let mut names = Vec::new();
-        for e in fs::read_dir(&dir).map_err(|e| e.to_string())? {
-            let Ok(e) = e else { continue };
-            if e.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                names.push(e.file_name().to_string_lossy().to_string());
+/// Folders a scan doesn't go into: hidden and system ones, and Flightroom's own
+/// export folder (its JPEGs would show up again next to their RAWs).
+fn skip_dir(name: &str) -> bool {
+    name.starts_with('.') || name.starts_with('$') || name.eq_ignore_ascii_case("Exported") || name.eq_ignore_ascii_case("System Volume Information")
+}
+
+/// The folder's files, and with `subfolders` those of the folders inside it too
+/// (each folder's files together, the folder itself first, then its subfolders by name).
+fn scan_dirs(dir: &Path, subfolders: bool) -> Result<Vec<(PathBuf, Vec<String>)>, String> {
+    const MAX_DIRS: usize = 2000;
+    const MAX_DEPTH: usize = 8;
+    let mut out = Vec::new();
+    let mut stack = vec![(dir.to_path_buf(), 0usize)];
+    while let Some((d, depth)) = stack.pop() {
+        let entries = match fs::read_dir(&d) {
+            Ok(e) => e,
+            Err(e) if d == dir => return Err(e.to_string()),
+            Err(_) => continue, // a subfolder we may not read
+        };
+        let (mut names, mut subs) = (Vec::new(), Vec::new());
+        for e in entries.flatten() {
+            let Ok(t) = e.file_type() else { continue };
+            let name = e.file_name().to_string_lossy().to_string();
+            if t.is_file() {
+                names.push(name);
+            } else if t.is_dir() && subfolders && depth < MAX_DEPTH && !skip_dir(&name) {
+                subs.push(name);
             }
         }
-        app.state::<Photos>().folders.lock().unwrap().insert(dir.clone());
-        let join = |n: &str| dir.join(n).to_string_lossy().to_string();
-        let groups = lib::group_photos(&names);
-        let photos = groups
-            .into_iter()
-            .map(|g| {
+        // Reversed onto the stack, so they come off in name order.
+        subs.sort_by(|a, b| lib::natural_cmp(b, a));
+        stack.extend(subs.into_iter().map(|n| (d.join(n), depth + 1)));
+        out.push((d, names));
+        if out.len() >= MAX_DIRS {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn cull_scan(app: AppHandle, folder: String, subfolders: Option<bool>) -> Result<Scan, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = clean(&folder);
+        let mut photos = Vec::new();
+        for (dir, names) in scan_dirs(&root, subfolders.unwrap_or(false))? {
+            app.state::<Photos>().folders.lock().unwrap().insert(dir.clone());
+            let join = |n: &str| dir.join(n).to_string_lossy().to_string();
+            for g in lib::group_photos(&names) {
                 let rating = g.sidecar.as_ref().and_then(|s| read_sidecar(&dir.join(s)).ok().flatten()).and_then(|x| lib::read_rating(&x));
-                Photo {
+                photos.push(Photo {
                     id: join(&g.file),
                     name: g.file.clone(),
                     raw: g.raw.as_deref().map(join),
@@ -398,10 +430,10 @@ pub async fn cull_scan(app: AppHandle, folder: String) -> Result<Scan, String> {
                     sidecar: join(g.sidecar.as_deref().unwrap_or(&format!("{}.xmp", g.base))),
                     rating_in: if g.rating_in_file { "file" } else { "sidecar" },
                     rating,
-                }
-            })
-            .collect();
-        Ok(Scan { folder: dir.to_string_lossy().to_string(), photos })
+                });
+            }
+        }
+        Ok(Scan { folder: root.to_string_lossy().to_string(), photos })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -547,6 +579,20 @@ pub fn cull_clear_cache(app: AppHandle) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scans_subfolders_in_order() {
+        let d = std::env::temp_dir().join(format!("fr-scan-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        for sub in ["", "Day 10", "Day 2", "Day 2/b", "Exported", ".hidden"] {
+            fs::create_dir_all(d.join(sub)).unwrap();
+            fs::write(d.join(sub).join("a.jpg"), b"x").unwrap();
+        }
+        let rel = |v: Vec<(PathBuf, Vec<String>)>| v.into_iter().map(|(p, _)| p.strip_prefix(&d).unwrap().to_string_lossy().replace('\\', "/")).collect::<Vec<_>>();
+        assert_eq!(rel(scan_dirs(&d, true).unwrap()), ["", "Day 2", "Day 2/b", "Day 10"]);
+        assert_eq!(rel(scan_dirs(&d, false).unwrap()), [""]);
+        let _ = fs::remove_dir_all(&d);
+    }
 
     fn tmp_dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("flightroom-test-{name}-{}", std::process::id()));

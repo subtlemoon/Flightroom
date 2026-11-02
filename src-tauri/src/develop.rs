@@ -818,13 +818,16 @@ fn admit_export(exports: &mut HashMap<String, Export>, bytes: usize, now: std::t
 #[derive(Deserialize)]
 pub struct ExportArgs {
     job: String,
-    /// Folder to save into, and the file name to use (made unique there).
+    /// Folder to save into, and the file name to use (made unique there unless `replace`).
     folder: String,
     name: String,
     width: usize,
     height: usize,
     quality: u8,
     source: Option<String>,
+    /// Replace a file of the same name instead of adding a number.
+    #[serde(default)]
+    replace: bool,
 }
 
 /// Largest export, in pixels: well above any camera (150 MP) and 750 MB to hold.
@@ -850,7 +853,7 @@ pub fn export_begin(app: AppHandle, args: ExportArgs) -> Result<String, String> 
     let base = lib::base_of(&safe).to_string();
     let mut path = folder.join(format!("{base}.jpg"));
     let mut n = 2;
-    while path.exists() {
+    while !args.replace && path.exists() {
         path = folder.join(format!("{base}-{n}.jpg"));
         n += 1;
     }
