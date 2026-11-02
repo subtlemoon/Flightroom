@@ -329,7 +329,7 @@ export class Renderer {
   dispose() {
     const gl = this.gl;
     this.disposed = true;
-    this.free(this.src); this.clearHi(); this.free(this.histTarget); this.free(this.prevTarget); this.free(this.lightTarget); this.free(this.thumbTarget); this.setDisplay(null);
+    this.free(this.src); this.clearHi(); this.free(this.histTarget); this.free(this.prevTarget); this.free(this.thumbTarget); this.setDisplay(null);
     for (const t of this.guide || []) this.free(t);
     gl.deleteTexture(this.curveTex); gl.deleteTexture(this.hueTex); gl.deleteTexture(this.blank);
     for (const t of [this.prof?.tone, this.prof?.hsm, this.prof?.laTex, this.prof?.lbTex]) if (t) gl.deleteTexture(t);
@@ -582,53 +582,34 @@ export class Renderer {
     [s, info, frame, this.src, this.hi, this.opHi, showClip, maskView && JSON.stringify(maskView), this.melissa]);
   }
 
-  /**
-   * Times how long the graphics card takes to finish what was just sent (a
-   * full-size frame), without waiting for it: a fence, checked every
-   * millisecond. Kept as a running average in this.fullMs. One at a time.
-   */
-  timeFrame() {
+  /** Wait for the graphics card to finish the submitted full-quality frame. */
+  waitFrame() {
     const gl = this.gl;
-    if (this.timing || this.disposed) return;
-    const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
-    if (!sync) return;
+    if (this.disposed) return Promise.resolve(false);
+    if (this.frameWait) return this.frameWait;
+    let sync;
+    try { sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0); } catch { return Promise.resolve(false); }
+    if (!sync) return new Promise((resolve) => setTimeout(() => resolve(false), 60));
     gl.flush();
-    const t0 = performance.now();
-    this.timing = true;
-    const poll = () => {
-      if (this.disposed || gl.isContextLost()) { this.timing = false; return; }
-      if (gl.clientWaitSync(sync, 0, 0) === gl.TIMEOUT_EXPIRED && performance.now() - t0 < 2000) { setTimeout(poll, 1); return; }
-      const ms = performance.now() - t0;
-      gl.deleteSync(sync);
-      this.timing = false;
-      this.fullMs = this.fullMs == null ? ms : this.fullMs * 0.6 + ms * 0.4;
-    };
-    setTimeout(poll, 1);
-  }
-
-  /** Whether full-size frames keep up with dragging (about 40 a second); unknown counts as yes. */
-  get keepsUp() {
-    return this.fullMs == null || this.fullMs < 25;
-  }
-
-  /**
-   * The canvas at a fraction of its pixels, stretched up: about a quarter of
-   * the graphics work, for frames drawn while a setting is being dragged (a
-   * built-in Intel GPU can't keep up with the full pipeline at screen size).
-   */
-  renderLight(info, s, geo, frame, W, H, view, opts, f = 0.5) {
-    const gl = this.gl;
-    const w = Math.max(1, Math.round(W * f)), h = Math.max(1, Math.round(H * f));
-    if (!this.lightTarget || this.lightTarget.w !== w || this.lightTarget.h !== h) {
-      this.free(this.lightTarget);
-      this.lightTarget = this.target(w, h, gl.RGBA8);
-    }
-    this.render(info, s, geo, frame, outToFrame(w, h, frame, { ...view, scale: (view.scale * w) / W }), { ...opts, target: this.lightTarget });
-    if (this.display) { this.present(this.lightTarget); return; }
-    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.lightTarget.fb);
-    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
-    gl.blitFramebuffer(0, 0, w, h, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.LINEAR);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.frameWait = new Promise((resolve) => {
+      const finish = (done) => {
+        try { gl.deleteSync(sync); } catch {}
+        this.frameWait = null;
+        resolve(done);
+      };
+      const t0 = performance.now();
+      const poll = () => {
+        if (this.disposed || gl.isContextLost()) { finish(false); return; }
+        let status;
+        try { status = gl.clientWaitSync(sync, 0, 0); } catch { finish(false); return; }
+        // Give up after 2 s so a fence that never signals can't stop all redraws.
+        if (status === gl.TIMEOUT_EXPIRED && performance.now() - t0 < 2000) { setTimeout(poll, 8); return; }
+        if (status === gl.TIMEOUT_EXPIRED) { finish(false); return; }
+        finish(status !== gl.WAIT_FAILED);
+      };
+      setTimeout(poll, 8);
+    });
+    return this.frameWait;
   }
 
   /**
@@ -913,7 +894,9 @@ export class Renderer {
           gl.generateMipmap(gl.TEXTURE_2D);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
           this.drawRect(this.copy, this.acc, [tx, ty, ow, oh], { uTex: t.tex, uRect: [tx, ty, ow, oh] });
+          const done = await this.waitFrame();
           this.free(t);
+          if (!done || !current()) return false;
           await new Promise((res) => setTimeout(res, 0)); // let the page breathe between tiles
         }
       }
@@ -923,6 +906,7 @@ export class Renderer {
     if (!current() || this.disposed) return false;
     if (this.display) this.present(this.acc);
     else this.drawRect(this.copy, null, [0, 0, W, H], { uTex: this.acc.tex, uRect: [0, 0, W, H] });
+    if (!(await this.waitFrame())) return false;
     return true;
   }
 
