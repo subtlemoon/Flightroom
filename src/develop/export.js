@@ -69,7 +69,7 @@ export async function exportPhoto(photo, info, s, opts) {
     const f = geo.frame(s.crop);
     const { scale, w: EW, h: EH } = exportSize(f, opts.longEdge);
     const k = scale; // output px per oriented px
-    const started = await dev.exportBegin({ job, folder: opts.folder, name: photo.name, width: EW, height: EH, quality: opts.quality, source: photo.id });
+    const started = await dev.exportBegin({ job, folder: opts.folder, name: photo.name, width: EW, height: EH, quality: opts.quality, source: photo.id, replace: !!opts.replace });
     if (started?.error) throw new Error(started.error);
     begun = true;
     const toOriented = geo.frameToOriented(f);

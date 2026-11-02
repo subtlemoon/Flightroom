@@ -39,7 +39,7 @@ export const bridge = inApp ? {
   // Culling: folders, previews, and star ratings written to the photos.
   cull: {
     pickFolder: () => open({ directory: true, title: 'Choose a folder of photos' }).catch(() => null),
-    scan: (folder) => call('cull_scan', { folder }),
+    scan: (folder, subfolders = false) => call('cull_scan', { folder, subfolders }),
     meta: (ids) => call('cull_meta', { ids }),
     listDirs: (dir) => call('cull_list_dirs', { dir }),
     rate: (photo, rating) => call('cull_rate', { args: { id: photo.id, ratingIn: photo.ratingIn, sidecar: photo.sidecar, rating } }),
