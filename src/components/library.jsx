@@ -4,6 +4,7 @@ import { GearCard, useGearFilter } from './gear.jsx';
 import { Dropdown, Icon, Modal } from './ui.jsx';
 import { EDITING_APPS } from '../data/software.js';
 import { START_PAGES } from './home.jsx';
+import { screenColorOn, screenProfile, setScreenColor } from '../develop/icc.js';
 import { DEFAULT_RATING_KEYS, DEFAULT_ZOOM_KEY, RESERVED_KEYS, ZOOM_LEVELS, assignKey, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zoomLevel } from '../cull/keys.js';
 
 export function MyGearView({ store, onOpenGear, onBrowse, onCustom }) {
@@ -192,6 +193,26 @@ function CullingCard({ store }) {
   );
 }
 
+// Develop's picture corrected with the screen's Windows colour profile, as Lightroom does.
+function ScreenColorCard() {
+  const [on, setOn] = useState(screenColorOn);
+  const [prof, setProf] = useState(null);
+  useEffect(() => { let live = true; screenProfile().then((p) => live && setProf(p)); return () => { live = false; }; }, []);
+  const status = !prof ? '' : !prof.name ? 'No colour profile found for this screen.'
+    : prof.transform ? `Using ${prof.name}.` : `${prof.name} is plain sRGB, so nothing needs correcting.`;
+  return (
+    <section className="card">
+      <h3 className="section-title">Screen colours</h3>
+      <p className="muted">Shows photos in Develop with your screen's colour profile, like Lightroom. Exports aren't changed.</p>
+      <label className="toggle-row big">
+        <input type="checkbox" checked={on} onChange={(e) => { setOn(e.target.checked); setScreenColor(e.target.checked); }} />
+        <span>Correct colours for this screen</span>
+      </label>
+      {status && <p className="muted small">{status}</p>}
+    </section>
+  );
+}
+
 export function SettingsView({ store }) {
   const { state, actions } = store;
   const fileRef = useRef();
@@ -240,6 +261,7 @@ export function SettingsView({ store }) {
         </div>
       </section>
       <CullingCard store={store} />
+      <ScreenColorCard />
       <section className="card">
         <h3 className="section-title">Editing apps you use</h3>
         <p className="muted">Presets check whether these apps can open each camera's photos and video.</p>

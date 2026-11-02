@@ -4,6 +4,7 @@
 
 pub mod ai;
 pub mod develop;
+pub mod display;
 pub mod migrate;
 pub mod photolib;
 pub mod photos;
@@ -155,6 +156,7 @@ pub fn run() {
             ai::ai_status,
             ai::ai_install,
             ai::ai_masks,
+            display::display_profile,
         ])
         .build(tauri::generate_context!())
         .expect("Flightroom failed to start");

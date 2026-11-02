@@ -597,3 +597,25 @@ void main() {
   }
   o = vec4(d, 1.0);
 }`;
+
+// Screen colour correction (icc.js): the finished sRGB picture -> this
+// screen's own colours. uLut holds, per channel, the screen value for linear
+// light t² at t = 0..1.
+export const DISPLAY = `#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform sampler2D uLut;
+uniform mat3 uDispM;
+uniform vec2 uSize;
+uniform float uLutN;
+out vec4 o;
+vec3 decodeS(vec3 v) { return mix(v / 12.92, pow((max(v, vec3(0.0)) + 0.055) / 1.055, vec3(2.4)), step(0.04045, v)); }
+float lut(float t, int c) { return texture(uLut, vec2((t * (uLutN - 1.0) + 0.5) / uLutN, 0.5))[c]; }
+void main() {
+  vec3 lin = clamp(uDispM * decodeS(texture(uTex, gl_FragCoord.xy / uSize).rgb), 0.0, 1.0);
+  vec3 t = sqrt(lin);
+  vec3 v = vec3(lut(t.r, 0), lut(t.g, 1), lut(t.b, 2));
+  // A touch of noise keeps smooth skies from banding in 8 bits.
+  float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+  o = vec4(v + n / 255.0, 1.0);
+}`;
