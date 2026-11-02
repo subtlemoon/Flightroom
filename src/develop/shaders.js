@@ -375,9 +375,11 @@ void main() {
   float y0 = max(dot(lin, W709), 1e-5);
   float l0 = log2(y0);
   vec2 g = texture(uGuide, p).rg;
-  // The blurred base, pulled toward this pixel across strong edges (fewer halos).
+  // The blurred base, pulled toward this pixel across edges: from about half a
+  // stop of difference on (was 1.5 stops, which left a glow around dark heads
+  // against the sky with strong Shadows / Highlights).
   float dEdge = l0 - g.r;
-  float base = g.r + dEdge * (1.0 - exp(-dEdge * dEdge / 1.3));
+  float base = g.r + dEdge * (1.0 - exp(-dEdge * dEdge / 0.3));
   float detail = l0 - base;
   base += exposure;
 
