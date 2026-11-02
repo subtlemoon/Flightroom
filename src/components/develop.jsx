@@ -1227,6 +1227,15 @@ function CropPanel({ s, geo, update, overlay, setOverlay, onClose }) {
 
 const PANELS_KEY = 'flightroom-develop-panels';
 
+// What the Profile menu's tooltip says about where the colour comes from.
+function profileNote(info, profile) {
+  if (profile === 'agx') return 'darktable\'s AgX film look';
+  const r = adobeRendering(info, profile);
+  if (r && !r.dcp.builtIn) return 'Adobe\'s own profile for this camera, from Lightroom or Adobe DNG Converter on this computer';
+  if (r) return 'Adobe\'s colour processing with this camera\'s colour matrices. Installing the free Adobe DNG Converter adds Adobe\'s colour tables for the camera.';
+  return 'A close match to the camera\'s own look. Installing the free Adobe DNG Converter adds Adobe\'s profile for it.';
+}
+
 function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onReset, onCopy, onPaste, edited, picking, onPick, onAutoWb, onAutoTone, cropMode, cropOverlay, setCropOverlay, onCropClose, override, photo, ensureAi, onDenoised }) {
   const [open, setOpen] = useState(() => {
     try { return JSON.parse(localStorage.getItem(PANELS_KEY)) || { basic: true }; } catch { return { basic: true }; }
@@ -1260,9 +1269,7 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
         </div>
         <div className="dev-line dev-wb"><span className="muted">Profile</span>
           <Dropdown value={s.profile || 'adobe'} options={PROFILES.map(([value, label]) => ({ value, label }))} onChange={(v) => update({ profile: v })}
-            title={s.profile === 'agx' ? 'darktable\'s AgX film look' : adobeRendering(info, s.profile)
-              ? 'Rendered with Lightroom\'s own profile for this camera, from Lightroom on this computer'
-              : 'Lightroom\'s profile for this camera isn\'t on this computer, so this is a close match instead'} />
+            title={profileNote(info, s.profile)} />
         </div>
         <div className="dev-line dev-wb"><span className="muted">WB</span>
           <span className="dev-line">

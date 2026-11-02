@@ -34,9 +34,10 @@ shown by the system's WebView2, so there is no bundled browser.
   JPEG previews, thumbnail cache, XMP star ratings
 - `src-tauri/src/develop.rs` RAW decoding (rawler), demosaicing, JPEG export
 - `src-tauri/src/xmp.rs` reading and writing `.xmp` sidecars
-- `src-tauri/src/adobe.rs` Lightroom's own camera profiles (`.dcp`) and the Adobe
-  Color look, read from Lightroom Classic's install; `src/develop/adobe.js`
-  renders with them as Adobe's DNG SDK does
+- `src/develop/adobe.js` RAW colour as Adobe's DNG SDK renders it (built in, from
+  the camera's colour matrices); `src-tauri/src/adobe.rs` adds Adobe's own
+  camera profiles (`.dcp`) and the Adobe Color look when Lightroom Classic or
+  the free Adobe DNG Converter is installed
 - `src-tauri/src/updater.rs` updates; `migrate.rs` taking over GearCheck's data
 - `src-tauri/installer-hooks.nsh` removes the old GearCheck program on install
 - `src/cull/`, `src/develop/` culling previews and the develop renderer

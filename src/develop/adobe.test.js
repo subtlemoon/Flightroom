@@ -133,6 +133,20 @@ describe('profiles and looks', () => {
     expect(adobeRendering({}, 'adobe')).toBeNull();
   });
 
+  it('renders Adobe Standard and Adobe Color built in, from the camera\'s matrices', () => {
+    const plain = { matrices: [[2856, CM_A], [6504, CM_D65]], adobe: { profiles: {}, looks: {} } };
+    const r = adobeRendering(plain, 'standard');
+    expect(r.dcp.builtIn).toBe(true);
+    expect(r.dcp.illuminants.map((i) => i.temp)).toEqual([2856, 6504]);
+    expect(r.tables).toEqual([]);
+    // The same object each time (the graphics card's tables are made once).
+    expect(adobeRendering(plain, 'adobe').dcp).toBe(r.dcp);
+    expect(adobeRendering(plain, 'adobe').curve).toBe(ADOBE_COLOR_CURVE);
+    expect(adobeRendering(plain, 'camera')).toBeNull();
+    const { matrix } = dcpTransform(r.dcp, tempTintToXy(6000, 5));
+    close(apply3(matrix, [1, 1, 1]), [1, 1, 1], 1e-3);
+  });
+
   it("uses Adobe Color's own table and curve when Lightroom's copy is here", () => {
     const table = identityMap(36, 8, 16);
     const withLook = { adobe: { ...info.adobe, looks: { 'Adobe Color': { name: 'Adobe Color', table, curve: [[0, 0], [255, 255]] } } } };

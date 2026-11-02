@@ -1,8 +1,14 @@
-// Lightroom's own colour for RAW files, ported from Adobe's DNG SDK
-// (dng_color_spec, dng_render, dng_reference): the camera profile from
-// Lightroom's install (src-tauri/src/adobe.rs) turns camera colours into
-// ProPhoto RGB through its forward matrix, then its hue/saturation map, the
+// Lightroom's colour for RAW files, ported from Adobe's DNG SDK
+// (dng_color_spec, dng_render, dng_reference, dng_spline; portions
+// Copyright Adobe, used under the DNG SDK license): a camera profile turns
+// camera colours into ProPhoto RGB, then its hue/saturation map, the
 // exposure, its look table (and Adobe Color's), and the tone curve.
+//
+// Built in, with nothing else installed: the camera's own colour matrices
+// (Adobe's, as rawler has them) with Adobe's default tone curve. When
+// Lightroom Classic or the free Adobe DNG Converter is on the computer, its
+// profile for the camera (src-tauri/src/adobe.rs) adds Adobe's per-camera
+// colour tables on top. Adobe's profile files themselves can't be shipped.
 import { apply3, inv3, mul3, tempTintToXy, xyToTempTint } from './color.js';
 
 // dng_tone_curve_acr3_default: Adobe's default tone curve, used by profiles
@@ -220,15 +226,30 @@ export const ADOBE_COLOR_CURVE = [[0, 0], [22, 16], [40, 35], [127, 127], [224, 
 // Lightroom-fitted brightness Flightroom had (tools/lr-tone.md) at middle grey.
 export const BASELINE_EXPOSURE = 0.072;
 
+// The built-in profile for a photo: its colour matrices only (kept per photo,
+// so the graphics card's tables are made once).
+const builtIn = new WeakMap();
+function builtInProfile(info) {
+  if (!(info.matrices?.length > 0)) return null;
+  let dcp = builtIn.get(info);
+  if (!dcp) {
+    const ill = info.matrices.map(([temp, color]) => ({ temp, color, forward: null, hue_sat: null }));
+    dcp = { name: 'Adobe Standard', camera: info.camera || '', illuminants: ill.length > 1 ? [ill[0], ill[ill.length - 1]] : ill, look: null, tone: null, exposure_offset: 0, builtIn: true };
+    builtIn.set(info, dcp);
+  }
+  return dcp;
+}
+
 /**
- * What renders a profile the way Lightroom does, or null when Lightroom's
- * profile for this camera isn't on this computer (the fitted looks are used then).
+ * What renders a profile the way Lightroom does: Lightroom's own profile for
+ * the camera when it's on this computer, else (Adobe Standard and Adobe Color)
+ * the built-in one. Null for profiles with neither (the fitted looks are used then).
  */
 export function adobeRendering(info, profile) {
-  const a = info?.adobe;
-  if (!a?.profiles) return null;
+  if (!info) return null;
+  const a = info.adobe || {};
   const name = profile === 'camera' ? 'Camera Standard' : profile === 'adobe' || profile === 'standard' ? 'Adobe Standard' : null;
-  const dcp = name && a.profiles[name];
+  const dcp = name && (a.profiles?.[name] || (name === 'Adobe Standard' ? builtInProfile(info) : null));
   if (!dcp) return null;
   const tables = [dcp.look].filter(Boolean);
   let curve = null;

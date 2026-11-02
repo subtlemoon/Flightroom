@@ -1,8 +1,12 @@
 # How Flightroom's Basic tone sliders were matched to Lightroom
 
 ## The base rendering (profiles)
-With Lightroom Classic on the computer, Develop renders Adobe Standard, Adobe
-Color and Camera Standard from Lightroom's own files (`src-tauri/src/adobe.rs`,
+Built in, with nothing else installed, Adobe Standard and Adobe Color render
+through Adobe's DNG SDK pipeline with the camera's own colour matrices (Adobe's,
+from rawler) and Adobe's default tone curve; Adobe Color adds its point curve.
+Adobe's per-camera profile files can't be shipped, but with Lightroom Classic
+or the free Adobe DNG Converter on the computer, Develop renders Adobe
+Standard, Adobe Color and Camera Standard from those files (`src-tauri/src/adobe.rs`,
 `src/develop/adobe.js`), step for step as Adobe's DNG SDK (`dng_render.cpp`,
 `dng_reference.cpp`, `dng_color_spec.cpp`): forward matrix to ProPhoto, the
 hue/saturation map, exposure, the look tables (the profile's, then Adobe
@@ -12,7 +16,7 @@ look's point curve before the photo's own.
 
 NEF files carry no baseline exposure, so `BASELINE_EXPOSURE` (0.072 EV) puts
 middle grey where the fitted look below had it. The fitted looks (`LOOKS` in
-`renderer.js`) are only used when Lightroom's profile for the camera isn't there.
+`renderer.js`) are only used for Camera Standard without Adobe's profile.
 
 The constants are `HL_*`, `SH_*`, `WH_*` and `BL_*` in `src/develop/shaders.js`.
 
