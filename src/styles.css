@@ -505,6 +505,8 @@ kbd { font: inherit; font-size: 10.5px; padding: 1px 5px; border-radius: 5px; bo
 .dev-curve line.diag { stroke: rgba(255,255,255,.12); stroke-dasharray: 3 4; }
 .dev-curve path { fill: none; stroke: #eef1f6; stroke-width: 1.6; }
 .dev-curve circle { fill: #0b0d12; stroke: #eef1f6; stroke-width: 1.6; }
+.dev-curve svg path.hist { fill: rgba(238, 241, 246, .1); stroke: none; }
+.dev-curve.ch-r svg path.hist { fill: rgba(255, 106, 106, .14); } .dev-curve.ch-g svg path.hist { fill: rgba(93, 220, 122, .12); } .dev-curve.ch-b svg path.hist { fill: rgba(106, 160, 255, .14); }
 .dev-curve path.combined { stroke: rgba(238, 241, 246, .35); stroke-width: 1.2; stroke-dasharray: 4 3; }
 .dev-curve-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 28px; margin-top: 4px; }
 .dev-mixer { display: flex; flex-direction: column; gap: 2px; }

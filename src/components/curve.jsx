@@ -1,5 +1,5 @@
 // The point curve editor, used by the Tone curve section and by each mask's Curve.
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { monotoneCurve, parametric } from '../develop/luts.js';
 import { LINEAR_CURVE } from '../develop/params.js';
 
@@ -7,6 +7,32 @@ const PARAMETRIC_KEYS = ['pShadows', 'pDarks', 'pLights', 'pHighlights', 'pSplit
 const PARAMETRIC_DEFAULT = { pSplitS: 25, pSplitM: 50, pSplitH: 75 };
 
 const CH_CLASS = { curve: '', curveR: ' ch-r', curveG: ' ch-g', curveB: ' ch-b' };
+const HIST_CH = { curveR: 0, curveG: 1, curveB: 2 };
+
+// The photo's histogram behind the curve, as in Lightroom (the Develop stage
+// sends it as 'develop:hist': red, green and blue counts per level).
+let lastHist = null;
+if (typeof window !== 'undefined') window.addEventListener('develop:hist', (e) => { lastHist = e.detail; });
+function useHist() {
+  const [bins, setBins] = useState(lastHist);
+  useEffect(() => {
+    const on = (e) => setBins(e.detail);
+    window.addEventListener('develop:hist', on);
+    return () => window.removeEventListener('develop:hist', on);
+  }, []);
+  return bins;
+}
+
+function histPath(bins, channel, size) {
+  if (!bins) return null;
+  const ch = HIST_CH[channel];
+  const v = (i) => (ch == null ? (bins[0][i] + bins[1][i] + bins[2][i]) / 3 : bins[ch][i]);
+  let max = 1;
+  for (let i = 2; i < 254; i++) max = Math.max(max, v(i));
+  let d = `M0,${size}`;
+  for (let i = 0; i < 256; i++) d += `L${((i / 255) * size).toFixed(1)},${(size - Math.min(1, Math.sqrt(v(i) / max)) * size * 0.9).toFixed(1)}`;
+  return `${d}L${size},${size}Z`;
+}
 
 // Point curve: drag points, click to add, double-click a point (or drag it off) to remove it.
 export function CurveEditor({ s, channel, readOnly, set }) {
@@ -15,6 +41,8 @@ export function CurveEditor({ s, channel, readOnly, set }) {
   const [read, setRead] = useState(null);
   const SIZE = 236;
   const pts = s[channel];
+  const bins = useHist();
+  const hist = useMemo(() => histPath(bins, channel, SIZE), [bins, channel]);
   const toXY = ([x, y]) => [(x / 255) * SIZE, SIZE - (y / 255) * SIZE];
   const fromEvent = (e) => {
     const r = ref.current.getBoundingClientRect();
@@ -94,6 +122,7 @@ export function CurveEditor({ s, channel, readOnly, set }) {
         onPointerLeave={() => !drag.current && setRead(null)} onDoubleClick={remove}>
       <svg ref={ref} viewBox={`0 0 ${SIZE} ${SIZE}`}>
         {[1, 2, 3].map((i) => <g key={i}><line x1={(i * SIZE) / 4} y1={0} x2={(i * SIZE) / 4} y2={SIZE} /><line y1={(i * SIZE) / 4} x1={0} y2={(i * SIZE) / 4} x2={SIZE} /></g>)}
+        {hist && <path className="hist" d={hist} />}
         <line className="diag" x1={0} y1={SIZE} x2={SIZE} y2={0} />
         {combined && <path className="combined" d={combined} />}
         <path d={path} />
