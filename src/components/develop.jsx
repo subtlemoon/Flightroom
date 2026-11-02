@@ -745,8 +745,11 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
     // Dropped once the settings hold the stroke (or the moved layer's place).
     if (live && s.layers?.some((l) => (live.op ? l.ops.includes(live.op) || l.mask?.ops.includes(live.op) : l.id === live.layerId && l.tf === live.tf))) live = liveRef.current = null;
     const opts = { showClip: clip, maskView, live };
-    if (light && !live) r.renderLight(info, s, geo, frame, W, H, v, opts);
-    else r.render(info, s, geo, frame, outToFrame(W, H, frame, v), opts);
+    if (light && !live && !r.keepsUp) r.renderLight(info, s, geo, frame, W, H, v, opts);
+    else {
+      r.render(info, s, geo, frame, outToFrame(W, H, frame, v), opts);
+      r.timeFrame();
+    }
   };
 
   const drawRef = useRef(draw);
@@ -754,9 +757,10 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
 
   // Redraw when what's drawn changes, at most once per frame (other re-renders,
   // like the histogram arriving, don't redraw the photo).
-  // While a setting keeps changing (a slider or the curve being dragged) the
-  // frames are drawn light (renderer.renderLight), then once in full when it
-  // stops: built-in graphics (Intel Iris Xe) fell behind and Windows reset the
+  // While a setting keeps changing (a slider or the curve being dragged) on
+  // graphics too slow for full-size frames (renderer.keepsUp), the frames are
+  // drawn light (renderer.renderLight), then once in full when it stops:
+  // built-in graphics (Intel Iris Xe) fell behind and Windows reset the
   // driver, blacking out the screen for a few seconds.
   const raf = useRef(0);
   const drawn = useRef(null);
@@ -774,7 +778,7 @@ function DevelopStage({ photo, meta, info, s, cropMode, cropOverlay, clip, onCro
     cancelAnimationFrame(raf.current);
     clearTimeout(fullTimer.current);
     raf.current = requestAnimationFrame(() => draw(light));
-    if (light) fullTimer.current = setTimeout(() => drawRef.current(), 200);
+    if (light && !rendererRef.current?.keepsUp) fullTimer.current = setTimeout(() => drawRef.current(), 200);
   });
   useEffect(() => () => { cancelAnimationFrame(raf.current); clearTimeout(fullTimer.current); }, []);
 

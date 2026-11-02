@@ -505,6 +505,35 @@ export class Renderer {
   }
 
   /**
+   * Times how long the graphics card takes to finish what was just sent (a
+   * full-size frame), without waiting for it: a fence, checked every
+   * millisecond. Kept as a running average in this.fullMs. One at a time.
+   */
+  timeFrame() {
+    const gl = this.gl;
+    if (this.timing || this.disposed) return;
+    const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    if (!sync) return;
+    gl.flush();
+    const t0 = performance.now();
+    this.timing = true;
+    const poll = () => {
+      if (this.disposed || gl.isContextLost()) { this.timing = false; return; }
+      if (gl.clientWaitSync(sync, 0, 0) === gl.TIMEOUT_EXPIRED && performance.now() - t0 < 2000) { setTimeout(poll, 1); return; }
+      const ms = performance.now() - t0;
+      gl.deleteSync(sync);
+      this.timing = false;
+      this.fullMs = this.fullMs == null ? ms : this.fullMs * 0.6 + ms * 0.4;
+    };
+    setTimeout(poll, 1);
+  }
+
+  /** Whether full-size frames keep up with dragging (about 40 a second); unknown counts as yes. */
+  get keepsUp() {
+    return this.fullMs == null || this.fullMs < 25;
+  }
+
+  /**
    * The canvas at a fraction of its pixels, stretched up: about a quarter of
    * the graphics work, for frames drawn while a setting is being dragged (a
    * built-in Intel GPU can't keep up with the full pipeline at screen size).
