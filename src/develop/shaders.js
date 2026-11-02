@@ -523,14 +523,18 @@ void main() {
   // only follows big edges (a head against the sky), so fine detail such as
   // hair strands and the gaps between them is lifted alike and keeps its
   // contrast, as in Lightroom (measured on JWL_7451).
-  float lw = 0.5 * (ring(p, LIFT_R) + ring(p, 2.0 * LIFT_R));
-  float dl = l0 - lw;
-  lw += dl * (1.0 - exp(-dl * dl / LIFT_EDGE));
-  float bw = disp(exp2(lw + exposure));
-  // Highlights and Shadows: weights and strengths fitted to Lightroom's measured
-  // change per L* band at -100 / +100 (see tools/lr-tone.md).
-  base += highlights * HL_K * smoothstep(HL_LO, 1.0, bw);
-  base += shadows * SH_K * (1.0 - smoothstep(0.0, SH_HI, bw));
+  // Skip the extra neighbourhood samples when neither slider needs them. This
+  // is the common case while editing curves and colour, and avoids 16 texture
+  // reads per pixel for adjustments that cannot affect the result.
+  if (highlights != 0.0 || shadows != 0.0) {
+    float lw = 0.5 * (ring(p, LIFT_R) + ring(p, 2.0 * LIFT_R));
+    float dl = l0 - lw;
+    lw += dl * (1.0 - exp(-dl * dl / LIFT_EDGE));
+    float bw = disp(exp2(lw + exposure));
+    // Weights and strengths fitted to Lightroom's measured change per L* band.
+    base += highlights * HL_K * smoothstep(HL_LO, 1.0, bw);
+    base += shadows * SH_K * (1.0 - smoothstep(0.0, SH_HI, bw));
+  }
   float mid = smoothstep(0.03, 0.35, bd) * (1.0 - smoothstep(0.8, 1.0, bd));
   detail *= max(0.0, 1.0 + clarity * 0.9 * mid);
 
