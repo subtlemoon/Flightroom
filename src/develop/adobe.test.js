@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  setUseInstalledProfiles,
   ADOBE_COLOR_CURVE, PP_TO_SRGB, SRGB_TO_PP, acr3, adobeRendering, applyHueSat, dcpTransform, hueSatFor,
   illuminantWeight, rgbToHsv, rgbTone, splineCurve, toneTable, withAdobe,
 } from './adobe.js';
@@ -121,6 +122,7 @@ describe('hue/saturation maps', () => {
 });
 
 describe('profiles and looks', () => {
+  setUseInstalledProfiles(true);
   const info = { adobe: { profiles: { 'Adobe Standard': profile(), 'Camera Standard': profile({ name: 'Camera Standard', exposure_offset: 0.25 }) }, looks: {} } };
 
   it('renders Adobe Standard, Adobe Color and Camera Standard from Lightroom’s profiles', () => {

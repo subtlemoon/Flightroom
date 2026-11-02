@@ -240,14 +240,21 @@ function builtInProfile(info) {
   return dcp;
 }
 
+// Lightroom's installed profiles render only once checked against Lightroom's
+// own output. The built-in profile is: on JWL_7451 it is within 0.2 L* of
+// Lightroom's export in every tone band (tools/lr-tone.md).
+let useInstalled = false;
+export function setUseInstalledProfiles(on) { useInstalled = !!on; }
+
 /**
  * What renders a profile the way Lightroom does: Lightroom's own profile for
- * the camera when it's on this computer, else (Adobe Standard and Adobe Color)
- * the built-in one. Null for profiles with neither (the fitted looks are used then).
+ * the camera when it's on this computer (and in use), else (Adobe Standard and
+ * Adobe Color) the built-in one. Null for profiles with neither (the fitted
+ * looks are used then).
  */
 export function adobeRendering(info, profile) {
   if (!info) return null;
-  const a = info.adobe || {};
+  const a = useInstalled ? info.adobe || {} : {};
   const name = profile === 'camera' ? 'Camera Standard' : profile === 'adobe' || profile === 'standard' ? 'Adobe Standard' : null;
   const dcp = name && (a.profiles?.[name] || (name === 'Adobe Standard' ? builtInProfile(info) : null));
   if (!dcp) return null;

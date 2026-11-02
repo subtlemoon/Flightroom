@@ -366,13 +366,12 @@ vec3 easeWhite(vec3 x) {
   const float k = 0.95;
   return mix(x, k + (1.0 - k) * (1.0 - exp(-(x - k) / (1.0 - k))), step(k, x));
 }
-// How bright light y comes out on screen with the base rendering: the
-// profile's tone curve with Lightroom's profile, else the standard shoulder.
-// Highlights, Shadows, Clarity and masks' luminance ranges are weighted by it.
-float disp(float y) {
-  y = max(y, 0.0);
-  return uDcp > 0.5 && uToneMap < 0.5 ? encS1(toneAt(y)) : encode(vec3(shoulder1(y))).r;
-}
+// Where light y sits from shadow to highlight, for weighting Highlights,
+// Shadows, Clarity and masks' luminance ranges: the shoulder and sRGB curve
+// these were fitted with, whatever the profile (measured on JWL_7451 against
+// Lightroom's export: within 0.2 L* in every tone band; weighting by the
+// profile's tone curve instead made the sky 10 L* too dark).
+float disp(float y) { return encode(vec3(shoulder1(max(y, 0.0)))).r; }
 
 // Colours outside the screen's range brought in by desaturating them, keeping
 // brightness; noise below black (brightness at or under 0) is black, not its

@@ -31,7 +31,9 @@ export const LOOKS = {
 export function lookFor(info, s) {
   const r = adobeRendering(info, s.profile);
   // auto: the exposure Auto tone aims with (the fitted look's, which the profile's brightness is matched to).
-  return r ? { exposure: r.exposure, contrast: 0, saturation: 1, auto: LOOKS.adobe.exposure + r.exposure - BASELINE_EXPOSURE } : LOOKS[s.profile] || LOOKS.adobe;
+  // Built in (no Adobe colour tables) colours come out about 7% stronger than
+  // Lightroom's Adobe Standard; measured on JWL_7451's skin and red suits.
+  return r ? { exposure: r.exposure, contrast: 0, saturation: r.dcp.builtIn ? 0.93 : 1, auto: LOOKS.adobe.exposure + r.exposure - BASELINE_EXPOSURE } : LOOKS[s.profile] || LOOKS.adobe;
 }
 
 /** The white point of the settings: the camera's own for As Shot (unrounded, as Lightroom uses it). */
