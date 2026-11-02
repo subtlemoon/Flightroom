@@ -70,10 +70,35 @@ and didn't take colour out. Each is now fitted on its own export:
 | Blacks +85 | within ~1 L* (`BL_POS` 0.55, `BL_LIFT` 0.035, 90% added grey) | 1.0 dE |
 | Contrast -96 | within ~1 L* (S-curve around 0.6, 60% on brightness; `CON_*`, `CS_K` 0.25) | 1.3 dE |
 
-Highlights (0.5) and Whites (0.15), with no single exports yet, were then fitted
-on the combined tone sliders. Combined: tone sliders 2.0 dE (median 1.7),
-with the curve 2.7 (3.5), the full edit 4.3 (3.1). With the curve the red suits
-are still about 4-5 degrees pinker than Lightroom's.
+2.9.10 adds Highlights -93 and Whites -92 exports:
+
+| slider | fit | region error |
+|---|---|---|
+| Highlights -93 | `HL_K` 1.0 (2.9.9 had 0.5 from the combined edit) | 3.2 dE |
+| Whites -92 | on the cube of brightness, `WH_NEG` 0.24 (only the brightest) | 2.4 dE |
+
+Alone, every slider now matches; together at this edit's extremes they
+overlapped, so Highlights eases by half as Contrast goes to -100 (`HL_X`) and
+Shadows by a fifth as Blacks goes to +100 (`SH_X`), which leaves each slider
+alone as fitted. Combined: tone sliders 1.8 dE (median 1.7), with the curve
+2.2 (3.5), the full edit 3.9 (3.1). The red suits' brightness now matches with
+the curve; their hue is still about 4-5 degrees pinker than Lightroom's.
+
+2.10.2, from the histogram: Lightroom's Highlights is strongest on upper
+midtones and eases off on the brightest areas themselves. At -93 it takes
+L* 70-75 down 13.8 but L* 80-85 (the bright sky) only 10.2; Flightroom kept
+growing to 14.4 there, which flattened the sky into a spike at the top of the
+histogram (brightest 0.5% at 161 vs Lightroom's 174, on 0-255). The weight is
+now `HL_K 1.3 · smoothstep(0.35, 1, wide) · (1 - 0.55 · smoothstep(0.65, 0.85, base))`:
+the taper follows the edge-aware base, since inside a big sky the wide
+neighbourhood never gets near white. Highlights alone now tops out at 171
+(Lightroom 174); region errors unchanged (Highlights 3.4, full 3.9).
+
+The histogram itself was compared as counts: per channel the two overlap by
+85-91%, medians within 2-4 levels. What looked different was mostly the
+drawing, which 2.10.2 makes Lightroom's: counts to scale (it was a square
+root, which stretched the low parts up), lightly smoothed, channels added so
+all three together show grey.
 
 ## Fine detail (2.9.7): hair, skin, and Develop's view
 Measured on the top-left driver's hair, full resolution, against Lightroom's
