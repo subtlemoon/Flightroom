@@ -1416,15 +1416,15 @@ function Histogram() {
 
 const TAB_ICONS = {
   parametric: <svg viewBox="0 0 20 20"><path d="M3 16c4 0 4-12 7-12s3 6 7 6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /><path d="M3 12c4 0 5-6 8-6s3 3 6 3" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" opacity=".55" /></svg>,
-  point: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" fill="#e9ecf2" /></svg>,
+  point: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" fill="#ebebeb" /></svg>,
   red: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6" fill="none" stroke="#ff5f5f" strokeWidth="2" /></svg>,
   green: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6" fill="none" stroke="#4fd46e" strokeWidth="2" /></svg>,
   blue: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6" fill="none" stroke="#5c95ff" strokeWidth="2" /></svg>,
-  threeWay: <svg viewBox="0 0 20 20"><circle cx="10" cy="5.5" r="3.4" fill="#e9ecf2" /><circle cx="5.5" cy="13.5" r="3.4" fill="#e9ecf2" /><circle cx="14.5" cy="13.5" r="3.4" fill="#e9ecf2" /></svg>,
-  shadows: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" fill="#1b1e25" stroke="#e9ecf2" strokeWidth="1.6" /></svg>,
-  midtones: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" fill="#6b707b" stroke="#e9ecf2" strokeWidth="1.6" /></svg>,
-  highlights: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" fill="#e9ecf2" stroke="#e9ecf2" strokeWidth="1.6" /></svg>,
-  global: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" fill="none" stroke="#e9ecf2" strokeWidth="1.6" /><path d="M10 3.5a6.5 6.5 0 0 1 0 13z" fill="#e9ecf2" /></svg>,
+  threeWay: <svg viewBox="0 0 20 20"><circle cx="10" cy="5.5" r="3.4" fill="#ebebeb" /><circle cx="5.5" cy="13.5" r="3.4" fill="#ebebeb" /><circle cx="14.5" cy="13.5" r="3.4" fill="#ebebeb" /></svg>,
+  shadows: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" fill="#2a2a2a" stroke="#ebebeb" strokeWidth="1.6" /></svg>,
+  midtones: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" fill="#707070" stroke="#ebebeb" strokeWidth="1.6" /></svg>,
+  highlights: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" fill="#ebebeb" stroke="#ebebeb" strokeWidth="1.6" /></svg>,
+  global: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" fill="none" stroke="#ebebeb" strokeWidth="1.6" /><path d="M10 3.5a6.5 6.5 0 0 1 0 13z" fill="#ebebeb" /></svg>,
 };
 
 // tabs: [key, icon, title], null = a divider.

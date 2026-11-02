@@ -509,7 +509,7 @@ export class Renderer {
     this.composer.render((t, extra) => (extra
       ? this.drawPhoto(info, s, geo, frame, out2frame, mm(mat(1, 0, extra.shift[0], 0, 1, extra.shift[1]), extra.out2ori || out2ori), t, false, null, extra.op && this.opHi?.get(extra.op.id))
       : this.drawPhoto(info, s, geo, frame, out2frame, out2ori, t, showClip, maskView, null)), layers, geo, out2ori, target, live,
-    [s, info, frame, this.src, this.hi, this.opHi, showClip, maskView && JSON.stringify(maskView)]);
+    [s, info, frame, this.src, this.hi, this.opHi, showClip, maskView && JSON.stringify(maskView), this.melissa]);
   }
 
   /**
@@ -635,7 +635,7 @@ export class Renderer {
       uOut2Crop: glMat(out2frame),
       uPhotoPx: [1 / geo.sw, 1 / geo.sh],
       uCropAspect: frame.hw / frame.hh,
-      uBg: [0.043, 0.051, 0.071],
+      uBg: [0.2275, 0.2275, 0.2275],
       ...this.colorUniforms(info, s),
       uExposure: s.exposure + look.exposure,
       uContrast: look.contrast + (s.contrast / 100) * 0.75,
@@ -661,6 +661,7 @@ export class Renderer {
       uVigRound: s.vignetteRoundness / 100,
       uVigFeather: s.vignetteFeather / 100,
       uShowClip: showClip ? 1 : 0,
+      uMelissa: this.melissa ? 1 : 0,
       uOriSize: [geo.ow, geo.oh],
       ...this.maskUniforms(maskView, geo),
     });
@@ -726,11 +727,14 @@ export class Renderer {
       gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
       return count(px);
     };
+    // Counted in Melissa RGB (ProPhoto colours, sRGB tones), as Lightroom's histogram is.
+    this.melissa = true;
     this.render(info, s, geo, frame, o2f, { target: this.histTarget });
     const out = read();
     // What goes into the tone curve (the photo without it), which Lightroom
     // draws behind the curve. Reads are queued in order, so reusing the target is safe.
     this.render(info, { ...s, ...FLAT_CURVE }, geo, frame, o2f, { target: this.histTarget });
+    this.melissa = false;
     const pre = read();
     this.hi = saveHi;
     const join = (a, b) => (a ? Object.assign(a, { pre: b }) : null);
