@@ -37,7 +37,7 @@ fn main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         .title("Flightroom")
         .inner_size(1400.0, 900.0)
         .min_inner_size(960.0, 640.0)
-        .background_color(tauri::window::Color(11, 13, 18, 255))
+        .background_color(tauri::window::Color(38, 38, 38, 255))
         .disable_drag_drop_handler()
         .additional_browser_args(BROWSER_ARGS)
         .build()?;
@@ -82,7 +82,7 @@ fn updating_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         .always_on_top(true)
         .skip_taskbar(true)
         .center()
-        .background_color(tauri::window::Color(11, 13, 18, 255))
+        .background_color(tauri::window::Color(38, 38, 38, 255))
         .additional_browser_args(BROWSER_ARGS)
         .build()?;
     Ok(())

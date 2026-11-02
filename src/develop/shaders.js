@@ -100,6 +100,7 @@ uniform vec2 uGradeShape; // blending, balance
 uniform float uGradeOn;
 uniform vec3 uGrain;      // amount, cell size (oriented px), roughness
 uniform float uShowClip;
+uniform float uMelissa; // 1: the histogram's render, counted in Lightroom's Melissa RGB
 // Masks (masks.js): up to 16 greyscale images, one per channel of four
 // textures, and each mask's local sliders.
 uniform vec2 uOriSize;
@@ -244,6 +245,22 @@ const mat3 SRGB_TO_PP = mat3(0.529346, 0.098374, 0.016883, 0.330073, 0.873461, 0
 const mat3 PP_TO_SRGB = mat3(2.034076, -0.228813, -0.00857, -0.727334, 1.23173, -0.153287, -0.306742, -0.002917, 1.161856);
 float disp(float y) { return encode(vec3(shoulder1(max(y, 0.0)))).r; }
 
+// Colours outside sRGB (a channel below 0) pulled in smoothly, keeping hue,
+// as ACES's gamut compression does: each channel's distance from the
+// brightest one is eased from 0.8 on, so 1.3 lands on the edge.
+vec3 gamutIn(vec3 d) {
+  vec3 lin = decodeS(d);
+  float ach = max(lin.r, max(lin.g, lin.b));
+  if (ach > 0.0) {
+    const float thr = 0.95, lim = 1.3, pw = 1.2;
+    float sc = (lim - thr) / pow(pow((1.0 - thr) / (lim - thr), -pw) - 1.0, 1.0 / pw);
+    vec3 dist = (ach - lin) / ach;
+    vec3 over = max(dist - thr, 0.0) / sc;
+    vec3 cd = mix(dist, thr + sc * over / pow(1.0 + pow(over, vec3(pw)), vec3(1.0 / pw)), step(thr, dist));
+    lin = ach - cd * ach;
+  }
+  return clamp(encode(clamp(lin, 0.0, 1.0)), 0.0, 1.0);
+}
 vec3 hsv(vec3 c) {
   float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b)), d = mx - mn;
   float h = 0.0;
@@ -453,7 +470,9 @@ void main() {
   } else d = dc;
   d = clamp(d, 0.0, 1.0);
   d = vec3(texture(uCurve, vec2(d.r, 0.5)).g, texture(uCurve, vec2(d.g, 0.5)).b, texture(uCurve, vec2(d.b, 0.5)).a);
-  d = encode(clamp(PP_TO_SRGB * decodeS(d), 0.0, 1.0));
+  // Back to sRGB unclipped: ProPhoto colours past sRGB are eased in at the end
+  // (gamutIn), so strong reds don't all land on one value.
+  d = encode(PP_TO_SRGB * decodeS(d));
   // Masks' own curves, the same way, where each mask covers.
   if (uMaskN > 0.0) {
     for (int i = 0; i < 16; i++) {
@@ -572,7 +591,7 @@ void main() {
     d += nz * min(grainAmt, 1.5) * 0.35 * (0.3 + 0.7 * (1.0 - abs(yg * 2.0 - 1.0)));
   }
 
-  d = clamp(d, 0.0, 1.0);
+  d = uMelissa > 0.5 ? encode(clamp(SRGB_TO_PP * decodeS(d), 0.0, 1.0)) : gamutIn(d);
   // The selected mask on top: a colour, its outline, or the mask itself.
   if (uMaskView >= 0.0) {
     // The outline is the mask's halfway line; the fainter lines either side
