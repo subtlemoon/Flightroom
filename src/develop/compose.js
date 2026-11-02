@@ -369,7 +369,7 @@ export class Composer {
     this.bounds = new WeakMap(); // op -> its box (oriented px)
   }
 
-  /** Working buffers for one output size; the screen, its light version, histogram and preview each keep theirs. */
+  /** Working buffers for one output size; the screen, refinement, histogram, preview and thumbnails each keep theirs. */
   set(W, H) {
     const key = `${W}x${H}`;
     let t = this.sets.get(key);
@@ -385,7 +385,7 @@ export class Composer {
       t.acc = [null, null];
       Object.defineProperty(t.acc, 0, { get: () => t.acc0 });
       Object.defineProperty(t.acc, 1, { get: () => t.acc1 });
-      if (this.sets.size >= 5) { // screen, light (while dragging), histogram, preview, filmstrip thumbnail
+      if (this.sets.size >= 5) { // screen, refinement, histogram, preview, filmstrip thumbnail
         const [old, o] = this.sets.entries().next().value;
         this.sets.delete(old);
         this.freeSet(o);

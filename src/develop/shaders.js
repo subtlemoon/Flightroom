@@ -532,20 +532,26 @@ void main() {
   // only follows big edges (a head against the sky), so fine detail such as
   // hair strands and the gaps between them is lifted alike and keeps its
   // contrast, as in Lightroom (measured on JWL_7451).
-  float lw = 0.5 * (ring(p, LIFT_R) + ring(p, 2.0 * LIFT_R));
-  float dl = l0 - lw;
-  lw += dl * (1.0 - exp(-dl * dl / LIFT_EDGE));
-  float bw = disp(exp2(lw + exposure));
-  // Highlights and Shadows: weights and strengths fitted to Lightroom's measured
-  // change per L* band at -100 / +100 (see tools/lr-tone.md).
-  // Sliders overlap as in Lightroom: with Contrast already pulling the brights
-  // down Highlights does less, and with Blacks lifting the darks Shadows does less.
-  // Highlights eases off again on the brightest areas themselves (a bright
-  // sky), leaving those to Whites: Lightroom's -93 takes L* 70-75 down 14 but
-  // L* 80-85 only 10, so the sky keeps its gradient rather than piling up.
-  base += highlights * HL_K * smoothstep(HL_LO, 1.0, bw) * (1.0 - HL_TOP * smoothstep(HL_T0, HL_T1, bd)) * (1.0 - HL_X * max(-(uContrastSat + LA.y), 0.0));
-  float shLift = shadows * (SH_K * (1.0 - smoothstep(0.0, SH_HI, bw)) + SH_DEEP * (1.0 - smoothstep(0.0, 0.2, bw))) * (1.0 - SH_X * max(blacks, 0.0));
-  base += shLift;
+  // Skip the extra neighbourhood samples (16 texture reads per pixel) when
+  // neither Highlights nor Shadows is in use, the common case while editing
+  // curves and colour; both terms are exactly 0 then anyway.
+  float shLift = 0.0;
+  if (highlights != 0.0 || shadows != 0.0) {
+    float lw = 0.5 * (ring(p, LIFT_R) + ring(p, 2.0 * LIFT_R));
+    float dl = l0 - lw;
+    lw += dl * (1.0 - exp(-dl * dl / LIFT_EDGE));
+    float bw = disp(exp2(lw + exposure));
+    // Highlights and Shadows: weights and strengths fitted to Lightroom's measured
+    // change per L* band at -100 / +100 (see tools/lr-tone.md).
+    // Sliders overlap as in Lightroom: with Contrast already pulling the brights
+    // down Highlights does less, and with Blacks lifting the darks Shadows does less.
+    // Highlights eases off again on the brightest areas themselves (a bright
+    // sky), leaving those to Whites: Lightroom's -93 takes L* 70-75 down 14 but
+    // L* 80-85 only 10, so the sky keeps its gradient rather than piling up.
+    base += highlights * HL_K * smoothstep(HL_LO, 1.0, bw) * (1.0 - HL_TOP * smoothstep(HL_T0, HL_T1, bd)) * (1.0 - HL_X * max(-(uContrastSat + LA.y), 0.0));
+    shLift = shadows * (SH_K * (1.0 - smoothstep(0.0, SH_HI, bw)) + SH_DEEP * (1.0 - smoothstep(0.0, 0.2, bw))) * (1.0 - SH_X * max(blacks, 0.0));
+    base += shLift;
+  }
   float mid = smoothstep(0.03, 0.35, bd) * (1.0 - smoothstep(0.8, 1.0, bd));
   detail *= max(0.0, 1.0 + clarity * 0.9 * mid);
 
