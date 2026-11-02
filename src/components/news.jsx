@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { Icon } from './ui.jsx';
-import { brandColor } from './gear.jsx';
 
 const KIND_ORDER = ['Camera', 'Lens', 'Accessory', 'In development', 'Cinema'];
 const KIND_LABEL = { Camera: 'Cameras', Lens: 'Lenses', Accessory: 'Accessories', 'In development': 'In development', Cinema: 'Cinema' };
@@ -54,7 +53,7 @@ export function NewsView({ store, onOpenGear }) {
               const gear = item.catalogId && gearById[item.catalogId];
               const owned = gear && state.owned.includes(gear.id);
               return (
-                <article key={item.name} className="news-card" style={{ '--brand': brandColor(item.brand) }}>
+                <article key={item.name} className="news-card">
                   <div className="news-top">
                     <span className="news-brand">{item.brand}</span>
                     <span className="news-date">{fmtDate(item.date)}</span>
@@ -69,7 +68,7 @@ export function NewsView({ store, onOpenGear }) {
                   <div className="news-actions">
                     {gear && <button className="btn btn-sm" onClick={() => onOpenGear(gear)}>View specs</button>}
                     {gear && (
-                      <button className={owned ? 'btn btn-sm' : 'btn btn-sm btn-primary'} onClick={() => actions.toggleOwned(gear.id)}>
+                      <button className="btn btn-sm" onClick={() => actions.toggleOwned(gear.id)}>
                         <Icon name={owned ? 'check' : 'plus'} size={14} />{owned ? 'Owned' : 'Add to My Gear'}
                       </button>
                     )}

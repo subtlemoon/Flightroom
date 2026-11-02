@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Counts, Icon, Modal, Status, LEVEL_META } from './ui.jsx';
+import { Counts, GroupDot, Icon, Modal, Status, LEVEL_META } from './ui.jsx';
 import { GearCard, GearPicker } from './gear.jsx';
 import { applyResolved, checkKey, checkPreset, LEVELS } from '../engine/compat.js';
 import { listKey } from '../store.js';
@@ -29,17 +29,13 @@ function PresetCard({ preset, gearById, settings, gear, onOpen }) {
 }
 
 const GROUP_COLORS = ['#ff6b6b', '#4dabf7', '#51cf66', '#fcc419', '#9775fa', '#f783ac', '#20c997', '#ff922b'];
-const GROUP_ICONS = ['🎬', '🏟️', '🌿', '📸', '✈️', '💍', '🌃', '🎤', '🏔️', '🐦', '🚗', '🎨'];
 
 export function GroupForm({ initial, onSave, onClose }) {
-  const [g, setG] = useState(initial || { name: '', icon: '📸', color: GROUP_COLORS[4] });
+  const [g, setG] = useState(initial || { name: '', color: GROUP_COLORS[1] });
   return (
     <Modal title={initial ? 'Edit group' : 'New group'} onClose={onClose}
       footer={<><button className="btn btn-ghost" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={!g.name.trim()} onClick={() => onSave(g)}>Save</button></>}>
       <label className="field"><span>Name</span><input autoFocus value={g.name} onChange={(e) => setG({ ...g, name: e.target.value })} placeholder="Weddings, Travel, Astro…" /></label>
-      <div className="field"><span>Icon</span>
-        <div className="chips">{GROUP_ICONS.map((i) => <button key={i} className={`chip emoji${g.icon === i ? ' on' : ''}`} onClick={() => setG({ ...g, icon: i })}>{i}</button>)}</div>
-      </div>
       <div className="field"><span>Color</span>
         <div className="chips">{GROUP_COLORS.map((c) => <button key={c} aria-label={c} className={`swatch${g.color === c ? ' on' : ''}`} style={{ background: c }} onClick={() => setG({ ...g, color: c })} />)}</div>
       </div>
@@ -59,10 +55,9 @@ export function GroupView({ group, store, onOpenPreset }) {
   };
   return (
     <div className="view">
-      <header className="view-head" style={{ '--accent': group.color }}>
-        <div className="group-badge">{group.icon}</div>
+      <header className="view-head">
         <div className="grow">
-          <div className="eyebrow">Group</div>
+          <div className="eyebrow"><GroupDot color={group.color} />Group</div>
           <h1>{group.name}</h1>
           <p className="muted">{group.presets.length} preset{group.presets.length === 1 ? '' : 's'}</p>
         </div>
@@ -135,10 +130,10 @@ export function PresetView({ group, preset, store, onBack, onOpenGear }) {
 
   return (
     <div className="view">
-      <header className="view-head" style={{ '--accent': group.color }}>
+      <header className="view-head">
         <button className="icon-btn back" onClick={onBack} aria-label="Back to group"><Icon name="back" /></button>
         <div className="grow">
-          <div className="eyebrow">{group.icon} {group.name}</div>
+          <div className="eyebrow"><GroupDot color={group.color} />{group.name}</div>
           <input className="title-input" value={preset.name} onChange={(e) => upd({ name: e.target.value })} aria-label="Preset name" />
           <input className="notes-input" value={preset.notes || ''} placeholder="Add a note about this kit…" onChange={(e) => upd({ notes: e.target.value })} />
         </div>

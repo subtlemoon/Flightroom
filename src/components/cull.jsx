@@ -354,7 +354,7 @@ export function CullView({ store, onDevelop }) {
         <label className="toggle-row cull-advance" title="Go to the next photo after rating">
           <input type="checkbox" checked={advance} onChange={() => actions.setCullSettings({ cullAdvance: !advance })} />Auto-advance
         </label>
-        <label className="toggle-row" title="Also show the photos in folders inside this one (not the Exported folder)">
+        <label className="toggle-row cull-advance" title="Also show the photos in folders inside this one (not the Exported folder)">
           <input type="checkbox" checked={subs} onChange={() => { setWithSubfolders(!subs); setSubs(!subs); open(folder, true); }} />Subfolders
         </label>
         <button className="btn btn-sm" onClick={() => open(folder, true)} title="Look for new files"><Icon name="refresh" size={14} />Reload</button>

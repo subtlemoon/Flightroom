@@ -4,14 +4,12 @@ import { MOUNTS, SENSORS, ACCESSORY_CATEGORIES } from '../data/gear.js';
 import { VIDEO_SUPPORT } from '../data/software.js';
 import { uid } from '../store.js';
 
-const BRAND_COLORS = { Sony: '#f59f00', Canon: '#e03131', Nikon: '#fcc419', Fujifilm: '#20c997', Panasonic: '#4dabf7', Blackmagic: '#adb5bd', Sigma: '#868e96' };
-export const brandColor = (b) => BRAND_COLORS[b] || '#9775fa';
 
 export function GearCard({ item, owned, onOpen, action, compact }) {
   return (
     <div className={`gear-card${compact ? ' compact' : ''}`} onClick={() => onOpen?.(item)} role="button" tabIndex={0}
       onKeyDown={(e) => e.key === 'Enter' && onOpen?.(item)}>
-      <div className="gear-icon" style={{ '--brand': brandColor(item.brand) }}><Icon name={typeIcon(item)} size={compact ? 18 : 22} /></div>
+      <div className="gear-icon"><Icon name={typeIcon(item)} size={compact ? 16 : 20} /></div>
       <div className="gear-main">
         <div className="gear-brand">{item.brand} · {typeLabel(item)}{owned && <span className="owned-pill">Owned</span>}{!item.builtIn && <span className="custom-pill">Custom</span>}</div>
         <div className="gear-model">{item.model}</div>
@@ -46,7 +44,7 @@ export function GearDetail({ item, owned, usedIn, onClose, onToggleOwned, onEdit
     <div className="drawer-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <aside className="drawer">
         <div className="drawer-head">
-          <div className="gear-icon big" style={{ '--brand': brandColor(item.brand) }}><Icon name={typeIcon(item)} size={28} /></div>
+          <div className="gear-icon big"><Icon name={typeIcon(item)} size={24} /></div>
           <div>
             <div className="gear-brand">{item.brand} · {typeLabel(item)}</div>
             <h2>{item.model}</h2>
@@ -228,7 +226,7 @@ export function GearPicker({ gear, owned, already, onPick, onClose, startType })
           const added = already.includes(g.id);
           return (
             <GearCard key={g.id} item={g} owned={owned.includes(g.id)} compact
-              action={<button className={added ? 'btn btn-sm' : 'btn btn-sm btn-primary'} disabled={added} onClick={() => onPick(g)}>{added ? 'Added' : 'Add'}</button>} />
+              action={<button className="btn btn-sm" disabled={added} onClick={() => onPick(g)}>{added ? 'Added' : 'Add'}</button>} />
           );
         })}
       </div>
