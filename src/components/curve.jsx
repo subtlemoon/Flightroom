@@ -3,6 +3,9 @@ import { useMemo, useRef, useState } from 'react';
 import { monotoneCurve, parametric } from '../develop/luts.js';
 import { LINEAR_CURVE } from '../develop/params.js';
 
+const PARAMETRIC_KEYS = ['pShadows', 'pDarks', 'pLights', 'pHighlights', 'pSplitS', 'pSplitM', 'pSplitH'];
+const PARAMETRIC_DEFAULT = { pSplitS: 25, pSplitM: 50, pSplitH: 75 };
+
 const CH_CLASS = { curve: '', curveR: ' ch-r', curveG: ' ch-g', curveB: ' ch-b' };
 
 // Point curve: drag points, click to add, double-click a point (or drag it off) to remove it.
@@ -19,15 +22,24 @@ export function CurveEditor({ s, channel, readOnly, set }) {
   };
   const curve = useMemo(() => monotoneCurve(pts.map(([x, y]) => [x / 255, y / 255])), [pts]);
   const isMaster = channel === 'curve';
-  const path = useMemo(() => {
+  // Point mode draws the point curve itself, so the dots always sit on the line;
+  // what the Parametric sliders add on top shows as a faint second line.
+  // Parametric mode (read-only) draws the two combined.
+  const pv = PARAMETRIC_KEYS.map((k) => s[k] ?? PARAMETRIC_DEFAULT[k] ?? 0);
+  const regions = isMaster && pv.some((v, i) => v !== (PARAMETRIC_DEFAULT[PARAMETRIC_KEYS[i]] ?? 0));
+  const line = (f) => {
     let d = '';
-    for (let i = 0; i <= 96; i++) {
-      const x = i / 96;
-      const y = Math.min(1, Math.max(0, curve(isMaster ? parametric(s, x) : x)));
-      d += `${i ? 'L' : 'M'}${(x * SIZE).toFixed(1)},${(SIZE - y * SIZE).toFixed(1)}`;
+    for (let i = 0; i <= SIZE; i++) {
+      const x = i / SIZE;
+      const y = Math.min(1, Math.max(0, f(x)));
+      d += `${i ? 'L' : 'M'}${i},${(SIZE - y * SIZE).toFixed(2)}`;
     }
     return d;
-  }, [curve, isMaster, s.pShadows, s.pDarks, s.pLights, s.pHighlights, s.pSplitS, s.pSplitM, s.pSplitH]);
+  };
+  const path = useMemo(() => line(readOnly && regions ? (x) => curve(parametric(s, x)) : curve), [curve, readOnly, regions, ...pv]);
+  const combined = useMemo(() => (!readOnly && regions ? line((x) => curve(parametric(s, x))) : null),
+    [curve, readOnly, regions, ...pv]);
+  const outAt = (x) => Math.round(Math.min(1, Math.max(0, readOnly && regions ? curve(parametric(s, x / 255)) : curve(x / 255))) * 255);
 
   const near = (x, y) => pts.findIndex(([px, py]) => Math.hypot(px - x, py - y) < 10);
   const down = (e) => {
@@ -36,8 +48,11 @@ export function CurveEditor({ s, channel, readOnly, set }) {
     let i = near(x, y);
     let next = pts;
     if (i < 0) {
-      next = [...pts, [x, y]].sort((a, b) => a[0] - b[0]);
-      i = next.findIndex((p) => p[0] === x && p[1] === y);
+      // A click straight above or below a point moves that point: two points
+      // at one input would leave one of them off the line.
+      i = pts.findIndex((p) => p[0] === x);
+      next = i >= 0 ? pts.map((q, j) => (j === i ? [x, y] : q)) : [...pts, [x, y]].sort((a, b) => a[0] - b[0]);
+      if (i < 0) i = next.findIndex((p) => p[0] === x);
       set(channel, next);
     }
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -47,7 +62,7 @@ export function CurveEditor({ s, channel, readOnly, set }) {
   const move = (e) => {
     const d = drag.current;
     if (!d) {
-      if (!readOnly && ref.current) { const [x] = fromEvent(e); setRead([x, Math.round(Math.min(1, Math.max(0, curve(isMaster ? parametric(s, x / 255) : x / 255))) * 255)]); }
+      if (!readOnly && ref.current) { const [x] = fromEvent(e); setRead([x, outAt(x)]); }
       return;
     }
     let [x, y] = fromEvent(e);
@@ -56,10 +71,15 @@ export function CurveEditor({ s, channel, readOnly, set }) {
     if (d.i === 0) x = Math.min(x, hi);
     else if (d.i === p.length - 1) x = Math.max(x, lo);
     else x = Math.min(hi, Math.max(lo, x));
-    const next = p.map((q, j) => (j === d.i ? [x, y] : q));
-    d.pts = next;
-    set(channel, next);
+    d.pts = p.map((q, j) => (j === d.i ? [x, y] : q));
+    // One change per screen frame, however fast the mouse reports.
+    if (!d.raf) d.raf = requestAnimationFrame(() => { d.raf = 0; set(channel, d.pts); });
     setRead([x, y]);
+  };
+  const end = () => {
+    const d = drag.current;
+    drag.current = null;
+    if (d?.raf) { cancelAnimationFrame(d.raf); set(channel, d.pts); }
   };
   const remove = (e) => {
     if (readOnly) return;
@@ -70,17 +90,18 @@ export function CurveEditor({ s, channel, readOnly, set }) {
   return (
     <div className={`dev-curve${CH_CLASS[channel] || ''}${readOnly ? ' readonly' : ''}`}>
       {/* The handlers sit on a padded box so the corner points can be grabbed past the rounded edge. */}
-      <div className="dev-curve-pad" onPointerDown={down} onPointerMove={move} onPointerUp={() => { drag.current = null; }}
+      <div className="dev-curve-pad" onPointerDown={down} onPointerMove={move} onPointerUp={end} onLostPointerCapture={end}
         onPointerLeave={() => !drag.current && setRead(null)} onDoubleClick={remove}>
       <svg ref={ref} viewBox={`0 0 ${SIZE} ${SIZE}`}>
         {[1, 2, 3].map((i) => <g key={i}><line x1={(i * SIZE) / 4} y1={0} x2={(i * SIZE) / 4} y2={SIZE} /><line y1={(i * SIZE) / 4} x1={0} y2={(i * SIZE) / 4} x2={SIZE} /></g>)}
         <line className="diag" x1={0} y1={SIZE} x2={SIZE} y2={0} />
+        {combined && <path className="combined" d={combined} />}
         <path d={path} />
         {!readOnly && pts.map((p, i) => { const [x, y] = toXY(p); return <circle key={i} cx={x} cy={y} r={5} />; })}
       </svg>
       </div>
       <div className="dev-curve-foot">
-        <span className="dev-curve-read">{read ? `Input ${read[0]}  ·  Output ${read[1]}` : readOnly ? 'Shape the curve with the sliders below' : 'Click to add a point, double-click to remove'}</span>
+        <span className="dev-curve-read">{read ? `Input ${read[0]}  ·  Output ${read[1]}` : readOnly ? 'Shape the curve with the sliders below' : 'Click to add, double-click to delete'}</span>
         {!readOnly && <button className="btn btn-sm btn-ghost" onClick={() => set(channel, LINEAR_CURVE)}>Linear</button>}
       </div>
     </div>

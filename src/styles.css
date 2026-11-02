@@ -505,7 +505,8 @@ kbd { font: inherit; font-size: 10.5px; padding: 1px 5px; border-radius: 5px; bo
 .dev-curve line.diag { stroke: rgba(255,255,255,.12); stroke-dasharray: 3 4; }
 .dev-curve path { fill: none; stroke: #eef1f6; stroke-width: 1.6; }
 .dev-curve circle { fill: #0b0d12; stroke: #eef1f6; stroke-width: 1.6; }
-.dev-curve-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+.dev-curve path.combined { stroke: rgba(238, 241, 246, .35); stroke-width: 1.2; stroke-dasharray: 4 3; }
+.dev-curve-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 28px; margin-top: 4px; }
 .dev-mixer { display: flex; flex-direction: column; gap: 2px; }
 .dev-mixer .seg { margin-bottom: 6px; }
 .crop-shade { position: absolute; inset: 0; background: rgba(0,0,0,.55); pointer-events: none; }
@@ -555,7 +556,7 @@ kbd { font: inherit; font-size: 10.5px; padding: 1px 5px; border-radius: 5px; bo
 .dev-check input { accent-color: var(--accent); }
 .seg.full { display: flex; }
 .seg.full button { flex: 1; padding: 4px 4px; }
-.dev-curve-read { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dev-curve-read { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .dev-curve.ch-r path { stroke: #ff6a6a; } .dev-curve.ch-g path { stroke: #5ddc7a; } .dev-curve.ch-b path { stroke: #6aa0ff; }
 .dev-curve.readonly svg { cursor: default; }
 .dev-dots { display: flex; justify-content: space-between; margin: 4px 2px 6px; }

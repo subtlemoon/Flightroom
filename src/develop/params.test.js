@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CURVE_PRESETS, defaults, fromXmp, isEdited, resetSection, sectionEdited, toXmp } from './params.js';
+import { CURVE_PRESETS, cleanCurve, defaults, fromXmp, isEdited, resetSection, sectionEdited, toXmp } from './params.js';
 import { curveTable } from './luts.js';
 import { newMask, newPart } from './masks.js';
 
@@ -59,5 +59,11 @@ describe('develop settings in the sidecar', () => {
     expect(cleared.own.Masks).toBe('');
     expect(cleared.xml.GradientBasedCorrections).toBe('');
     expect(toXmp(defaults(asShot)).xml).toBeUndefined();
+  });
+});
+
+describe('cleanCurve', () => {
+  it('sorts points, keeps them in range and one per input', () => {
+    expect(cleanCurve([[255, 255], [0, 0], [128, 90], [128, 200], [-3, 300]])).toEqual([[0, 0], [128, 90], [255, 255]]);
   });
 });

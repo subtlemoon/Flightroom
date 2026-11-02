@@ -156,6 +156,12 @@ export const SLIDER = Object.fromEntries(SLIDERS.map((s) => [s.key, s]));
 export const SECTION_KEYS = Object.fromEntries(SECTIONS.map((sec) => [sec.id, [...sectionSliders(sec).map((s) => s.key), ...(sec.keys || [])]]));
 
 export const LINEAR_CURVE = [[0, 0], [255, 255]];
+
+/** A point curve as the editor needs it: in range, by input, one point per input (the curve can only pass through one). */
+export const cleanCurve = (pts) => pts
+  .map(([x, y]) => [Math.min(255, Math.max(0, Math.round(x))), Math.min(255, Math.max(0, Math.round(y)))])
+  .sort((a, b) => a[0] - b[0])
+  .filter((p, i, a) => i === 0 || p[0] !== a[i - 1][0]);
 // Lightroom's point curve presets (process 2012 and later).
 export const CURVE_PRESETS = [
   ['Linear', LINEAR_CURVE],
@@ -235,7 +241,7 @@ export function fromXmp(crs, curves, asShot, own = {}) {
   for (const [k, suffix] of CURVE_CHANNELS) {
     const seq = curves?.[`ToneCurvePV2012${suffix}`];
     if (!(seq?.length >= 2)) continue;
-    const pts = seq.map((p) => p.split(',').map(Number)).filter((p) => p.length === 2 && p.every(Number.isFinite));
+    const pts = cleanCurve(seq.map((p) => p.split(',').map(Number)).filter((p) => p.length === 2 && p.every(Number.isFinite)));
     if (pts.length >= 2) s[k] = pts;
   }
   if (crs.HasCrop === 'True') {

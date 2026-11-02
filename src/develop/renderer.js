@@ -202,9 +202,15 @@ export const MASK_STYLES = ['color', 'both', 'outline', 'matte', 'image'];
 export const fitScale = (W, H, f, margin = 0) => Math.min((W - margin * 2) / (2 * f.hw), (H - margin * 2) / (2 * f.hh));
 
 export class Renderer {
-  constructor(canvas) {
+  /**
+   * `onScreen`: the canvas is shown on the page. Its picture is then kept
+   * between frames (preserveDrawingBuffer): with the default swap, some
+   * Windows graphics drivers flash an empty or older frame while the photo
+   * redraws every frame (dragging a slider or the curve).
+   */
+  constructor(canvas, { onScreen = false } = {}) {
     this.canvas = canvas;
-    const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, premultipliedAlpha: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
+    const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, premultipliedAlpha: false, preserveDrawingBuffer: onScreen, powerPreference: 'high-performance' });
     if (!gl || gl.isContextLost()) throw new Error('WebGL2 is not available on this graphics card');
     if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('This graphics card has no float rendering');
     gl.getExtension('OES_texture_float_linear');

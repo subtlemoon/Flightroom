@@ -577,7 +577,7 @@ function stageRenderer() {
   if (!stage || stage.renderer.gl.isContextLost()) {
     const canvas = document.createElement('canvas');
     canvas.style.width = canvas.style.height = '100%';
-    stage = { canvas, renderer: new Renderer(canvas) };
+    stage = { canvas, renderer: new Renderer(canvas, { onScreen: true }) };
   }
   return stage;
 }
@@ -1412,18 +1412,30 @@ function Wheel({ k, title, s, set, big }) {
     if (h < 0) h += 360;
     return [h % 360, Math.min(100, Math.round(Math.hypot(x, y) * 100))];
   };
+  // One change per screen frame, however fast the mouse reports.
   const apply = (e) => {
     const [h, sa] = at(e);
-    if (!e.shiftKey) set(`${k}Hue`, h);
+    const d = drag.current;
+    d.want = [e.shiftKey ? null : h, sa];
+    if (!d.raf) d.raf = requestAnimationFrame(() => { d.raf = 0; commit(d); });
+  };
+  const commit = (d) => {
+    const [h, sa] = d.want;
+    if (h !== null) set(`${k}Hue`, h);
     set(`${k}Sat`, sa);
+  };
+  const end = () => {
+    const d = drag.current;
+    drag.current = null;
+    if (d?.raf) { cancelAnimationFrame(d.raf); commit(d); }
   };
   const a = (hue * Math.PI) / 180, r = sat / 100;
   return (
     <div className={`dev-wheel${k === 'gMid' ? ' wheel-mid' : ''}`}>
       <div className="dev-wheel-title">{title}</div>
       <div className="dev-wheel-disc" ref={ref} title="Drag to tint; double-click to reset"
-        onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); drag.current = true; apply(e); }}
-        onPointerMove={(e) => drag.current && apply(e)} onPointerUp={() => { drag.current = null; }}
+        onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); drag.current = {}; apply(e); }}
+        onPointerMove={(e) => drag.current && apply(e)} onPointerUp={end} onLostPointerCapture={end}
         onDoubleClick={() => { set(`${k}Hue`, 0); set(`${k}Sat`, 0); }}>
         <span className="dev-wheel-knob" style={{ left: `${50 + Math.cos(a) * r * 50}%`, top: `${50 - Math.sin(a) * r * 50}%` }} />
       </div>
