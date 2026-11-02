@@ -84,6 +84,9 @@ uniform vec4 uTmA;        // tone mapper parameters A (precomputed in tonemap.js
 uniform vec4 uTmB;        // tone mapper parameters B (filmic spline nodes)
 uniform float uTmHue;     // hue preservation factor (0..1)
 uniform float uHighlights, uShadows, uWhites, uBlacks;
+// Basic tone slider shapes (fitted to Lightroom; tools/lr-tone.md).
+const float HL_K = 0.9, HL_LO = 0.2, SH_K = 0.72, SH_HI = 0.9;
+const float WH_NEG = 0.13, WH_POS = 0.3, BL_NEG = 1.4, BL_POS = 1.0, BL_N = 2.36, BL_LIFT = 0.12;
 uniform float uTexture, uClarity, uDehaze, uVibrance, uSaturation;
 uniform float uAirY;
 uniform float uSharpen, uSharpenRadius, uSharpenDetail, uSharpenMasking;
@@ -235,6 +238,10 @@ vec3 filmicMap(vec3 x) {
   return clamp(mix(perCh, normRgb, uTmHue), 0.0, 1.0);
 }
 
+vec3 decodeS(vec3 v) { return mix(v / 12.92, pow((max(v, vec3(0.0)) + 0.055) / 1.055, vec3(2.4)), step(0.04045, v)); }
+// Linear sRGB <-> linear ProPhoto (D50, Bradford), columns.
+const mat3 SRGB_TO_PP = mat3(0.529346, 0.098374, 0.016883, 0.330073, 0.873461, 0.117672, 0.140581, 0.028165, 0.865444);
+const mat3 PP_TO_SRGB = mat3(2.034076, -0.228813, -0.00857, -0.727334, 1.23173, -0.153287, -0.306742, -0.002917, 1.161856);
 float disp(float y) { return encode(vec3(shoulder1(max(y, 0.0)))).r; }
 
 vec3 hsv(vec3 c) {
@@ -375,8 +382,10 @@ void main() {
   base += exposure;
 
   float bd = disp(exp2(base));
-  base += highlights * 0.9 * smoothstep(0.4, 1.0, bd);
-  base += shadows * 1.6 * (1.0 - smoothstep(0.0, 0.55, bd));
+  // Highlights and Shadows: weights and strengths fitted to Lightroom's measured
+  // change per L* band at -100 / +100 (see tools/lr-tone.md).
+  base += highlights * HL_K * smoothstep(HL_LO, 1.0, bd);
+  base += shadows * SH_K * (1.0 - smoothstep(0.0, SH_HI, bd));
   float mid = smoothstep(0.03, 0.35, bd) * (1.0 - smoothstep(0.8, 1.0, bd));
   detail *= max(0.0, 1.0 + clarity * 0.9 * mid);
 
@@ -410,22 +419,30 @@ void main() {
   if (mn < 0.0) lin = y1 > 0.0 ? y1 + (lin - y1) * (y1 / (y1 - mn + 1e-6)) : vec3(0.0);
   lin = max(lin, vec3(0.0));
 
-  if (whites != 0.0) lin *= exp2(whites * 0.5 * smoothstep(0.55, 1.0, disp(dot(lin, W709))));
-
   vec3 mapped = uToneMap < 0.5 ? shoulder(lin) : uToneMap < 1.5 ? sigmoidMap(lin) : uToneMap < 2.5 ? agxMap(lin) : filmicMap(lin);
   vec3 d = encode(mapped);
-  // Blacks: negative crushes toward black; positive lifts the dark end like
-  // Lightroom (fitted to a Lightroom export), moving brightness only so colour stays.
-  if (blacks < 0.0) { float bp = -blacks * 0.06; d = (d - bp) / (1.0 - bp); }
-  else if (blacks > 0.0) {
-    float yd = dot(d, W709), bp = blacks * 0.3;
-    d += (yd + bp) / (1.0 + bp) - yd;
+  // Whites and Blacks act on the screen values, as in Lightroom, fitted to its
+  // measured change per L* band at -100 (see tools/lr-tone.md). Brightness
+  // only (colours scale with it), so saturation stays.
+  if (whites != 0.0 || blacks != 0.0) {
+    float y = clamp(dot(d, W709), 0.0, 1.0), y2 = y;
+    if (whites < 0.0) y2 += whites * WH_NEG * y2 * y2;
+    else if (whites > 0.0) y2 *= 1.0 + whites * WH_POS * y2;
+    float dk = y2 * pow(1.0 - min(y2, 1.0), BL_N);
+    // Positive Blacks also lifts the black point (fitted to a Lightroom export
+    // with Blacks +85: its darkest tones came out well above black).
+    y2 += blacks < 0.0 ? blacks * BL_NEG * dk : blacks * (BL_POS * dk + BL_LIFT * (1.0 - y2));
+    y2 = max(y2, 0.0);
+    d = y > 1e-4 ? d * (y2 / y) : vec3(y2);
   }
   d = clamp(d, 0.0, 1.0);
   vec3 s = d * d * (3.0 - 2.0 * d);
   d = d + (uContrast + LA.y * 0.75) * (s - d);
   // Tone curve: per channel (Lightroom's way, which adds saturation), eased
   // toward a brightness-only curve by Refine Saturation; then red, green, blue.
+  // Like Lightroom it works in ProPhoto primaries with the sRGB tone response
+  // ("Melissa RGB"), where per-channel curves change saturation as Lightroom's do.
+  d = encode(clamp(SRGB_TO_PP * decodeS(d), 0.0, 1.0));
   vec3 dc = vec3(texture(uCurve, vec2(d.r, 0.5)).r, texture(uCurve, vec2(d.g, 0.5)).r, texture(uCurve, vec2(d.b, 0.5)).r);
   if (uRefineSat < 1.0) {
     float yc0 = dot(d, W709);
@@ -434,6 +451,7 @@ void main() {
   } else d = dc;
   d = clamp(d, 0.0, 1.0);
   d = vec3(texture(uCurve, vec2(d.r, 0.5)).g, texture(uCurve, vec2(d.g, 0.5)).b, texture(uCurve, vec2(d.b, 0.5)).a);
+  d = encode(clamp(PP_TO_SRGB * decodeS(d), 0.0, 1.0));
   // Masks' own curves, the same way, where each mask covers.
   if (uMaskN > 0.0) {
     for (int i = 0; i < 16; i++) {
