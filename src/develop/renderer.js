@@ -28,6 +28,7 @@ export const LOOKS = {
 };
 
 export const BASE = { exposure: 0.08, contrast: 0.19, sat: 1.12, builtInSat: 1.05 };
+// (sat: on scene light, before the sliders and curves.)
 
 /** The base rendering: Lightroom's own profile when it's here, else the fitted look. */
 export function lookFor(info, s) {
@@ -37,7 +38,7 @@ export function lookFor(info, s) {
   // Lightroom's own export of JWL_7451 at defaults (tools/lr-tone.md).
   // auto: the exposure Auto tone aims with (the fitted look's, which the profile's brightness is matched to).
   if (!r) return LOOKS[s.profile] || LOOKS.adobe;
-  return { exposure: r.exposure + BASE.exposure, contrast: BASE.contrast, saturation: r.dcp.builtIn ? BASE.builtInSat : BASE.sat, auto: LOOKS.adobe.exposure + r.exposure - BASELINE_EXPOSURE };
+  return { exposure: r.exposure + BASE.exposure, contrast: BASE.contrast, saturation: 1, baseSat: r.dcp.builtIn ? BASE.builtInSat : BASE.sat, auto: LOOKS.adobe.exposure + r.exposure - BASELINE_EXPOSURE };
 }
 
 /** The white point of the settings: the camera's own for As Shot (unrounded, as Lightroom uses it). */
@@ -706,6 +707,7 @@ export class Renderer {
       ...this.colorUniforms(info, s),
       uExposure: s.exposure + look.exposure,
       uContrast: look.contrast + (s.contrast / 100) * 0.75,
+      uContrastSat: s.contrast / 100,
       ...tonemapUniforms(s),
       uHighlights: s.highlights / 100,
       uShadows: s.shadows / 100,
@@ -716,6 +718,7 @@ export class Renderer {
       uDehaze: s.dehaze / 100,
       uVibrance: s.vibrance / 100,
       uSaturation: (1 + s.saturation / 100) * look.saturation - 1,
+      uBaseSat: look.baseSat ?? 1,
       uAirY: this.airY || 1,
       uSharpen: (s.sharpen / 100) * 1.1,
       uSharpenRadius: s.sharpenRadius,

@@ -1,6 +1,6 @@
 // The point curve editor, used by the Tone curve section and by each mask's Curve.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { monotoneCurve, parametric } from '../develop/luts.js';
+import { parametric, pointCurve } from '../develop/luts.js';
 import { LINEAR_CURVE } from '../develop/params.js';
 
 const PARAMETRIC_KEYS = ['pShadows', 'pDarks', 'pLights', 'pHighlights', 'pSplitS', 'pSplitM', 'pSplitH'];
@@ -49,7 +49,7 @@ export function CurveEditor({ s, channel, readOnly, set }) {
     const r = ref.current.getBoundingClientRect();
     return [Math.round(Math.min(255, Math.max(0, ((e.clientX - r.left) / r.width) * 255))), Math.round(Math.min(255, Math.max(0, (1 - (e.clientY - r.top) / r.height) * 255)))];
   };
-  const curve = useMemo(() => monotoneCurve(pts.map(([x, y]) => [x / 255, y / 255])), [pts]);
+  const curve = useMemo(() => pointCurve(pts.map(([x, y]) => [x / 255, y / 255])), [pts]);
   const isMaster = channel === 'curve';
   // Point mode draws the point curve itself, so the dots always sit on the line;
   // what the Parametric sliders add on top shows as a faint second line.

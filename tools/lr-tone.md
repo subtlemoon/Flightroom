@@ -20,7 +20,7 @@ middle grey where the fitted look below had it. The fitted looks (`LOOKS` in
 
 The constants are `HL_*`, `SH_*`, `WH_*` and `BL_*` in `src/develop/shaders.js`.
 
-## Measured against Lightroom's own exports (2.9.5)
+## Measured against Lightroom's own exports (2.9.6)
 JWL_7451.NEF rendered by the real pipeline (headless Chromium) with Lightroom's
 Z 7II Adobe Standard profile, against four Lightroom Classic exports of it:
 defaults, the Basic tone sliders only (Exposure -0.10, Contrast -95,
@@ -30,24 +30,31 @@ lens-corrected (Nikon Z's built-in profile), so Flightroom's render is aligned
 to them by a radial fit (8.8% zoom, k1 0.056) first.
 
 Mean dE76 of the regions (sky, white suits, skin, red suits, trees, grass,
-road, black suit):
+road, black suit), and the median over all pixels:
 
-| export | 2.9.4 | 2.9.5 |
-|---|---|---|
-| defaults | 4.1 | 1.6 |
-| tone sliders | 7.2 | 3.2 |
-| tone sliders + curve | 6.5 | 5.3 |
-| full edit | 4.7 | 4.6 |
+| export | 2.9.4 | 2.9.5 | 2.9.6 |
+|---|---|---|---|
+| defaults | 4.1 | 1.6 | 1.4 (median 2.1) |
+| tone sliders | 7.2 | 3.2 | 3.2 (median 2.2) |
+| tone sliders + curve | 6.5 | 5.3 | 2.4 (median 4.3) |
+| full edit | 4.7 | 4.6 | 3.8 (median 4.0) |
 
-What changed (fitted on these exports):
-- The base at defaults: +0.08 EV, contrast +0.19 (Contrast +25) and 12% more
-  saturation than the DNG SDK steps alone (`BASE` in renderer.js).
-- Brightening by Blacks/Whites is 75% added grey, 25% scaling
-  (`LIFT_GREY`): scaling made lifted dark reds 30 C* too strong.
-- Highlights 1.1 (was 0.9).
+What was fitted, and how:
+- Base at defaults: +0.08 EV, contrast +0.19 (Contrast +25), 12% more
+  saturation on scene light (`BASE` in renderer.js).
+- Blacks/Whites brightening is 75% added grey (`LIFT_GREY`).
+- Highlights 1.1; the Highlights/Shadows base follows edges from a third of
+  a stop (small bright things get it fully).
+- The point curve: Lightroom's own pixels (Tone Slider export -> Tone Curve
+  export) show it's per channel in Melissa RGB, through Adobe's C2 cubic
+  spline (dng_spline_solver, which dips below black between steep points),
+  rms 0.013 against 0.033 for a monotone curve (`pointCurve` in luts.js).
+- Contrast changes colour, weak colours most (`CS_K`, `CS_V`): Lightroom's
+  Contrast -95 takes the sky to 40% of its colour.
 
-What's left: the steep curve multiplies any tone error by about 2.4, so with
-it white suits are about 3 L* too bright and skin about 4 L* too dark.
+Left: the full edit's colourful parts are a few C* weak (Saturation -8 seems
+stronger than Lightroom's; not separable from these exports), and white suits
+and the road about 2.5-3 L* bright.
 
 ## Targets
 

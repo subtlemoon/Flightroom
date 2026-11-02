@@ -89,6 +89,10 @@ uniform float uCropAspect;
 uniform vec3 uBg;
 uniform float uExposure;
 uniform float uContrast;
+uniform float uContrastSat; // the Contrast slider (-1..1), for the colour it changes
+// Contrast changes colour too, as in Lightroom, weak colours most (fitted on
+// Lightroom's exports of JWL_7451, tools/lr-tone.md).
+const float CS_K = 0.05, CS_V = 0.2;
 uniform float uToneMap;   // 0: standard shoulder, 1: sigmoid, 2: AgX, 3: filmic RGB
 uniform vec4 uTmA;        // tone mapper parameters A (precomputed in tonemap.js)
 uniform vec4 uTmB;        // tone mapper parameters B (filmic spline nodes)
@@ -131,6 +135,7 @@ uniform sampler2D uMaskCurve; // each mask's curve, a row each (as uCurve)
 // look table and a look's (Adobe Color), and its tone curve. Dims: hue, sat
 // and value divisions, and 1 if sRGB-encoded; no hue divisions means none.
 uniform float uDcp;
+uniform float uBaseSat; // the base rendering's saturation, on scene light (1: none)
 uniform sampler2D uHsm, uLookA, uLookB, uTone;
 uniform vec4 uHsmDims, uLookADims, uLookBDims;
 uniform mat3 uS2P, uP2S; // linear sRGB <-> linear ProPhoto, as Adobe's DNG SDK has them
@@ -481,6 +486,9 @@ void main() {
 
   // Lightroom's profile: its hue/saturation map, before exposure.
   if (uDcp > 0.5 && uHsmDims.x > 0.0) lin = uP2S * hueSatMap(uHsm, uHsmDims, max(uS2P * lin, vec3(0.0)));
+  // Lightroom's base saturation belongs to the rendering, before the sliders
+  // and curves (a steep curve then strengthens it as it does in Lightroom).
+  if (uBaseSat != 1.0) { float yb = dot(lin, W709); lin = yb + (lin - yb) * uBaseSat; }
 
   // Lens vignetting (positive brightens the corners) and calibration's shadow tint.
   if (uLensVig != 0.0) {
@@ -501,11 +509,12 @@ void main() {
   float y0 = max(dot(lin, W709), 1e-5);
   float l0 = log2(y0);
   vec2 g = texture(uGuide, p).rg;
-  // The blurred base, pulled toward this pixel across edges: from about half a
-  // stop of difference on (was 1.5 stops, which left a glow around dark heads
-  // against the sky with strong Shadows / Highlights).
+  // The blurred base, pulled toward this pixel across edges: from about a
+  // third of a stop of difference on, so small bright things (white suits)
+  // get Highlights as fully as Lightroom gives them (fitted on JWL_7451; was
+  // half a stop, and 1.5 before that left a glow around heads against the sky).
   float dEdge = l0 - g.r;
-  float base = g.r + dEdge * (1.0 - exp(-dEdge * dEdge / 0.3));
+  float base = g.r + dEdge * (1.0 - exp(-dEdge * dEdge / 0.1));
   float detail = l0 - base;
   base += exposure;
 
@@ -570,6 +579,11 @@ void main() {
   d = clamp(d, 0.0, 1.0);
   vec3 s = d * d * (3.0 - 2.0 * d);
   d = d + (uContrast + LA.y * 0.75) * (s - d);
+  float cs = uContrastSat + LA.y;
+  if (cs != 0.0) {
+    float yc = dot(d, W709), mx = max(d.r, max(d.g, d.b)), sv = mx > 0.0 ? (mx - min(d.r, min(d.g, d.b))) / mx : 0.0;
+    d = yc + (d - yc) * max(1.0 + cs * (CS_K + CS_V * (1.0 - sv) * (1.0 - sv)), 0.0);
+  }
   // Tone curve: per channel (Lightroom's way, which adds saturation), eased
   // toward a brightness-only curve by Refine Saturation; then red, green, blue.
   // Like Lightroom it works in ProPhoto primaries with the sRGB tone response
