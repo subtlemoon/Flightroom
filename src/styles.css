@@ -454,6 +454,26 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .auto-bar-count { text-align: right; font: 12px var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); }
 
 /* ── Develop ────────────────────────────────────────────── */
+
+/* Graphics diagnostics */
+.gpu-diag-note { padding: 11px 13px; border-radius: 10px; background: rgba(139, 123, 255, .08); border: 1px solid rgba(139, 123, 255, .2); color: #d8d4ee; font-size: 12.5px; line-height: 1.5; }
+.gpu-diag-device { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.gpu-diag-device .muted { margin-left: auto; max-width: 55%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gpu-diag-dot { width: 9px; height: 9px; flex: 0 0 9px; border-radius: 50%; background: #777; }
+.gpu-diag-dot.active { background: #ff6969; box-shadow: 0 0 0 4px rgba(255, 105, 105, .14); animation: pulse 1.2s infinite; }
+.gpu-diag-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.gpu-diag-grid > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: 9px; background: rgba(255,255,255,.045); }
+.gpu-diag-grid strong { font-size: 18px; font-variant-numeric: tabular-nums; }
+.gpu-diag-grid span { color: var(--muted); font-size: 11px; }
+.gpu-diag-detail { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 12px; font-size: 12px; }
+.gpu-diag-detail > span:last-child { overflow-wrap: anywhere; }
+.gpu-diag-events { display: flex; flex-direction: column; gap: 6px; max-height: 160px; overflow: auto; padding: 10px 12px; border-radius: 9px; background: rgba(0,0,0,.13); font-size: 12px; }
+.gpu-diag-events > div { display: flex; gap: 12px; border-top: 1px solid rgba(255,255,255,.05); padding-top: 5px; }
+.gpu-diag-events > div span { flex: 0 0 48px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.gpu-diag-empty { display: flex; flex-direction: column; gap: 6px; padding: 18px; border: 1px dashed var(--line-2); border-radius: 10px; text-align: center; }
+.gpu-diag-empty span { color: var(--muted); font-size: 12px; }
+@keyframes pulse { 50% { opacity: .45; } }
+
 .develop { display: flex; flex-direction: column; height: 100%; position: relative; }
 .dev-tools { display: flex; align-items: center; gap: 8px; }
 .dev-tools .btn.on { background: var(--sel); border-color: rgba(255, 255, 255, 0.3); }
