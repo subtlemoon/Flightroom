@@ -24,7 +24,7 @@ import {
 import { asShotTempTint, inv3, neutralToXy, xyToTempTint } from '../develop/color.js';
 import { adobeRendering } from '../develop/adobe.js';
 import { Geometry, Renderer, ap, cameraTransform, constrainedCrop, fitScale, lookFor, mat, mm, outToFrame, parseFrame, sourceMap } from '../develop/renderer.js';
-import { downloadGraphicsReport, graphicsDiagnostics } from '../develop/diagnostics.js';
+import { exportGraphicsReport, graphicsDiagnostics } from '../develop/diagnostics.js';
 import { ExportModal } from './export.jsx';
 import { activeToneMap } from '../develop/tonemap.js';
 import { useRetouch } from './retouch.jsx';
@@ -547,6 +547,8 @@ function GraphicsDiagnosticsModal({ apiRef, onClose }) {
   const currentContext = () => apiRef.current.getGraphics?.() || {};
   const [report, setReport] = useState(() => graphicsDiagnostics.snapshot());
   const [graphicsAvailable, setGraphicsAvailable] = useState(() => !!currentContext().renderer);
+  const [saving, setSaving] = useState(false);
+  const [saveMessage, setSaveMessage] = useState('');
   useEffect(() => {
     const timer = setInterval(() => {
       setGraphicsAvailable(!!currentContext().renderer);
@@ -558,12 +560,25 @@ function GraphicsDiagnosticsModal({ apiRef, onClose }) {
   const start = () => {
     const context = currentContext();
     if (!context.renderer) return;
+    setSaveMessage('');
     setReport(graphicsDiagnostics.start(context));
   };
-  const stopAndSave = () => {
+  const saveReport = async (target) => {
+    if (!target || saving) return;
+    setSaving(true);
+    setSaveMessage('');
+    let result;
+    try { result = await exportGraphicsReport(target, app?.saveTextFile); }
+    catch (error) { result = { error: String(error?.message || error) }; }
+    finally { setSaving(false); }
+    if (result?.saved) setSaveMessage(result.method === 'browser-download' ? 'Downloaded using the browser’s default download location.' : 'Report saved to the selected location.');
+    else if (result?.cancelled) setSaveMessage('Save cancelled. The report is still available here.');
+    else setSaveMessage(`Could not save the report: ${result?.error || 'Unknown error'}`);
+  };
+  const stopAndSave = async () => {
     const saved = graphicsDiagnostics.stop();
     setReport(saved);
-    downloadGraphicsReport(saved);
+    await saveReport(saved);
   };
   const markFlicker = () => { graphicsDiagnostics.markFlicker(); setReport(graphicsDiagnostics.snapshot()); };
   const summary = report?.summary || {};
@@ -583,11 +598,11 @@ function GraphicsDiagnosticsModal({ apiRef, onClose }) {
       <>
         {active && <button className="btn btn-ghost" onClick={markFlicker}><Icon name="warning" size={14} />Mark flicker</button>}
         {active ? (
-          <button className="btn btn-primary" onClick={stopAndSave}>Stop and save report</button>
+          <button className="btn btn-primary" onClick={stopAndSave} disabled={saving}>{saving ? 'Saving…' : 'Stop and choose save location'}</button>
         ) : report ? (
           <>
-            <button className="btn" onClick={() => downloadGraphicsReport(report)}>Download report</button>
-            <button className="btn btn-primary" onClick={start} disabled={!graphicsAvailable}>Start new capture</button>
+            <button className="btn" onClick={() => saveReport(report)} disabled={saving}>{saving ? 'Saving…' : 'Save report as…'}</button>
+            <button className="btn btn-primary" onClick={start} disabled={!graphicsAvailable || saving}>Start new capture</button>
           </>
         ) : (
           <button className="btn btn-primary" onClick={start} disabled={!graphicsAvailable}>Start capture</button>
@@ -596,13 +611,13 @@ function GraphicsDiagnosticsModal({ apiRef, onClose }) {
     )}>
       <p>Start a capture, close this window, then reproduce the flicker by changing the problem control. After the screen returns, reopen this report, mark the flicker, and save the JSON file.</p>
       <div className="gpu-diag-note">
-        The report includes browser and graphics details, frame timing, graphics resets, pauses, and which setting names changed. It does not include photos, file paths, or setting values. Nothing is sent automatically. Captures end after 10 minutes; Flightroom keeps the report in memory until it closes, and downloading saves a local JSON file.
+        The report includes browser and graphics details, frame timing, graphics resets, pauses, and which setting names changed. It does not include photos, file paths, or setting values. Nothing is sent automatically. Captures end after 10 minutes; Flightroom keeps the report in memory until it closes. The desktop app opens a file picker; browser mode uses one where supported and otherwise downloads to the browser’s default folder.
       </div>
       {report ? (
         <>
           <div className="gpu-diag-device">
             <span className={`gpu-diag-dot${active ? ' active' : ''}`} />
-            <strong>{active ? 'Recording' : 'Capture ready to download'}</strong>
+            <strong>{active ? 'Recording' : 'Capture ready to save'}</strong>
             <span className="muted small">{report.app?.name} {report.app?.version} · {report.environment?.platform || report.environment?.userAgent || 'Browser details unavailable'}</span>
           </div>
           <div className="gpu-diag-grid">
@@ -621,7 +636,8 @@ function GraphicsDiagnosticsModal({ apiRef, onClose }) {
             <strong>Recent events</strong>
             {events.length ? events.map((event, i) => <div key={`${event.ms}-${event.type}-${i}`}><span>+{(event.ms / 1000).toFixed(1)} s</span>{eventText(event)}</div>) : <span className="muted small">No events recorded yet.</span>}
           </div>
-          {!active && <p className="muted small">Starting a new capture replaces the report currently held in memory. Download this one first if you need to keep it.</p>}
+          {saveMessage && <p className="gpu-diag-save-message" role="status">{saveMessage}</p>}
+          {!active && <p className="muted small">Starting a new capture replaces the report currently held in memory. Save this one first if you need to keep it.</p>}
         </>
       ) : (
         <div className="gpu-diag-empty">

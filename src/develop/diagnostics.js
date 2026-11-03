@@ -195,16 +195,46 @@ class GraphicsDiagnostics {
 
 export const graphicsDiagnostics = new GraphicsDiagnostics();
 
-export function downloadGraphicsReport(report) {
-  if (!report) return false;
-  const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+export async function exportGraphicsReport(report, saveTextFile) {
+  if (!report) return { error: 'There is no diagnostic report to save.' };
+  const name = `flightroom-graphics-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  const text = JSON.stringify(report, null, 2);
+
+  if (saveTextFile) {
+    try {
+      const result = await saveTextFile(name, text, { title: 'Save graphics diagnostic report', filterName: 'Graphics diagnostics' });
+      if (!result) return { cancelled: true };
+      if (result.error) return { error: result.error };
+      return { saved: true, method: 'native-dialog' };
+    } catch (error) {
+      return { error: String(error?.message || error) };
+    }
+  }
+
+  if (typeof window.showSaveFilePicker === 'function') {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: name,
+        types: [{ description: 'Graphics diagnostic report', accept: { 'application/json': ['.json'] } }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(text);
+      await writable.close();
+      return { saved: true, method: 'file-picker' };
+    } catch (error) {
+      if (error?.name === 'AbortError') return { cancelled: true };
+      return { error: String(error?.message || error) };
+    }
+  }
+
+  const blob = new Blob([text], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `flightroom-graphics-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  a.download = name;
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  return true;
+  return { saved: true, method: 'browser-download' };
 }
