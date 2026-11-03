@@ -93,6 +93,7 @@ const paths = {
   quickMask: <><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="12" cy="12" r="4" strokeDasharray="2 2" /></>,
   clipArrow: <><path d="M8 4v9a3 3 0 0 0 3 3h7" /><path d="M15 13l3 3-3 3" /></>,
   histogram: <><path d="M3 20h18" /><path d="M5 20v-4M9 20v-9M13 20V6M17 20v-7" /></>,
+  warning: <><path d="M10.3 4.5L2.8 17.2A2 2 0 0 0 4.5 20h15a2 2 0 0 0 1.7-2.8L13.7 4.5a2 2 0 0 0-3.4 0z" /><path d="M12 9v4M12 16h.01" /></>,
   curve: <><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M5 19C10 18 9 6 19 5" /></>,
   exposure: <><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 21L21 3" /><path d="M6 8h4M8 6v4M14 16h4" /></>,
   vibrance: <><path d="M4 18L12 4l8 14z" /><path d="M8.5 18L12 11.5 15.5 18" /></>,
