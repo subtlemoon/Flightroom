@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { bridge as app } from '../bridge.js';
-import { Dropdown, Icon, PanelHandle } from './ui.jsx';
+import { Dropdown, Icon, Modal, PanelHandle } from './ui.jsx';
 import { Slider } from './slider.jsx';
 import { CurveEditor } from './curve.jsx';
 import { BRUSH_DEFAULT, MASK_OPTIONS_DEFAULT, MaskAdjust, MaskOverlay, MaskPanel, OVERLAY_DEFAULT, maskActions, maskView, useStored } from './masks.jsx';
@@ -24,6 +24,7 @@ import {
 import { asShotTempTint, inv3, neutralToXy, xyToTempTint } from '../develop/color.js';
 import { adobeRendering } from '../develop/adobe.js';
 import { Geometry, Renderer, ap, cameraTransform, constrainedCrop, fitScale, lookFor, mat, mm, outToFrame, parseFrame, sourceMap } from '../develop/renderer.js';
+import { exportGraphicsReport, graphicsDiagnostics } from '../develop/diagnostics.js';
 import { ExportModal } from './export.jsx';
 import { activeToneMap } from '../develop/tonemap.js';
 import { useRetouch } from './retouch.jsx';
@@ -73,6 +74,8 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const [before, setBefore] = useState(false);
   const [clip, setClip] = useState(false);
   const [toast, setToast] = useState('');
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [diagnosticsActive, setDiagnosticsActive] = useState(() => graphicsDiagnostics.isActive());
   const [exporting, setExporting] = useState(null); // modal state
   const [clipboard, setClipboard] = useState(null); // { part, groups }
   const [copyGroups, setCopyGroups] = useStored('flightroom-copy-groups', { groups: null });
@@ -90,6 +93,8 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const settingsCache = useRef(session.settings);
   const history = useRef(session.history);
   const dirty = useRef(false);
+
+  useEffect(() => graphicsDiagnostics.subscribe(setDiagnosticsActive), []);
 
   // Shared with Culling; its "Likely rejects" is Culling's own.
   const [filter, setFilter] = useState(() => (seen?.filter && seen.filter !== 'rejects' ? seen.filter : 'all')); // see inFilter
@@ -169,8 +174,10 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
 
   // Changes settings. Rapid changes of the same thing (dragging a slider) share
   // one undo step; `label` names it in Retouch's History panel.
-  const update = useCallback((patch, label = 'Develop Settings') => {
+  const update = useCallback((patch, label = 'Develop Settings', diagnosticControl) => {
     if (!photo) return;
+    const control = diagnosticControl || (typeof patch === 'function' ? label : Object.keys(patch || {}).slice(0, 4).join(', ')) || label;
+    graphicsDiagnostics.recordSettingChange(control);
     setS((old) => {
       if (!old) return old;
       const h = history.current.get(photo.id) || { past: [], future: [], pastL: [], futureL: [], last: 0 };
@@ -462,6 +469,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
           <button className={`btn btn-sm${before ? ' on' : ''}`} title="Before / after (\)" onClick={() => setBefore((b) => !b)} disabled={!s}><Icon name="compare" size={14} />{before ? 'Before' : 'After'}</button>
           {!retouch && <button className={`btn btn-sm${overlay.show ? ' on' : ''}`} title="Show the selected mask on the main photo (O)" onClick={() => setOverlay({ show: !overlay.show })} disabled={!s}><Icon name="mask" size={14} />Overlay</button>}
           {!retouch && <button className={`btn btn-sm${crop ? ' btn-primary' : ''}`} title="Crop and straighten (R)" onClick={() => setCrop((c) => !c)} disabled={!s}><Icon name="crop" size={14} />{crop ? 'Done' : 'Crop'}</button>}
+          <button className={`btn btn-sm${diagnosticsActive ? ' on' : ' btn-ghost'}`} onClick={() => setDiagnosticsOpen(true)} title={diagnosticsActive ? 'Graphics diagnostics capture is running' : 'Open graphics diagnostics'}><Icon name="histogram" size={14} />GPU</button>
           <button className="btn btn-sm btn-primary" onClick={() => setExporting({})} disabled={!s} title="Export JPEG (Ctrl+Shift+E)"><Icon name="export" size={14} />Export</button>
         </div>
       </header>
@@ -530,7 +538,114 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
       )}
       {exporting && <ExportModal photo={photo} photos={allPhotos} shown={photos} picked={picked.size ? picked : null} meta={meta} folder={list?.folder} info={info} s={s}
         onClose={() => setExporting(null)} onDone={(msg) => { setExporting(null); setToast(msg); }} />}
+      {diagnosticsOpen && <GraphicsDiagnosticsModal apiRef={stageApi} onClose={() => setDiagnosticsOpen(false)} />}
     </div>
+  );
+}
+
+function GraphicsDiagnosticsModal({ apiRef, onClose }) {
+  const currentContext = () => apiRef.current.getGraphics?.() || {};
+  const [report, setReport] = useState(() => graphicsDiagnostics.snapshot());
+  const [graphicsAvailable, setGraphicsAvailable] = useState(() => !!currentContext().renderer);
+  const [saving, setSaving] = useState(false);
+  const [saveMessage, setSaveMessage] = useState('');
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setGraphicsAvailable(!!currentContext().renderer);
+      if (graphicsDiagnostics.isActive()) setReport(graphicsDiagnostics.snapshot());
+    }, 500);
+    return () => clearInterval(timer);
+  }, []);
+
+  const start = () => {
+    const context = currentContext();
+    if (!context.renderer) return;
+    setSaveMessage('');
+    setReport(graphicsDiagnostics.start(context));
+  };
+  const saveReport = async (target) => {
+    if (!target || saving) return;
+    setSaving(true);
+    setSaveMessage('');
+    let result;
+    try { result = await exportGraphicsReport(target, app?.saveTextFile); }
+    catch (error) { result = { error: String(error?.message || error) }; }
+    finally { setSaving(false); }
+    if (result?.saved) setSaveMessage(result.method === 'browser-download' ? 'Downloaded using the browser’s default download location.' : 'Report saved to the selected location.');
+    else if (result?.cancelled) setSaveMessage('Save cancelled. The report is still available here.');
+    else setSaveMessage(`Could not save the report: ${result?.error || 'Unknown error'}`);
+  };
+  const stopAndSave = async () => {
+    const saved = graphicsDiagnostics.stop();
+    setReport(saved);
+    await saveReport(saved);
+  };
+  const markFlicker = () => { graphicsDiagnostics.markFlicker(); setReport(graphicsDiagnostics.snapshot()); };
+  const summary = report?.summary || {};
+  const events = report?.events?.slice(-8).reverse() || [];
+  const renderer = report?.graphics?.renderer || report?.graphics?.vendor || 'Not available';
+  const active = report?.status === 'recording';
+  const eventText = (event) => event.type === 'setting-changed' ? `Changed ${event.control}`
+    : event.type === 'screen-flicker-marked' ? 'Screen flicker marked'
+      : event.type === 'webgl-context-lost' ? 'Graphics context lost'
+        : event.type === 'webgl-context-restored' ? 'Graphics context restored'
+          : event.type === 'main-thread-long-task' ? `App paused for ${event.durationMs} ms`
+            : event.type === 'refinement-finished' ? `Full detail pass ${event.completed ? 'finished' : 'stopped'} (${event.durationMs} ms)`
+              : event.type.replaceAll('-', ' ');
+
+  return (
+    <Modal title="Graphics diagnostics" onClose={onClose} wide footer={(
+      <>
+        {active && <button className="btn btn-ghost" onClick={markFlicker}><Icon name="warning" size={14} />Mark flicker</button>}
+        {active ? (
+          <button className="btn btn-primary" onClick={stopAndSave} disabled={saving}>{saving ? 'Saving…' : 'Stop and choose save location'}</button>
+        ) : report ? (
+          <>
+            <button className="btn" onClick={() => saveReport(report)} disabled={saving}>{saving ? 'Saving…' : 'Save report as…'}</button>
+            <button className="btn btn-primary" onClick={start} disabled={!graphicsAvailable || saving}>Start new capture</button>
+          </>
+        ) : (
+          <button className="btn btn-primary" onClick={start} disabled={!graphicsAvailable}>Start capture</button>
+        )}
+      </>
+    )}>
+      <p>Start a capture, close this window, then reproduce the flicker by changing the problem control. After the screen returns, reopen this report, mark the flicker, and save the JSON file.</p>
+      <div className="gpu-diag-note">
+        The report includes browser and graphics details, frame timing, graphics resets, pauses, and which setting names changed. It does not include photos, file paths, or setting values. Nothing is sent automatically. Captures end after 10 minutes; Flightroom keeps the report in memory until it closes. The desktop app opens a file picker; browser mode uses one where supported and otherwise downloads to the browser’s default folder.
+      </div>
+      {report ? (
+        <>
+          <div className="gpu-diag-device">
+            <span className={`gpu-diag-dot${active ? ' active' : ''}`} />
+            <strong>{active ? 'Recording' : 'Capture ready to save'}</strong>
+            <span className="muted small">{report.app?.name} {report.app?.version} · {report.environment?.platform || report.environment?.userAgent || 'Browser details unavailable'}</span>
+          </div>
+          <div className="gpu-diag-grid">
+            <div><strong>{summary.frames || 0}</strong><span>Frames</span></div>
+            <div><strong>{summary.slowFrames || 0}</strong><span>Frames over 25 ms</span></div>
+            <div><strong>{summary.failedFrameWaits || 0}</strong><span>Frame wait failures</span></div>
+            <div><strong>{summary.contextLosses || 0} / {summary.contextRestores || 0}</strong><span>Context lost / restored</span></div>
+            <div><strong>{summary.longTasks || 0}</strong><span>App pauses over 50 ms</span></div>
+            <div><strong>{summary.flickerMarkers || 0}</strong><span>Screen flicker marks</span></div>
+          </div>
+          <div className="gpu-diag-detail"><span className="muted">Graphics device</span><span>{renderer}</span></div>
+          <div className="gpu-diag-detail"><span className="muted">Display / canvas</span><span>{report.environment?.viewport?.width} × {report.environment?.viewport?.height} at {report.environment?.viewport?.devicePixelRatio}× · {report.graphics?.canvas?.width || 0} × {report.graphics?.canvas?.height || 0}</span></div>
+          {summary.frames > 0 && <div className="gpu-diag-detail"><span className="muted">Frame completion</span><span>avg {summary.averageFrameMs} ms · max {summary.maxFrameMs} ms</span></div>}
+          <p className="muted small">Frame completion is an approximate time from sending work to the graphics card until it finishes, not a GPU-only measurement. Windows may black out without the browser receiving a graphics reset; use “Mark flicker” to tie the report to that moment.</p>
+          <div className="gpu-diag-events">
+            <strong>Recent events</strong>
+            {events.length ? events.map((event, i) => <div key={`${event.ms}-${event.type}-${i}`}><span>+{(event.ms / 1000).toFixed(1)} s</span>{eventText(event)}</div>) : <span className="muted small">No events recorded yet.</span>}
+          </div>
+          {saveMessage && <p className="gpu-diag-save-message" role="status">{saveMessage}</p>}
+          {!active && <p className="muted small">Starting a new capture replaces the report currently held in memory. Save this one first if you need to keep it.</p>}
+        </>
+      ) : (
+        <div className="gpu-diag-empty">
+          <strong>Ready to diagnose the flicker</strong>
+          <span>Open a RAW photo in Develop before starting so Flightroom can record the active graphics device and render timings.</span>
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -621,6 +736,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
   const grid = useRef(null);
   const dpr = window.devicePixelRatio || 1;
   const W = Math.round(size.w * dpr), H = Math.round(size.h * dpr);
+  apiRef.current.getGraphics = () => ({ renderer: rendererRef.current, canvas: canvasRef.current });
 
   useLayoutEffect(() => {
     const el = wrapRef.current;
@@ -631,22 +747,25 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
 
   useEffect(() => {
     let st;
-    try { st = stageRenderer(); } catch (err) { setError(String(err.message || err)); return; }
+    try { st = stageRenderer(); } catch (err) { graphicsDiagnostics.record('renderer-create-failed', { errorName: err?.name || 'Error' }); setError(String(err.message || err)); return; }
     hostRef.current.appendChild(st.canvas);
     canvasRef.current = st.canvas;
     rendererRef.current = st.renderer;
+    graphicsDiagnostics.record('renderer-attached', { width: st.canvas.width, height: st.canvas.height });
     // Windows resets a graphics driver that stops answering; the browser then
     // hands the context back, and the photo is put on the card again. Only if
     // that doesn't happen does the stage give up.
     let giveUp = 0;
     const lost = (e) => {
       e.preventDefault();
+      graphicsDiagnostics.record('webgl-context-lost', { prevented: e.defaultPrevented });
       setReady(false);
       giveUp = setTimeout(() => setError('The graphics card stopped the photo renderer'), 8000);
     };
     const restored = () => {
       clearTimeout(giveUp);
-      try { rendererRef.current = restoreStage(); } catch (err) { setError(String(err.message || err)); return; }
+      try { rendererRef.current = restoreStage(); } catch (err) { graphicsDiagnostics.record('renderer-restore-failed', { errorName: err?.name || 'Error' }); setError(String(err.message || err)); return; }
+      graphicsDiagnostics.record('webgl-context-restored');
       setError('');
       setGlGen((g) => g + 1);
     };
@@ -678,6 +797,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
     fetchFrame(app.develop.imageUrl(photo, fitEdge(), false, dn)).then((frame) => {
       if (!live || !rendererRef.current) return;
       rendererRef.current.setSource(frame);
+      graphicsDiagnostics.record('source-frame-loaded', { width: frame.w, height: frame.h });
       grid.current = sampleGrid(frame);
       setReady(true);
       drawRef.current(); // a new source (AI Denoise amount) with nothing else changed still shows now
@@ -812,7 +932,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
     issueRenderRef.current();
   };
 
-  const issueRender = () => {
+  const issueRender = (settingsOnly = false) => {
     const r = rendererRef.current;
     const c = canvasRef.current;
     if (!r || r.gl.isContextLost() || !ready || !s || !info || !frame || !W || !H) return;
@@ -828,18 +948,24 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
     lastRenderAt.current = performance.now();
     try {
       r.render(info, s, geo, frame, o2f, opts);
-    } catch {
+    } catch (err) {
+      graphicsDiagnostics.record('render-threw', { errorName: err?.name || 'Error' });
       renderBusy.current = false;
       lastRenderDoneAt.current = performance.now();
       pumpRenderRef.current();
       return;
     }
-    r.waitFrame().finally(() => {
+    const finishFrame = (completed) => {
       const finishedAt = performance.now();
       renderMs.current = finishedAt - lastRenderAt.current;
+      graphicsDiagnostics.recordFrame({ durationMs: renderMs.current, completed, width: W, height: H, kind: settingsOnly ? 'settings' : 'redraw' });
       renderBusy.current = false;
       lastRenderDoneAt.current = finishedAt;
       pumpRenderRef.current();
+    };
+    r.waitFrame().then(finishFrame).catch((err) => {
+      graphicsDiagnostics.record('frame-wait-threw', { errorName: err?.name || 'Error' });
+      finishFrame(false);
     });
     if (!live && !cropMode && toSource) {
       refineTimer.current = setTimeout(() => {
@@ -847,13 +973,16 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
           if (gen !== refineGen.current || rendererRef.current !== r) return;
           if (renderBusy.current) { refineTimer.current = setTimeout(refine, 16); return; }
           renderBusy.current = true;
+          const refineStartedAt = performance.now();
+          let completed = false;
           try {
-            await r.refine({ info, s, geo, frame, out2frame: o2f, opts,
+            completed = await r.refine({ info, s, geo, frame, out2frame: o2f, opts,
               regionFor: (tx, ty, ow, oh) => regionFor(o2f, tx, ty, ow, oh),
               fetchRegion: fetchRegionKept,
               current: () => gen === refineGen.current && rendererRef.current === r });
-          } catch {}
+          } catch (err) { graphicsDiagnostics.record('refinement-threw', { errorName: err?.name || 'Error' }); }
           finally {
+            graphicsDiagnostics.record('refinement-finished', { durationMs: performance.now() - refineStartedAt, completed });
             renderBusy.current = false;
             lastRenderDoneAt.current = performance.now();
             pumpRenderRef.current();
@@ -884,7 +1013,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
     clearTimeout(renderTimer.current);
     renderTimer.current = 0;
     pendingRender.current = null;
-    issueRenderRef.current();
+    issueRenderRef.current(settingsOnly);
   };
   pumpRenderRef.current = pumpRender;
 
@@ -1365,7 +1494,7 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
     if (k === 'temp' || k === 'tint') n.wb = 'Custom';
     if (n.constrainCrop && TRANSFORM_KEYS.includes(k)) n.crop = constrainedCrop(geo, n);
     return n;
-  }), [update, geo]);
+  }, 'Develop Settings', k), [update, geo]);
 
   const pickWb = (name) => {
     if (name === 'Auto') { onAutoWb(); return; }

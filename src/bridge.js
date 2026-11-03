@@ -31,8 +31,12 @@ export const bridge = inApp ? {
   displayProfile: () => call('display_profile'),
   onUpdateStatus: (fn) => onEvent('update:status', fn),
   openUrl: (url) => openUrl(url).catch((err) => console.error('Could not open link', err)),
-  saveTextFile: async (defaultName, text) => {
-    const path = await save({ defaultPath: defaultName, filters: [{ name: 'Backup', extensions: ['json'] }] });
+  saveTextFile: async (defaultName, text, options = {}) => {
+    const path = await save({
+      ...(options.title ? { title: options.title } : {}),
+      defaultPath: defaultName,
+      filters: [{ name: options.filterName || 'Backup', extensions: ['json'] }],
+    });
     if (!path) return null;
     return call('save_text_file', { path, text });
   },
