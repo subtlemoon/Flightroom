@@ -33,7 +33,7 @@ export function ExportModal({ photo, photos, shown = photos, picked = null, meta
   const sep = folder.includes('\\') ? '\\' : '/';
   const target = dest || `${folder}${sep}Exported`;
   const list = { this: photo?.raw ? [photo] : [], selected, shown: filtered, rated, edited }[which] || [];
-  const size = info && s && exportSize(new Geometry(info.width, info.height, info.orientation).frame(s.crop), longEdge);
+  const size = info && s && exportSize(new Geometry(info.width, info.height, info.orientation, info.lens).frame(s.crop), longEdge);
 
   const start = async () => {
     try {

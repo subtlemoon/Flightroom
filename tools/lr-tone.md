@@ -199,3 +199,20 @@ Result: median dE 8.6 -> 5.3. The grade's shift matches Lightroom's within
 Lightroom's 70.6 / +1.5 / -7.7 (2.10.4: 75.5 / +1.0 / -2.0). Left: the
 ungraded base is ~1.7 L* brighter and ~2 b* less blue in the sky, saturated
 reds ~4 L* darker, and the orange kart renders red.
+
+## Sharpness and lens geometry (2.11.0)
+- Jaewon found Flightroom's view "mushed" next to Lightroom's. The full-quality
+  view (Renderer.refine) shrank its full-resolution tiles with trilinear
+  mipmaps, which keeps only ~80% of the finest detail a proper resize does.
+  It now uses Lanczos-2 over the mip level with 1.5-3 texels per screen pixel
+  (shaders.js RESAMPLE): within 2% of an area resize at every scale.
+- Contrast and Whites/Blacks act on the local brightness (the guide base) and
+  carry the detail around it along (CON_LOCAL, WB_LOCAL), as Lightroom's
+  edge-aware sliders keep local contrast: median dE 5.3 -> 5.0.
+- Lightroom applies the Nikon Z lens's built-in distortion correction (the
+  NEF's NikonNEFInfo, src-tauri lens.rs) whatever the profile checkbox says.
+  With it, the JWL_7345 render lines up with Lightroom's export at scale
+  1.0000 and 0.14 px median residual (1400 px wide), so comparisons no longer
+  need optical flow: direct median dE 4.85.
+- Left: the brightest sunlit cloud (Lightroom L* ~98) tops out at ~92; the
+  corners are ~0.1 stop darker than Lightroom's (vignetting not applied).

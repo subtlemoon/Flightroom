@@ -40,7 +40,7 @@ import { findSpotSource, sourceRegions, visibleLayers } from '../develop/retouch
 // them when it imports the photo or reads its metadata again.
 
 const isRaw = (p) => !!p.raw;
-const TRANSFORM_KEYS = ['perspVertical', 'perspHorizontal', 'perspRotate', 'perspAspect', 'perspScale', 'perspX', 'perspY', 'distortion'];
+const TRANSFORM_KEYS = ['perspVertical', 'perspHorizontal', 'perspRotate', 'perspAspect', 'perspScale', 'perspX', 'perspY', 'distortion', 'lensProfile'];
 const META_WINDOW = 20;
 // Stands in for a photo's as-shot colour when it isn't decoded (see applyPart).
 const NO_AS_SHOT = { temp: 5500, tint: 0 };
@@ -351,7 +351,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
 
   // Retouch: Photoshop's tools, layers, selections, menus and keys (retouch.jsx).
   const info = photo && opened?.id === photo.id ? opened.info : null;
-  const geo = info && (geoCache.current?.info === info ? geoCache.current.geo : (geoCache.current = { info, geo: new Geometry(info.width, info.height, info.orientation) }).geo);
+  const geo = info && (geoCache.current?.info === info ? geoCache.current.geo : (geoCache.current = { info, geo: new Geometry(info.width, info.height, info.orientation, info.lens) }).geo);
   const rx = useRetouch({
     s, update, undo, info, geo, photo, stage: stageApi, toast: setToast, onMode, setCrop, autoTone,
     aiMasks,
@@ -813,7 +813,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
     return () => { live = false; };
   }, [!!info, dn, glGen]);
 
-  const geo = useMemo(() => info && new Geometry(info.width, info.height, info.orientation), [info]);
+  const geo = useMemo(() => info && new Geometry(info.width, info.height, info.orientation, info.lens), [info]);
   // In crop mode the whole photo shows (turned by the straighten angle) with the crop on top.
   const frame = useMemo(() => {
     if (!geo || !s) return null;
@@ -1552,7 +1552,11 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
       <>
         <label className="dev-check"><input type="checkbox" checked={!!s.removeCA} onChange={(e) => update({ removeCA: e.target.checked })} />Remove chromatic aberration</label>
         <label className="dev-check"><input type="checkbox" checked={!!s.lensProfile} onChange={(e) => update({ lensProfile: e.target.checked })} />Enable profile corrections</label>
-        {s.lensProfile && <p className="muted small">Lightroom applies your lens's profile when it reads this photo. Flightroom doesn't preview it yet; use the sliders below to see it here.</p>}
+        {info?.lens?.required
+          ? <p className="muted small">Built-in correction from the camera applied (distortion), as Lightroom does for this lens.</p>
+          : info?.lens
+            ? <p className="muted small">{s.lensProfile ? 'The camera\'s built-in distortion correction is applied.' : 'The camera recorded a distortion correction for this lens: enable profile corrections to apply it.'}</p>
+            : s.lensProfile && <p className="muted small">Lightroom applies your lens's profile when it reads this photo. Flightroom can only apply corrections the camera writes into the file (Nikon Z bodies); use the sliders below for this one.</p>}
         <Groups sec={SECTION.lens} s={s} asShot={asShot} set={set} />
       </>
     ),

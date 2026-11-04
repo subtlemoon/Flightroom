@@ -6,6 +6,7 @@ pub mod adobe;
 pub mod ai;
 pub mod develop;
 pub mod display;
+pub mod lens;
 pub mod migrate;
 pub mod photolib;
 pub mod photos;
