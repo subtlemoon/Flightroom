@@ -107,8 +107,9 @@ uniform vec4 uTmA;        // tone mapper parameters A (precomputed in tonemap.js
 uniform vec4 uTmB;        // tone mapper parameters B (filmic spline nodes)
 uniform float uTmHue;     // hue preservation factor (0..1)
 uniform float uHighlights, uShadows, uWhites, uBlacks;
+uniform float uHlTop; // how much Highlights eases off on the brightest tones (renderer.js adaptive)
 // Basic tone slider shapes (fitted to Lightroom; tools/lr-tone.md).
-const float HL_K = 1.3, HL_LO = 0.35, HL_TOP = 0.55, HL_T0 = 0.65, HL_T1 = 0.85, SH_K = 1.3, SH_HI = 0.65, SH_DEEP = 0.8, SH_C = 0.3, HL_X = 0.5, SH_X = 0.2, LIFT_EDGE = 1.0, LIFT_R = 4.0;
+const float HL_K = 1.3, HL_LO = 0.35, HL_T0 = 0.65, HL_T1 = 0.85, SH_K = 1.3, SH_HI = 0.65, SH_DEEP = 0.8, SH_C = 0.3, HL_X = 0.5, SH_X = 0.2, LIFT_EDGE = 1.0, LIFT_R = 4.0;
 const float WH_NEG = 0.24, WH_POS = 0.3, BL_NEG = 1.4, BL_POS = 0.55, BL_N = 2.36, BL_LIFT = 0.035, LIFT_GREY = 0.9;
 uniform float uTexture, uClarity, uDehaze, uVibrance, uSaturation;
 uniform float uAirY;
@@ -548,7 +549,7 @@ void main() {
     // Highlights eases off again on the brightest areas themselves (a bright
     // sky), leaving those to Whites: Lightroom's -93 takes L* 70-75 down 14 but
     // L* 80-85 only 10, so the sky keeps its gradient rather than piling up.
-    base += highlights * HL_K * smoothstep(HL_LO, 1.0, bw) * (1.0 - HL_TOP * smoothstep(HL_T0, HL_T1, bd)) * (1.0 - HL_X * max(-(uContrastSat + LA.y), 0.0));
+    base += highlights * HL_K * smoothstep(HL_LO, 1.0, bw) * (1.0 - uHlTop * smoothstep(HL_T0, HL_T1, bd)) * (1.0 - HL_X * max(-(uContrastSat + LA.y), 0.0));
     shLift = shadows * (SH_K * (1.0 - smoothstep(0.0, SH_HI, bw)) + SH_DEEP * (1.0 - smoothstep(0.0, 0.2, bw))) * (1.0 - SH_X * max(blacks, 0.0));
     base += shLift;
   }
@@ -601,7 +602,10 @@ void main() {
   // only (colours scale with it), so saturation stays.
   if (whites != 0.0 || blacks != 0.0) {
     float y = clamp(dot(d, W709), 0.0, 1.0), y2 = y;
-    if (whites < 0.0) y2 += whites * WH_NEG * y2 * y2 * y2;
+    // Negative Whites grows with the cube of brightness, then levels off near
+    // white as Lightroom's does (-100: -7 L* at L* 75, -10 at L* 95), so a
+    // bright sky keeps its gradient.
+    if (whites < 0.0) { float q = y2 / 0.9; q *= q * q; y2 += whites * WH_NEG * y2 * y2 * y2 / (1.0 + q * q); }
     else if (whites > 0.0) y2 *= 1.0 + whites * WH_POS * y2;
     float dk = y2 * pow(1.0 - min(y2, 1.0), BL_N);
     // Positive Blacks also lifts the black point (fitted to a Lightroom export

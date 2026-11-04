@@ -18,12 +18,16 @@ const GUIDE_EDGE = 320;
 const LINEAR = [[0, 0], [255, 255]];
 const FLAT_CURVE = { curve: LINEAR, curveR: LINEAR, curveG: LINEAR, curveB: LINEAR, pShadows: 0, pDarks: 0, pLights: 0, pHighlights: 0 };
 
-// Lightroom's Shadows and Blacks are image-adaptive: lifting does less on a
-// brighter photo. Fitted on two Lightroom exports from one shoot: JWL_7451
-// (middle brightness 2^-3.97 of white, where the sliders were fitted) and
-// JWL_7345, 0.86 stop brighter, whose lift is 0.65 of that (tools/lr-tone.md).
-const LIFT_REF = -3.97, LIFT_K = 0.72;
-export const liftScale = (keyL) => (keyL == null ? 1 : Math.min(1.3, Math.max(0.6, 2 ** (-LIFT_K * (keyL - LIFT_REF)))));
+// Lightroom's tone sliders are image-adaptive. Fitted on two Lightroom exports
+// from one shoot: JWL_7451 (middle brightness 2^-3.97 of white, where the
+// sliders were fitted) and JWL_7345, 0.86 stop brighter, where positive
+// Shadows and Blacks lift 0.65 as much, and Highlights is 15% stronger and
+// doesn't ease off on the brightest tones, so a bright sky comes down with
+// the rest (tools/lr-tone.md).
+const KEY_REF = -3.97, KEY_SPAN = 0.86, LIFT_K = 0.72, HL_TOP = 0.55, HL_MORE = 0.15;
+const brighter = (keyL) => (keyL == null ? 0 : Math.min(1, Math.max(0, (keyL - KEY_REF) / KEY_SPAN)));
+export const liftScale = (keyL) => (keyL == null ? 1 : Math.min(1.3, Math.max(0.6, 2 ** (-LIFT_K * (keyL - KEY_REF)))));
+export const highlightAdapt = (keyL) => ({ top: HL_TOP * (1 - brighter(keyL)), k: 1 + HL_MORE * brighter(keyL) });
 
 export const LOOKS = {
   adobe: { exposure: 1.05, contrast: 0.4, saturation: 0.9 },
@@ -585,8 +589,8 @@ export class Renderer {
     this.updateMasks(s, geo);
     if (this.masks.length) this.updateMaskCurves();
     if ((s.dehaze || this.masks.some((m) => m.adj?.dehaze)) && this.airY == null) this.measureAir();
-    // The photo's middle brightness, for liftScale: read once per photo, when Shadows or Blacks lift.
-    if ((s.shadows > 0 || s.blacks > 0) && this.keySrc !== this.src) { const lum = this.guideLum(); this.keyL = lum[lum.length >> 1]; this.keySrc = this.src; }
+    // The photo's middle brightness, for the adaptive sliders: read once per photo, when they're used.
+    if ((s.shadows > 0 || s.blacks > 0 || s.highlights < 0) && this.keySrc !== this.src) { const lum = this.guideLum(); this.keyL = lum[lum.length >> 1]; this.keySrc = this.src; }
     const out2ori = mm(geo.frameToOriented(frame), out2frame);
     // Retouch layers on top (compose.js); `live` is a stroke still being painted.
     const layers = renderLayers(s.layers || [], live?.layerId);
@@ -661,7 +665,8 @@ export class Renderer {
   drawPhoto(info, s, geo, frame, out2frame, out2ori, target, showClip, maskView, sharper) {
     const hi = sharper || this.hi;
     const look = lookFor(info, s);
-    const lift = this.keySrc === this.src ? liftScale(this.keyL) : 1;
+    const key = this.keySrc === this.src ? this.keyL : null;
+    const lift = liftScale(key), hl = highlightAdapt(key);
     const { cx, cy, half } = centred(geo);
     const [tS, tM, tH, tG] = gradeTints(s);
     const gradeLum = [s.gShadowLum, s.gMidLum, s.gHighLum, s.gGlobalLum].map((v) => (v || 0) / 100);
@@ -713,7 +718,8 @@ export class Renderer {
       uContrast: look.contrast,
       uContrastSat: s.contrast / 100,
       ...tonemapUniforms(s),
-      uHighlights: s.highlights / 100,
+      uHighlights: (s.highlights * hl.k) / 100,
+      uHlTop: hl.top,
       uShadows: (s.shadows > 0 ? s.shadows * lift : s.shadows) / 100,
       uWhites: s.whites / 100,
       uBlacks: (s.blacks > 0 ? s.blacks * lift : s.blacks) / 100,
