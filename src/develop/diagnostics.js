@@ -4,6 +4,9 @@ const MAX_EVENTS = 500;
 const MAX_FRAMES = 240;
 const MAX_CAPTURE_MS = 10 * 60 * 1000;
 const SLOW_FRAME_MS = 25;
+// The page missing its screen updates this long: the window (or whole screen) stalled.
+const STALL_MS = 120;
+export const FLICKER_KEY = 'F8';
 
 const rounded = (value) => Number.isFinite(value) ? Math.round(value * 10) / 10 : null;
 const safeParam = (gl, key, source = gl) => { try { return gl.getParameter(source[key]); } catch { return null; } };
@@ -68,6 +71,8 @@ class GraphicsDiagnostics {
   stopTimer = 0;
   observer = null;
   listeners = new Set();
+  rafId = 0;
+  onKey = (e) => { if (e.key === FLICKER_KEY && this.isActive()) { e.preventDefault(); this.markFlicker(); } };
 
   isActive() { return this.capture?.status === 'recording'; }
 
@@ -108,12 +113,16 @@ class GraphicsDiagnostics {
         contextRestores: 0,
         longTasks: 0,
         flickerMarkers: 0,
+        stalls: 0,
+        maxStallMs: 0,
       },
       events: [],
       frames: [],
     };
     this.record('capture-started');
     this.observeLongTasks();
+    this.watchStalls();
+    window.addEventListener('keydown', this.onKey, true);
     this.stopTimer = setTimeout(() => this.stop('10-minute limit'), MAX_CAPTURE_MS);
     this.notify();
     return this.snapshot();
@@ -131,6 +140,28 @@ class GraphicsDiagnostics {
       });
       this.observer.observe({ type: 'longtask', buffered: false });
     } catch { this.observer = null; }
+  }
+
+  /**
+   * Screen updates the page didn't get: a gap between animation frames while
+   * the window is shown. It catches a stalled screen even when Flightroom
+   * drew nothing then.
+   */
+  watchStalls() {
+    let last = performance.now();
+    const tick = (now) => {
+      if (!this.isActive()) return;
+      const gap = now - last;
+      last = now;
+      if (gap > STALL_MS && document.visibilityState === 'visible') {
+        const summary = this.capture.summary;
+        summary.stalls++;
+        summary.maxStallMs = Math.max(summary.maxStallMs, rounded(gap));
+        this.record('screen-stall', { durationMs: gap });
+      }
+      this.rafId = requestAnimationFrame(tick);
+    };
+    this.rafId = requestAnimationFrame(tick);
   }
 
   record(type, details = {}) {
@@ -181,6 +212,8 @@ class GraphicsDiagnostics {
     this.stopTimer = 0;
     this.observer?.disconnect();
     this.observer = null;
+    cancelAnimationFrame(this.rafId);
+    window.removeEventListener('keydown', this.onKey, true);
     this.notify();
     return this.snapshot();
   }

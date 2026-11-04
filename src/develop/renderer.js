@@ -13,6 +13,11 @@ import { renderLayers } from './retouch.js';
 import { ROTATION } from '../cull/rotation.js';
 
 const GUIDE_EDGE = 320;
+// Big draws go to the graphics card in bands of about this many pixels. A
+// whole-picture pass is one triangle, and cards that can only pause work
+// between triangles (Intel's integrated graphics) can't stop one to put the
+// desktop on screen, so a 100+ ms pass makes the whole screen stall or flash.
+const BAND_PX = 1 << 17;
 // The base rendering under the sliders, per profile (params.js PROFILES).
 // Fitted to Lightroom's Adobe Color and to the Z7 II's own JPEGs.
 const LINEAR = [[0, 0], [255, 255]];
@@ -404,7 +409,20 @@ export class Renderer {
       else if (v.length === 4) gl.uniform4fv(l, v);
       else if (v.length === 9) gl.uniformMatrix3fv(l, false, v);
     }
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    this.drawBands(0, 0, target ? target.w : gl.drawingBufferWidth, target ? target.h : gl.drawingBufferHeight);
+  }
+
+  /** The bound pass over x, y, w, h, in bands of rows (BAND_PX); as is when it's small or already scissored. */
+  drawBands(x, y, w, h) {
+    const gl = this.gl;
+    if (w * h <= BAND_PX * 1.5 || gl.isEnabled(gl.SCISSOR_TEST)) { gl.drawArrays(gl.TRIANGLES, 0, 3); return; }
+    const rows = Math.max(1, Math.floor(BAND_PX / w));
+    gl.enable(gl.SCISSOR_TEST);
+    for (let r = 0; r < h; r += rows) {
+      gl.scissor(x, y + r, w, Math.min(rows, h - r));
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+    gl.disable(gl.SCISSOR_TEST);
   }
 
   colorUniforms(info, s) {
@@ -901,7 +919,7 @@ export class Renderer {
       if (l == null) continue;
       if (v instanceof WebGLTexture) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, v); gl.uniform1i(l, unit++); } else if (typeof v === 'number') gl.uniform1f(l, v); else gl.uniform4fv(l, v);
     }
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    this.drawBands(rect[0], rect[1], rect[2], rect[3]);
   }
 
   /**
@@ -914,7 +932,7 @@ export class Renderer {
    * once the view or settings change (the work stops, nothing is shown).
    * Returns whether it was shown.
    */
-  async refine({ info, s, geo, frame, out2frame, regionFor, fetchRegion, current, opts = {} }) {
+  async refine({ info, s, geo, frame, out2frame, regionFor, fetchRegion, current, onTile, opts = {} }) {
     const gl = this.gl, W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
     const o2o = mm(geo.frameToOriented(frame), out2frame);
     const k = 1 / Math.hypot(o2o[0], o2o[3]); // output px per sensor px
@@ -950,7 +968,9 @@ export class Renderer {
           gl.generateMipmap(gl.TEXTURE_2D);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
           this.drawRect(this.resample, this.acc, [tx, ty, ow, oh], { uTex: t.tex, uRect: [tx, ty, ow, oh], uScale: tw / ow });
+          const t0 = performance.now();
           const done = await this.waitFrame();
+          onTile?.({ durationMs: performance.now() - t0, completed: done, width: tw, height: th });
           this.free(t);
           if (!done || !current()) return false;
           await new Promise((res) => setTimeout(res, 0)); // let the page breathe between tiles
