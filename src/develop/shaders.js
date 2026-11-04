@@ -735,7 +735,11 @@ void main() {
     float sh = 1.0 - smoothstep(c - w, c + w * 0.3, yg);
     float hi = smoothstep(c - w * 0.3, c + w, yg);
     float mi = max(clamp(1.0 - sh - hi, 0.0, 1.0), (1.0 - abs(yg - c) / (w + 0.25)) * 0.8);
-    vec3 tint = (uGradeS * sh + uGradeM * mi + uGradeH * hi + uGradeG) * 0.2;
+    // Lightroom's shadow tint is strongest in the dark midtones and fades toward
+    // black, so blacks stay nearly neutral (measured on JWL_7345: a blue shadow
+    // grade moved black 3 b* in Lightroom, 13 here when it was flat).
+    float shT = 1.2 * (0.25 + 0.75 * smoothstep(0.05, 0.4, yg)) * (1.0 - smoothstep(c - w * 0.67, c + w * 0.5, yg));
+    vec3 tint = (uGradeS * shT + uGradeM * mi + uGradeH * hi + uGradeG) * 0.2;
     d += tint - dot(tint, W709);
     float lum = uGradeLum.x * sh + uGradeLum.y * mi + uGradeLum.z * hi + uGradeLum.w;
     d = lum >= 0.0 ? 1.0 - (1.0 - d) * (1.0 - lum * 0.5) : d * (1.0 + lum * 0.5);

@@ -18,6 +18,13 @@ const GUIDE_EDGE = 320;
 const LINEAR = [[0, 0], [255, 255]];
 const FLAT_CURVE = { curve: LINEAR, curveR: LINEAR, curveG: LINEAR, curveB: LINEAR, pShadows: 0, pDarks: 0, pLights: 0, pHighlights: 0 };
 
+// Lightroom's Shadows and Blacks are image-adaptive: lifting does less on a
+// brighter photo. Fitted on two Lightroom exports from one shoot: JWL_7451
+// (middle brightness 2^-3.97 of white, where the sliders were fitted) and
+// JWL_7345, 0.86 stop brighter, whose lift is 0.65 of that (tools/lr-tone.md).
+const LIFT_REF = -3.97, LIFT_K = 0.72;
+export const liftScale = (keyL) => (keyL == null ? 1 : Math.min(1.3, Math.max(0.6, 2 ** (-LIFT_K * (keyL - LIFT_REF)))));
+
 export const LOOKS = {
   adobe: { exposure: 1.05, contrast: 0.4, saturation: 0.9 },
   // Without Lightroom's own profile for the camera, Adobe Standard looks like Adobe Color.
@@ -431,11 +438,13 @@ export class Renderer {
     this.draw(this.blur, b, { uTex: a.tex, uStep: [1 / gw, 0], uSigma: sigma });
     this.draw(this.blur, c, { uTex: b.tex, uStep: [0, 1 / gh], uSigma: sigma });
     this.airY = null; // measured when Dehaze needs it (reading back stalls the graphics card)
+    this.lumSorted = null;
     this.guideKey = key;
   }
 
-  /** Airlight for dehaze: the brightness the haziest parts tend toward. */
-  measureAir() {
+  /** The guide's brightness (log2 scene light), sorted; read back once per guide (it stalls the graphics card). */
+  guideLum() {
+    if (this.lumSorted) return this.lumSorted;
     const gl = this.gl;
     const a = this.guide[0];
     const px = new Float32Array(a.w * a.h * 4);
@@ -443,7 +452,12 @@ export class Renderer {
     gl.readPixels(0, 0, a.w, a.h, gl.RGBA, gl.FLOAT, px);
     const lum = new Float32Array(a.w * a.h);
     for (let i = 0; i < lum.length; i++) lum[i] = px[i * 4];
-    lum.sort();
+    return (this.lumSorted = lum.sort());
+  }
+
+  /** Airlight for dehaze: the brightness the haziest parts tend toward. */
+  measureAir() {
+    const lum = this.guideLum();
     this.airY = Math.min(1, 2 ** lum[Math.floor(lum.length * 0.995)]);
   }
 
@@ -571,6 +585,8 @@ export class Renderer {
     this.updateMasks(s, geo);
     if (this.masks.length) this.updateMaskCurves();
     if ((s.dehaze || this.masks.some((m) => m.adj?.dehaze)) && this.airY == null) this.measureAir();
+    // The photo's middle brightness, for liftScale: read once per photo, when Shadows or Blacks lift.
+    if ((s.shadows > 0 || s.blacks > 0) && this.keySrc !== this.src) { const lum = this.guideLum(); this.keyL = lum[lum.length >> 1]; this.keySrc = this.src; }
     const out2ori = mm(geo.frameToOriented(frame), out2frame);
     // Retouch layers on top (compose.js); `live` is a stroke still being painted.
     const layers = renderLayers(s.layers || [], live?.layerId);
@@ -645,6 +661,7 @@ export class Renderer {
   drawPhoto(info, s, geo, frame, out2frame, out2ori, target, showClip, maskView, sharper) {
     const hi = sharper || this.hi;
     const look = lookFor(info, s);
+    const lift = this.keySrc === this.src ? liftScale(this.keyL) : 1;
     const { cx, cy, half } = centred(geo);
     const [tS, tM, tH, tG] = gradeTints(s);
     const gradeLum = [s.gShadowLum, s.gMidLum, s.gHighLum, s.gGlobalLum].map((v) => (v || 0) / 100);
@@ -697,9 +714,9 @@ export class Renderer {
       uContrastSat: s.contrast / 100,
       ...tonemapUniforms(s),
       uHighlights: s.highlights / 100,
-      uShadows: s.shadows / 100,
+      uShadows: (s.shadows > 0 ? s.shadows * lift : s.shadows) / 100,
       uWhites: s.whites / 100,
-      uBlacks: s.blacks / 100,
+      uBlacks: (s.blacks > 0 ? s.blacks * lift : s.blacks) / 100,
       uTexture: s.texture / 100,
       uClarity: s.clarity / 100,
       uDehaze: s.dehaze / 100,

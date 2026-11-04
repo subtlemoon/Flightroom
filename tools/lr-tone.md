@@ -169,3 +169,24 @@ Highlights and Shadows shift the edge-aware base in stops:
 2. Render them in the Playwright rig (mocked Tauri) with single-slider overrides
    and the curves removed.
 3. Bin the pixels by the neutral render's L*, then take the median change per band.
+
+## A second photo: adaptive Shadows and Blacks, shadow grading (2.10.5)
+Lightroom export of JWL_7345 (same shoot, ISO 3600, 0.86 stop brighter than
+JWL_7451 at defaults) with Contrast -95, Highlights -94, Shadows +91, Whites -95,
+Blacks +91, the point curve (121->51, 175->183), Red saturation -24 and colour
+grading (shadows 217/45, midtones 11/20). Compared after a dense optical-flow
+alignment (Lightroom's export is lens-corrected).
+
+- Flightroom's darks came out 6-9 L* light (L* 10-40) and blacks blue. A
+  coordinate search over the sliders matched every band below L* 80 at
+  Shadows and Blacks x0.65 with everything else unchanged. Lightroom's
+  PV2012 sliders adapt to the photo; `liftScale` (renderer.js) scales positive
+  Shadows and Blacks by the photo's median scene brightness (log2, from the
+  guide), 1 at JWL_7451's -3.97, 0.65 at JWL_7345's -3.11, clamped 0.6-1.3.
+- Shadow grading was a flat tint down to black. Lightroom's moved black only
+  ~3 b* and peaks in the dark midtones (L* 25-45), so `shT` in shaders.js
+  fades it toward black.
+
+Result: median dE 8.6 -> 7.4, band means within ~1 L* below L* 50 (were +4-9).
+Left: the sky is ~3.5 L* brighter and ~5 b* less blue than Lightroom's, with
+less cloud texture, and the brightest sunset glow (L* 90+) ~15 L* darker.
