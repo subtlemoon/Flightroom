@@ -518,7 +518,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
               override={selMask && <MaskAdjust m={selMask} part={selPart} acts={acts} brush={brush} setBrush={setBrush} options={maskOptions} setOptions={setMaskOptions}
                 ai={aiMasks} sampling={picking === 'point'} onSample={() => setPicking((p) => (p === 'point' ? false : 'point'))} onDone={() => setSel(null)} />}
               photo={photo} ensureAi={ensureAi} onDenoised={onDenoised} gradeHidden={gradeHidden}
-              onGradeHide={(k) => setGradeHidden((h) => { const n = new Set(h); if (!n.delete(k)) n.add(k); return n; })}
+              onGradeHide={(k, on) => setGradeHidden((h) => { const n = new Set(h); if (on) n.add(k); else n.delete(k); return n; })}
               edited={isEdited(s, opened.asShot)} picking={picking === 'wb'} onPick={() => setPicking((p) => (p === 'wb' ? false : 'wb'))} onAutoWb={autoWb} onAutoTone={autoTone} />
           ) : (
             <div className="dev-panel-empty muted small">{opened?.loading ? 'Reading RAW data…' : ''}</div>
@@ -1855,7 +1855,9 @@ function Wheel({ k, title, s, set, big, hidden, onHide }) {
           style={{ left: `calc(50% + ${cos} * (50% + 11px))`, top: `calc(50% - ${sin} * (50% + 11px))`, background: sat ? `hsl(${hue} 100% 25%)` : undefined }} />
       </div>
       {big && <><Slider sl={SLIDER[`${k}Hue`]} value={hue} def={0} onSet={set} /><Slider sl={SLIDER[`${k}Sat`]} value={sat} def={0} onSet={set} /></>}
-      <button className={`dev-wheel-eye${hidden ? ' on' : ''}`} onClick={() => onHide?.(k)} title={hidden ? `Show this ${title.toLowerCase()} grade again` : `Hide this ${title.toLowerCase()} grade for a moment`}>
+      <button className={`dev-wheel-eye${hidden ? ' on' : ''}`} title={`Hold to hide this ${title.toLowerCase()} grade`}
+        onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); onHide?.(k, true); }}
+        onPointerUp={() => onHide?.(k, false)} onLostPointerCapture={() => onHide?.(k, false)}>
         <Icon name={hidden ? 'eyeOff' : 'eye'} size={13} />
       </button>
       <Slider sl={SLIDER[`${k}Lum`]} value={s[`${k}Lum`]} def={0} onSet={set} />
