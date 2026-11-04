@@ -24,7 +24,7 @@ import {
 import { asShotTempTint, inv3, neutralToXy, xyToTempTint } from '../develop/color.js';
 import { adobeRendering } from '../develop/adobe.js';
 import { Geometry, Renderer, ap, cameraTransform, constrainedCrop, fitScale, lookFor, mat, mm, outToFrame, parseFrame, sourceMap } from '../develop/renderer.js';
-import { exportGraphicsReport, graphicsDiagnostics } from '../develop/diagnostics.js';
+import { FLICKER_KEY, exportGraphicsReport, graphicsDiagnostics } from '../develop/diagnostics.js';
 import { ExportModal } from './export.jsx';
 import { activeToneMap } from '../develop/tonemap.js';
 import { useRetouch } from './retouch.jsx';
@@ -597,6 +597,7 @@ function GraphicsDiagnosticsModal({ apiRef, onClose }) {
       : event.type === 'webgl-context-lost' ? 'Graphics context lost'
         : event.type === 'webgl-context-restored' ? 'Graphics context restored'
           : event.type === 'main-thread-long-task' ? `App paused for ${event.durationMs} ms`
+          : event.type === 'screen-stall' ? `Screen stalled for ${event.durationMs} ms`
             : event.type === 'refinement-finished' ? `Full detail pass ${event.completed ? 'finished' : 'stopped'} (${event.durationMs} ms)`
               : event.type.replaceAll('-', ' ');
 
@@ -616,7 +617,7 @@ function GraphicsDiagnosticsModal({ apiRef, onClose }) {
         )}
       </>
     )}>
-      <p>Start a capture, close this window, then reproduce the flicker by changing the problem control. After the screen returns, reopen this report, mark the flicker, and save the JSON file.</p>
+      <p>Start a capture, close this window, then reproduce the flicker by changing the problem control. Press <b>{FLICKER_KEY}</b> the moment the screen flickers (no need to reopen this window), then come back here and save the JSON file.</p>
       <div className="gpu-diag-note">
         The report includes browser and graphics details, frame timing, graphics resets, pauses, and which setting names changed. It does not include photos, file paths, or setting values. Nothing is sent automatically. Captures end after 10 minutes; Flightroom keeps the report in memory until it closes. The desktop app opens a file picker; browser mode uses one where supported and otherwise downloads to the browser’s default folder.
       </div>
@@ -633,7 +634,8 @@ function GraphicsDiagnosticsModal({ apiRef, onClose }) {
             <div><strong>{summary.failedFrameWaits || 0}</strong><span>Frame wait failures</span></div>
             <div><strong>{summary.contextLosses || 0} / {summary.contextRestores || 0}</strong><span>Context lost / restored</span></div>
             <div><strong>{summary.longTasks || 0}</strong><span>App pauses over 50 ms</span></div>
-            <div><strong>{summary.flickerMarkers || 0}</strong><span>Screen flicker marks</span></div>
+            <div><strong>{summary.flickerMarkers || 0}</strong><span>Screen flicker marks ({FLICKER_KEY})</span></div>
+            <div><strong>{summary.stalls || 0}</strong><span>Screen stalls{summary.maxStallMs ? ` (max ${summary.maxStallMs} ms)` : ''}</span></div>
           </div>
           <div className="gpu-diag-detail"><span className="muted">Graphics device</span><span>{renderer}</span></div>
           <div className="gpu-diag-detail"><span className="muted">Display / canvas</span><span>{report.environment?.viewport?.width} × {report.environment?.viewport?.height} at {report.environment?.viewport?.devicePixelRatio}× · {report.graphics?.canvas?.width || 0} × {report.graphics?.canvas?.height || 0}</span></div>
@@ -986,7 +988,8 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
             completed = await r.refine({ info, s, geo, frame, out2frame: o2f, opts,
               regionFor: (tx, ty, ow, oh) => regionFor(o2f, tx, ty, ow, oh),
               fetchRegion: fetchRegionKept,
-              current: () => gen === refineGen.current && rendererRef.current === r });
+              current: () => gen === refineGen.current && rendererRef.current === r,
+              onTile: (t) => graphicsDiagnostics.recordFrame({ ...t, kind: 'refine-tile' }) });
           } catch (err) { graphicsDiagnostics.record('refinement-threw', { errorName: err?.name || 'Error' }); }
           finally {
             graphicsDiagnostics.record('refinement-finished', { durationMs: performance.now() - refineStartedAt, completed });
