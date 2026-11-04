@@ -47,6 +47,8 @@ pub struct Raw {
     model: String,
     /// The model as the file names it ("NIKON Z 7_2"), to find Lightroom's profiles.
     exif_model: String,
+    /// The lens correction the camera wrote into the file.
+    lens: Option<crate::lens::Lens>,
 }
 
 fn illuminant_temp(name: &str) -> Option<f32> {
@@ -138,6 +140,7 @@ impl Raw {
             wb,
             matrices,
             exif_model: raw.model.clone(),
+            lens: if raw.clean_make.eq_ignore_ascii_case("nikon") { crate::lens::nikon(path) } else { None },
             make: raw.clean_make,
             model: raw.clean_model,
         })
@@ -595,6 +598,8 @@ pub struct Opened {
     adobe: crate::adobe::Adobe,
     /// AI Denoise has been worked out for this photo.
     denoised: bool,
+    /// The camera's own lens correction, when the file has one.
+    lens: Option<crate::lens::Lens>,
 }
 
 /// Decodes a RAW file for developing and reads its saved settings.
@@ -619,6 +624,7 @@ pub async fn develop_open(app: AppHandle, id: String, sidecar: Option<String>) -
             saved: saved(text.as_deref()),
             adobe,
             denoised: denoise_file(&app, &raw).exists(),
+            lens: raw.lens.clone(),
         })
     })
     .await
@@ -1051,7 +1057,7 @@ mod tests {
         let info = serde_json::json!({
             "width": raw.w, "height": raw.h, "orientation": 1, "asShot": raw.wb,
             "matrices": raw.matrices, "camera": format!("{} {}", raw.make, raw.model),
-            "settings": doc.all("crs"), "curves": curves, "own": doc.all("fr"), "denoised": false,
+            "settings": doc.all("crs"), "curves": curves, "own": doc.all("fr"), "denoised": false, "lens": raw.lens,
             // Lightroom's profiles when installed (or in FLIGHTROOM_CAMERA_RAW), as develop_open sends them.
             "adobe": crate::adobe::for_camera(&crate::adobe::camera_names(&raw.make, &raw.model, &raw.exif_model), Some(text.as_str()), &std::env::temp_dir()),
         });
@@ -1180,6 +1186,7 @@ mod tests {
             make: String::new(),
             model: String::new(),
             exif_model: String::new(),
+            lens: None,
         }
     }
 

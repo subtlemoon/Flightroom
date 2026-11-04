@@ -65,7 +65,7 @@ export async function exportPhoto(photo, info, s, opts) {
   try {
     const dn = info.denoised ? s.aiDenoise || 0 : 0;
     r.setSource(await fetchFrame(dev.imageUrl(photo, 2048, false, dn)));
-    const geo = new Geometry(info.width, info.height, info.orientation);
+    const geo = new Geometry(info.width, info.height, info.orientation, info.lens);
     const f = geo.frame(s.crop);
     const { scale, w: EW, h: EH } = exportSize(f, opts.longEdge);
     const k = scale; // output px per oriented px

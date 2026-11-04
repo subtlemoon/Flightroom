@@ -1,7 +1,7 @@
 // Draws a RAW photo with develop settings using WebGL2. The decoded photo lives
 // on the graphics card as half-float camera RGB; every redraw runs the whole
 // develop pipeline (shaders.js) for just the pixels on screen.
-import { VERT, GUIDE_DOWN, BLUR, FINAL, DISPLAY, COPY } from './shaders.js';
+import { VERT, GUIDE_DOWN, BLUR, FINAL, DISPLAY, COPY, RESAMPLE } from './shaders.js';
 import { LUT_SIZE } from './icc.js';
 import { colorTransform, inv3, mul3, neutralToXy, tempTintToXy } from './color.js';
 import { BASELINE_EXPOSURE, PP_TO_SRGB, SRGB_TO_PP, TONE_SIZE, adobeRendering, dcpTransform, hueSatFor, hueSatPixels, toneTable } from './adobe.js';
@@ -113,8 +113,10 @@ const glMat = (M) => new Float32Array([M[0], M[3], M[6], M[1], M[4], M[7], M[2],
  * fractions of the unrotated sensor image, plus a straighten angle.
  */
 export class Geometry {
-  constructor(sw, sh, orientation) {
+  /** lens: the camera's own distortion correction from the RAW file (src-tauri lens.rs), or none. */
+  constructor(sw, sh, orientation, lens = null) {
     this.sw = sw; this.sh = sh;
+    this.lens = lens && Array.isArray(lens.k) ? lens : null;
     this.rot = ROTATION[orientation] || 0;
     this.ow = this.rot % 180 ? sh : sw;
     this.oh = this.rot % 180 ? sw : sh;
@@ -158,6 +160,20 @@ export class Geometry {
     return mat(c * f.hw, -s * f.hh, f.cx, s * f.hw, c * f.hh, f.cy);
   }
 
+  /**
+   * The camera's lens correction, when it applies: Z lenses always (Lightroom
+   * applies their built-in correction whatever the checkbox says), others with
+   * Enable profile corrections. From the corrected picture to the sensor, around
+   * the optical centre: r * (1 + k0 rho^2 + k1 rho^4 + k2 rho^6) / (1 + q),
+   * rho = r / half diagonal. As { k: [k0, k1, k2, 1 / (1 + q)], c: centre (0-1), n: (w, h) / half diagonal }.
+   */
+  lensFor(s) {
+    const l = this.lens;
+    if (!l || !(l.required || s?.lensProfile)) return null;
+    const hd = Math.hypot(this.sw, this.sh) / 2;
+    return { k: [l.k[0], l.k[1], l.k[2], 1 / (1 + l.q)], c: [0.5 + (l.dx || 0) / this.sw, 0.5 + (l.dy || 0) / this.sh], n: [this.sw / hd, this.sh / hd] };
+  }
+
   /** Oriented pixels -> photo coordinates (0-1, sensor orientation). */
   orientedToPhoto() {
     return mm(mat(1 / this.sw, 0, 0, 0, 1 / this.sh, 0), this.o2s);
@@ -194,6 +210,15 @@ export function perspective(s) {
   return inv3(F);
 }
 
+/** The camera's lens correction (Geometry.lensFor) on a photo point (0-1), as the shader does it. */
+const lensUniforms = (L) => ({ uLensK: L ? L.k : [0, 0, 0, 1], uLensC: L ? L.c : [0.5, 0.5], uLensN: L ? L.n : [1, 1] });
+
+export function lensWarp(L, [px, py]) {
+  const vx = (px - L.c[0]) * L.n[0], vy = (py - L.c[1]) * L.n[1], r2 = vx * vx + vy * vy;
+  const f = (1 + r2 * (L.k[0] + r2 * (L.k[1] + r2 * L.k[2]))) * L.k[3];
+  return [L.c[0] + (px - L.c[0]) * f, L.c[1] + (py - L.c[1]) * f];
+}
+
 /** Maps a point of the finished photo (oriented px) to photo coordinates (0-1); null when outside the source. */
 export function sourceMap(geo, s) {
   const { cx, cy, half } = centred(geo);
@@ -201,12 +226,14 @@ export function sourceMap(geo, s) {
   const corner = (cx * cx + cy * cy) / (half * half);
   const k = ((s.distortion || 0) / 100) * 0.25;
   const o2p = geo.orientedToPhoto();
+  const L = geo.lensFor(s);
   return (x, y) => {
     let nx = (x - cx) / half, ny = (y - cy) / half;
     const w = P[6] * nx + P[7] * ny + P[8];
     [nx, ny] = [(P[0] * nx + P[1] * ny + P[2]) / w, (P[3] * nx + P[4] * ny + P[5]) / w];
     const f = 1 - k * ((nx * nx + ny * ny) / corner);
-    return ap(o2p, nx * f * half + cx, ny * f * half + cy);
+    const p = ap(o2p, nx * f * half + cx, ny * f * half + cy);
+    return L ? lensWarp(L, p) : p;
   };
 }
 
@@ -264,6 +291,7 @@ export class Renderer {
     this.blur = program(gl, BLUR);
     this.final = program(gl, FINAL);
     this.copy = program(gl, COPY);
+    this.resample = program(gl, RESAMPLE);
     this.quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
@@ -345,7 +373,7 @@ export class Renderer {
     gl.deleteTexture(this.curveTex); gl.deleteTexture(this.hueTex); gl.deleteTexture(this.blank);
     for (const t of [this.prof?.tone, this.prof?.hsm, this.prof?.laTex, this.prof?.lbTex]) if (t) gl.deleteTexture(t);
     gl.deleteBuffer(this.quad);
-    for (const p of [this.down, this.blur, this.final, this.copy]) gl.deleteProgram(p.p);
+    for (const p of [this.down, this.blur, this.final, this.copy, this.resample]) gl.deleteProgram(p.p);
     this.free(this.acc);
     for (const t of this.maskTex || []) gl.deleteTexture(t.tex);
     this.composer?.dispose();
@@ -690,6 +718,7 @@ export class Renderer {
       uCornerR2: (cx * cx + cy * cy) / (half * half),
       uPersp: glMat(perspective(s)),
       uDistort: ((s.distortion || 0) / 100) * 0.25,
+      ...lensUniforms(geo.lensFor(s)),
       uLensVig: (s.lensVignette || 0) / 100,
       uLensVigMid: (s.lensVignetteMid ?? 50) / 100,
       uDefringeP: Math.max(defringe, (s.defringePurple || 0) / 20),
@@ -870,7 +899,7 @@ export class Renderer {
     for (const [k, v] of Object.entries(uniforms)) {
       const l = prog.loc[k];
       if (l == null) continue;
-      if (v instanceof WebGLTexture) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, v); gl.uniform1i(l, unit++); } else gl.uniform4fv(l, v);
+      if (v instanceof WebGLTexture) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, v); gl.uniform1i(l, unit++); } else if (typeof v === 'number') gl.uniform1f(l, v); else gl.uniform4fv(l, v);
     }
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
@@ -878,8 +907,8 @@ export class Renderer {
   /**
    * Full quality, as Lightroom shows a photo smaller than 100%: the view
    * processed from full-resolution raw data (sharpening, texture and noise
-   * reduction at their real size), in tiles, each scaled down through its
-   * mipmaps into a screen-sized picture, which is then shown.
+   * reduction at their real size), in tiles, each scaled down (Lanczos over its
+   * mipmaps, shaders.js RESAMPLE) into a screen-sized picture, which is then shown.
    * regionFor(x, y, w, h) gives the sensor rectangle an output tile needs
    * (or null); fetchRegion(rect) its demosaiced pixels; current() turns false
    * once the view or settings change (the work stops, nothing is shown).
@@ -920,7 +949,7 @@ export class Renderer {
           gl.bindTexture(gl.TEXTURE_2D, t.tex);
           gl.generateMipmap(gl.TEXTURE_2D);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-          this.drawRect(this.copy, this.acc, [tx, ty, ow, oh], { uTex: t.tex, uRect: [tx, ty, ow, oh] });
+          this.drawRect(this.resample, this.acc, [tx, ty, ow, oh], { uTex: t.tex, uRect: [tx, ty, ow, oh], uScale: tw / ow });
           const done = await this.waitFrame();
           this.free(t);
           if (!done || !current()) return false;

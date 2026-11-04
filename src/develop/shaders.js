@@ -81,6 +81,8 @@ uniform float uOriHalf;
 uniform float uCornerR2;  // squared distance to a corner, in those units
 uniform mat3 uPersp;      // Transform panel: output -> source, centred units
 uniform float uDistort;
+uniform vec4 uLensK;     // the camera's lens correction (renderer.js lensFor): rho^2, ^4, ^6 terms and 1 / (1 + q)
+uniform vec2 uLensC, uLensN; // its optical centre (photo 0-1) and photo size / half diagonal
 uniform float uLensVig, uLensVigMid;
 uniform float uDefringeP, uDefringeG;
 uniform float uShadowTint;
@@ -110,7 +112,7 @@ uniform float uHighlights, uShadows, uWhites, uBlacks;
 uniform float uHlTop; // how much Highlights eases off on the brightest tones (renderer.js adaptive)
 // Basic tone slider shapes (fitted to Lightroom; tools/lr-tone.md).
 const float HL_K = 1.3, HL_LO = 0.35, HL_T0 = 0.65, HL_T1 = 0.85, SH_K = 1.3, SH_HI = 0.65, SH_DEEP = 0.8, SH_C = 0.3, HL_X = 0.5, SH_X = 0.2, LIFT_EDGE = 1.0, LIFT_R = 4.0;
-const float WH_NEG = 0.24, WH_POS = 0.3, BL_NEG = 1.4, BL_POS = 0.55, BL_N = 2.36, BL_LIFT = 0.035, LIFT_GREY = 0.9;
+const float CON_LOCAL = 0.45, WB_LOCAL = 0.45, WH_NEG = 0.24, WH_POS = 0.3, BL_NEG = 1.4, BL_POS = 0.55, BL_N = 2.36, BL_LIFT = 0.035, LIFT_GREY = 0.9;
 uniform float uTexture, uClarity, uDehaze, uVibrance, uSaturation;
 uniform float uAirY;
 uniform float uSharpen, uSharpenRadius, uSharpenDetail, uSharpenMasking;
@@ -441,6 +443,9 @@ void main() {
   float r2 = dot(n, n) / uCornerR2;
   n *= 1.0 - uDistort * r2;
   vec2 p = (uOri2Photo * vec3(n * uOriHalf + uOriCenter, 1.0)).xy;
+  vec2 lv = (p - uLensC) * uLensN;
+  float lr2 = dot(lv, lv);
+  p = uLensC + (p - uLensC) * (1.0 + lr2 * (uLensK.x + lr2 * (uLensK.y + lr2 * uLensK.z))) * uLensK.w;
   if (hn.z <= 0.0 || p.x < 0.0 || p.y < 0.0 || p.x > 1.0 || p.y > 1.0) { o = vec4(uBg, 1.0); return; }
 
   vec3 lin = toLinear(cam(p));
@@ -592,6 +597,7 @@ void main() {
     float mask = uSharpenMasking > 0.0 ? smoothstep(uSharpenMasking * 0.25, uSharpenMasking * 0.25 + 0.08, edge) : 1.0;
     l1 += sharpen * clamp(hp, -limit, limit) * mask;
   } else if (sharpen < 0.0) l1 += max(sharpen, -1.0) * (l0 - ring(p, 1.5)); // a mask's negative Sharpness softens
+  float fine = l1 - base; // the detail around the local base (log2), for Whites and Blacks
   lin *= exp2(l1 - l0);
   // Lightroom's Shadows lifts brightness but not colour with it.
   if (shLift > 0.0) { float ys = dot(lin, W709); lin = ys + (lin - ys) * exp2(-SH_C * shLift); }
@@ -623,7 +629,10 @@ void main() {
   // measured change per L* band at -100 (see tools/lr-tone.md). Brightness
   // only (colours scale with it), so saturation stays.
   if (whites != 0.0 || blacks != 0.0) {
-    float y = clamp(dot(d, W709), 0.0, 1.0), y2 = y;
+    float yp = clamp(dot(d, W709), 0.0, 1.0);
+    // They act on the local brightness and carry the detail around it along, so
+    // a glowing cloud edge keeps its contrast (Lightroom's are edge-aware too).
+    float y = clamp(yp * exp2(-fine * WB_LOCAL), 0.0, 1.0), y2 = y;
     // Negative Whites grows with the cube of brightness, then levels off near
     // white as Lightroom's does (-100: -7 L* at L* 75, -10 at L* 95), so a
     // bright sky keeps its gradient.
@@ -636,7 +645,7 @@ void main() {
     y2 = max(y2, 0.0);
     // Brightening mostly adds grey (as Lightroom's lifted blacks look milky),
     // rather than scaling the colour up with it; measured on JWL_7451.
-    d = y > 1e-4 ? (y2 > y ? mix(d * (y2 / y), d + (y2 - y), LIFT_GREY) : d * (y2 / y)) : vec3(y2);
+    d = y > 1e-4 ? (y2 > y ? mix(d * (y2 / y), d + (y2 - y) * yp / y, LIFT_GREY) : d * (y2 / y)) : vec3(y2);
   }
   d = clamp(d, 0.0, 1.0);
   // Contrast keeps hue (on the brightest and darkest channel, the middle one
@@ -653,10 +662,11 @@ void main() {
   {
     float ck = CON_K * (uContrastSat + LA.y);
     if (ck != 0.0) {
-      float y = clamp(dot(d, W709), 0.0, 1.0), y2 = conCurve(y, ck);
+      float kl = exp2(-fine * CON_LOCAL);
+      float y = clamp(dot(d, W709) * kl, 0.0, 1.0), y2 = conCurve(y, ck);
       vec3 dl = y > 1e-4 ? d * (y2 / y) : vec3(y2);
       float hi = max(d.r, max(d.g, d.b)), lo = min(d.r, min(d.g, d.b));
-      float hi2 = conCurve(hi, ck), lo2 = conCurve(lo, ck);
+      float hi2 = conCurve(clamp(hi * kl, 0.0, 1.0), ck) / kl, lo2 = conCurve(clamp(lo * kl, 0.0, 1.0), ck) / kl;
       vec3 dh = hi - lo > 1e-5 ? lo2 + (d - lo) * ((hi2 - lo2) / (hi - lo)) : vec3(hi2);
       d = mix(dh, dl, CON_LUM);
     }
@@ -851,6 +861,44 @@ uniform sampler2D uTex;
 uniform vec4 uRect; // x, y, w, h in target pixels
 out vec4 o;
 void main() { o = texture(uTex, (gl_FragCoord.xy - uRect.xy) / uRect.zw); }`;
+
+// A full-resolution tile scaled down to the screen: Lanczos-2 over the mip
+// level that leaves 1.5-3 texels per output pixel, so fine detail stays crisp
+// (as Lightroom shows a photo below 100%) instead of trilinear's blur.
+export const RESAMPLE = `#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform vec4 uRect;   // x, y, w, h in target pixels
+uniform float uScale; // texels (level 0) per output pixel
+out vec4 o;
+float lz(float x) {
+  x = abs(x);
+  if (x < 1e-4) return 1.0;
+  if (x >= 2.0) return 0.0;
+  float px = 3.14159265 * x;
+  return 2.0 * sin(px) * sin(px * 0.5) / (px * px);
+}
+void main() {
+  float lev = max(0.0, floor(log2(uScale / 1.5)));
+  float s = uScale / exp2(lev);
+  vec2 size = vec2(textureSize(uTex, int(lev)));
+  vec2 c = (gl_FragCoord.xy - uRect.xy) / uRect.zw * size - 0.5; // texel space of that level
+  vec2 b = floor(c);
+  vec4 acc = vec4(0.0);
+  float wsum = 0.0;
+  for (int j = -6; j <= 6; j++) {
+    float wy = lz((b.y + float(j) - c.y) / s);
+    if (wy == 0.0) continue;
+    for (int i = -6; i <= 6; i++) {
+      float wx = lz((b.x + float(i) - c.x) / s);
+      if (wx == 0.0) continue;
+      vec2 t = clamp(b + vec2(float(i), float(j)), vec2(0.0), size - 1.0);
+      acc += wx * wy * texelFetch(uTex, ivec2(t), int(lev));
+      wsum += wx * wy;
+    }
+  }
+  o = clamp(acc / wsum, 0.0, 1.0);
+}`;
 
 export const DISPLAY = `#version 300 es
 precision highp float;
