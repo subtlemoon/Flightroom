@@ -118,7 +118,7 @@ uniform float uNrLum, uNrColor, uNrLumDetail, uNrLumContrast, uNrColorDetail, uN
 uniform float uVignette, uVigMid, uVigRound, uVigFeather, uVigStyle, uVigHighlights;
 uniform float uRefineSat;
 uniform float uBW;
-uniform vec3 uGradeS, uGradeM, uGradeH, uGradeG; // tints around grey
+uniform vec3 uGradeS, uGradeM, uGradeH, uGradeG; // OKLab hue direction (xy) and amount (luts.js gradeTints)
 uniform vec4 uGradeLum;   // shadows, midtones, highlights, global
 uniform vec2 uGradeShape; // blending, balance
 uniform float uGradeOn;
@@ -292,6 +292,28 @@ vec3 gamutIn(vec3 d) {
   }
   return clamp(encode(clamp(lin, 0.0, 1.0)), 0.0, 1.0);
 }
+// Display colour <-> OKLab (sRGB curve, signed so colours past the gamut edge
+// keep going), for colour grading.
+const float GRADE_OFF = 0.165, GRADE_K = 0.0787, GRADE_D = 0.248, GRADE_Q = 0.18;
+vec3 srgbToLin(vec3 c) {
+  vec3 a = abs(c);
+  return sign(c) * mix(pow((a + 0.055) / 1.055, vec3(2.4)), a / 12.92, step(a, vec3(0.04045)));
+}
+vec3 linToSrgb(vec3 c) {
+  vec3 a = abs(c);
+  return sign(c) * mix(1.055 * pow(a, vec3(1.0 / 2.4)) - 0.055, a * 12.92, step(a, vec3(0.0031308)));
+}
+vec3 toOklab(vec3 c) {
+  vec3 l = srgbToLin(c) * mat3(0.4122214708, 0.5363325363, 0.0514459929, 0.2119034982, 0.6806995451, 0.1073969566, 0.0883024619, 0.2817188376, 0.6299787005);
+  l = sign(l) * pow(abs(l), vec3(1.0 / 3.0));
+  return l * mat3(0.2104542553, 0.793617785, -0.0040720468, 1.9779984951, -2.428592205, 0.4505937099, 0.0259040371, 0.7827717662, -0.808675766);
+}
+vec3 fromOklab(vec3 o) {
+  vec3 l = o * mat3(1.0, 0.3963377774, 0.2158037573, 1.0, -0.1055613458, -0.0638541728, 1.0, -0.0894841775, -1.291485548);
+  l = l * l * l;
+  return linToSrgb(l * mat3(4.0767416621, -3.3077115913, 0.2309699292, -1.2684380046, 2.6097574011, -0.3413193965, -0.0041960863, -0.7034186147, 1.707614701));
+}
+
 vec3 hsv(vec3 c) {
   float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b)), d = mx - mn;
   float h = 0.0;
@@ -732,19 +754,28 @@ void main() {
     d = vec3(max(yb, 0.0));
   }
 
-  // Colour grading: tints and brightness for shadows, midtones and highlights.
+  // Colour grading, fitted to Lightroom's (exports of JWL_7345 with and without
+  // its grade, tools/lr-tone.md), in OKLab: soft regions on lightness around the
+  // balance point; each adds its colour, pulls existing colour in a little and
+  // darkens (Lightroom's grade does: 3-5 L*), less for colours already leaning
+  // its way, so a red suit keeps its brightness under a red midtone grade.
   if (uGradeOn > 0.0) {
-    float yg = clamp(dot(d, W709), 0.0, 1.0);
-    float c = 0.5 - uGradeShape.y * 0.3, w = 0.1 + uGradeShape.x * 0.4;
-    float sh = 1.0 - smoothstep(c - w, c + w * 0.3, yg);
-    float hi = smoothstep(c - w * 0.3, c + w, yg);
-    float mi = max(clamp(1.0 - sh - hi, 0.0, 1.0), (1.0 - abs(yg - c) / (w + 0.25)) * 0.8);
-    // Lightroom's shadow tint is strongest in the dark midtones and fades toward
-    // black, so blacks stay nearly neutral (measured on JWL_7345: a blue shadow
-    // grade moved black 3 b* in Lightroom, 13 here when it was flat).
-    float shT = 1.2 * (0.25 + 0.75 * smoothstep(0.05, 0.4, yg)) * (1.0 - smoothstep(c - w * 0.67, c + w * 0.5, yg));
-    vec3 tint = (uGradeS * shT + uGradeM * mi + uGradeH * hi + uGradeG) * 0.2;
-    d += tint - dot(tint, W709);
+    vec3 o = toOklab(d);
+    float c = 0.639 - uGradeShape.y * 0.3, w = 0.0943 * (0.1 + uGradeShape.x * 0.4) / 0.3;
+    float sh = 1.0 / (1.0 + exp((o.x - c + GRADE_OFF) / w));
+    float hi = 1.0 / (1.0 + exp((c + GRADE_OFF - o.x) / w));
+    float mi = clamp(1.0 - sh - hi, 0.0, 1.0) / (1.0 - 2.0 / (1.0 + exp(GRADE_OFF / w)));
+    vec4 wr = vec4(sh, mi, hi, 1.0) * vec4(uGradeS.z, uGradeM.z, uGradeH.z, uGradeG.z);
+    vec2 ab = o.yz;
+    float dk = 0.0;
+    o.yz *= 1.0 - GRADE_Q * (wr.x + wr.y + wr.z + wr.w);
+    vec2 dirs[4] = vec2[4](uGradeS.xy, uGradeM.xy, uGradeH.xy, uGradeG.xy);
+    for (int i = 0; i < 4; i++) {
+      o.yz += GRADE_K * pow(max(o.x, 0.0), 0.361) * wr[i] * dirs[i];
+      dk += wr[i] * clamp(1.0 - 7.0 * dot(ab, dirs[i]), 0.0, 1.0);
+    }
+    o.x *= 1.0 - GRADE_D * dk;
+    d = fromOklab(o);
     float lum = uGradeLum.x * sh + uGradeLum.y * mi + uGradeLum.z * hi + uGradeLum.w;
     d = lum >= 0.0 ? 1.0 - (1.0 - d) * (1.0 - lum * 0.5) : d * (1.0 + lum * 0.5);
   }

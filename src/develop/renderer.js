@@ -18,16 +18,16 @@ const GUIDE_EDGE = 320;
 const LINEAR = [[0, 0], [255, 255]];
 const FLAT_CURVE = { curve: LINEAR, curveR: LINEAR, curveG: LINEAR, curveB: LINEAR, pShadows: 0, pDarks: 0, pLights: 0, pHighlights: 0 };
 
-// Lightroom's tone sliders are image-adaptive. Fitted on two Lightroom exports
-// from one shoot: JWL_7451 (middle brightness 2^-3.97 of white, where the
-// sliders were fitted) and JWL_7345, 0.86 stop brighter, where positive
-// Shadows and Blacks lift 0.65 as much, and Highlights is 15% stronger and
-// doesn't ease off on the brightest tones, so a bright sky comes down with
-// the rest (tools/lr-tone.md).
-const KEY_REF = -3.97, KEY_SPAN = 0.86, LIFT_K = 0.72, HL_TOP = 0.55, HL_MORE = 0.15;
-const brighter = (keyL) => (keyL == null ? 0 : Math.min(1, Math.max(0, (keyL - KEY_REF) / KEY_SPAN)));
+// Lightroom's tone sliders are image-adaptive. Fitted on Lightroom exports of
+// two photos from one shoot: JWL_7451 (middle brightness 2^-3.97 of white,
+// where the sliders were fitted) and JWL_7345, 0.86 stop brighter, where
+// positive Shadows and Blacks lift 0.79 as much and Highlights doesn't ease off
+// on the brightest tones, so a bright sky comes down with the rest
+// (tools/lr-tone.md).
+const KEY_REF = -3.97, KEY_SPAN = 0.86, LIFT_K = 0.4, HL_TOP = 0.55;
 export const liftScale = (keyL) => (keyL == null ? 1 : Math.min(1.3, Math.max(0.6, 2 ** (-LIFT_K * (keyL - KEY_REF)))));
-export const highlightAdapt = (keyL) => ({ top: HL_TOP * (1 - brighter(keyL)), k: 1 + HL_MORE * brighter(keyL) });
+/** How much Highlights eases off on the brightest tones (shaders.js uHlTop). */
+export const highlightTop = (keyL) => (keyL == null ? HL_TOP : HL_TOP * Math.min(1, Math.max(0, 1 - (keyL - KEY_REF) / KEY_SPAN)));
 
 export const LOOKS = {
   adobe: { exposure: 1.05, contrast: 0.4, saturation: 0.9 },
@@ -666,11 +666,11 @@ export class Renderer {
     const hi = sharper || this.hi;
     const look = lookFor(info, s);
     const key = this.keySrc === this.src ? this.keyL : null;
-    const lift = liftScale(key), hl = highlightAdapt(key);
+    const lift = liftScale(key);
     const { cx, cy, half } = centred(geo);
     const [tS, tM, tH, tG] = gradeTints(s);
     const gradeLum = [s.gShadowLum, s.gMidLum, s.gHighLum, s.gGlobalLum].map((v) => (v || 0) / 100);
-    const gradeOn = [...tS, ...tM, ...tH, ...tG, ...gradeLum].some((v) => v !== 0);
+    const gradeOn = [tS, tM, tH, tG].some((t) => t[2] !== 0) || gradeLum.some((v) => v !== 0);
     const defringe = s.removeCA ? 0.5 : 0;
     // The vignette follows the crop even when the frame shown is another (the whole photo, in crop mode).
     const crop = geo.frame(s.crop);
@@ -718,8 +718,8 @@ export class Renderer {
       uContrast: look.contrast,
       uContrastSat: s.contrast / 100,
       ...tonemapUniforms(s),
-      uHighlights: (s.highlights * hl.k) / 100,
-      uHlTop: hl.top,
+      uHighlights: s.highlights / 100,
+      uHlTop: highlightTop(key),
       uShadows: (s.shadows > 0 ? s.shadows * lift : s.shadows) / 100,
       uWhites: s.whites / 100,
       uBlacks: (s.blacks > 0 ? s.blacks * lift : s.blacks) / 100,
