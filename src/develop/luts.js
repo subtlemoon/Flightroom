@@ -99,15 +99,26 @@ export function hueTable(s) {
   return out;
 }
 
-const hueVec = (deg) => {
-  const a = (deg * Math.PI) / 180;
-  return [Math.cos(a), Math.cos(a - (2 * Math.PI) / 3), Math.cos(a + (2 * Math.PI) / 3)];
+// Colour grading as Lightroom does it, fitted on Lightroom exports of JWL_7345
+// with and without its grade (tools/lr-tone.md). The grade works in OKLab: each
+// region adds its colour (the wheel hue's OKLab direction, turned 45 degrees),
+// pulls existing colour in a little and darkens, less so for colours that
+// already lean the tint's way.
+const GRADE_TURN = (-45.5 * Math.PI) / 180;
+const srgbLin = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+const okHue = (deg) => {
+  const h = ((((deg % 360) + 360) % 360) / 60), x = 1 - Math.abs((h % 2) - 1);
+  const [r, g, b] = [[1, x, 0], [x, 1, 0], [0, 1, x], [0, x, 1], [x, 0, 1], [1, 0, x]][Math.min(5, Math.floor(h))].map(srgbLin);
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const q = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return Math.atan2(0.0259040371 * l + 0.7827717662 * m - 0.808675766 * q, 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * q) + GRADE_TURN;
 };
-/** Colour grading tints (RGB offsets around grey) for shadows, midtones, highlights and global. */
+/** Colour grading per region (shadows, midtones, highlights, global): the tint's OKLab direction and the amount. */
 export function gradeTints(s) {
-  return [['gShadow'], ['gMid'], ['gHigh'], ['gGlobal']].map(([k]) => {
-    const v = hueVec(s[`${k}Hue`] || 0), amt = (s[`${k}Sat`] || 0) / 100;
-    return [v[0] * amt, v[1] * amt, v[2] * amt];
+  return ['gShadow', 'gMid', 'gHigh', 'gGlobal'].map((k) => {
+    const a = okHue(s[`${k}Hue`] || 0), amt = Math.min(1, (s[`${k}Sat`] || 0) / 100);
+    return [+Math.cos(a).toFixed(5), +Math.sin(a).toFixed(5), amt];
   });
 }
 

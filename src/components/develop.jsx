@@ -82,6 +82,8 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const [dialog, setDialog] = useState(null); // 'copy' | 'preset'
   const [presets, setPresets] = useStored('flightroom-presets', { list: [], open: true });
   const [hoverPreset, setHoverPreset] = useState(null);
+  // Color grading wheels hidden with their eye (Lightroom's), for the view only.
+  const [gradeHidden, setGradeHidden] = useState(() => new Set());
   const [picked, setPicked] = useState(() => new Set()); // filmstrip photos selected with the current one
   const [picking, setPicking] = useState(false); // 'wb' (white balance selector) | 'point' (a mask's Point Color)
   const [sel, setSelState] = useState(null); // selected mask and part: { mask, part }
@@ -434,8 +436,12 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
     );
   }
 
-  const shown = s && before && opened?.asShot ? { ...defaults(opened.asShot), crop: s.crop }
+  let shown = s && before && opened?.asShot ? { ...defaults(opened.asShot), crop: s.crop }
     : s && hoverPreset && opened?.asShot ? applyTo(s, hoverPreset.part, opened.asShot) : s;
+  if (shown && !before && gradeHidden.size) {
+    shown = { ...shown };
+    for (const k of gradeHidden) { shown[`${k}Sat`] = 0; shown[`${k}Lum`] = 0; }
+  }
   // On the main photo: the mask overlay (when on) and Point Color's Visualize Range.
   const pointView = !!(maskOptions.visualize && selMask?.point);
   const mainMaskView = selMask && (overlay.show || pointView) ? { ...maskView(selMask, overlay), noOverlay: !overlay.show, point: pointView } : null;
@@ -511,7 +517,8 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
               cropMode={crop} cropOverlay={cropOverlay} setCropOverlay={setCropOverlay} onCropClose={() => setCrop(false)}
               override={selMask && <MaskAdjust m={selMask} part={selPart} acts={acts} brush={brush} setBrush={setBrush} options={maskOptions} setOptions={setMaskOptions}
                 ai={aiMasks} sampling={picking === 'point'} onSample={() => setPicking((p) => (p === 'point' ? false : 'point'))} onDone={() => setSel(null)} />}
-              photo={photo} ensureAi={ensureAi} onDenoised={onDenoised}
+              photo={photo} ensureAi={ensureAi} onDenoised={onDenoised} gradeHidden={gradeHidden}
+              onGradeHide={(k, on) => setGradeHidden((h) => { const n = new Set(h); if (on) n.add(k); else n.delete(k); return n; })}
               edited={isEdited(s, opened.asShot)} picking={picking === 'wb'} onPick={() => setPicking((p) => (p === 'wb' ? false : 'wb'))} onAutoWb={autoWb} onAutoTone={autoTone} />
           ) : (
             <div className="dev-panel-empty muted small">{opened?.loading ? 'Reading RAW data…' : ''}</div>
@@ -1482,7 +1489,7 @@ function profileNote(info, profile) {
   return 'A close match to the camera\'s own look';
 }
 
-function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onReset, onCopy, onPaste, edited, picking, onPick, onAutoWb, onAutoTone, cropMode, cropOverlay, setCropOverlay, onCropClose, override, photo, ensureAi, onDenoised }) {
+function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onReset, onCopy, onPaste, edited, picking, onPick, onAutoWb, onAutoTone, cropMode, cropOverlay, setCropOverlay, onCropClose, override, photo, ensureAi, onDenoised, gradeHidden, onGradeHide }) {
   const [open, setOpen] = useState(() => {
     try { return JSON.parse(localStorage.getItem(PANELS_KEY)) || { basic: true }; } catch { return { basic: true }; }
   });
@@ -1539,7 +1546,7 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
     ),
     curve: () => <ToneCurve s={s} set={set} update={update} />,
     color: () => <ColorMixer s={s} set={set} />,
-    grading: () => <><ColorGrading s={s} set={set} /><Groups sec={SECTION.grading} s={s} asShot={asShot} set={set} /></>,
+    grading: () => <><ColorGrading s={s} set={set} hidden={gradeHidden} onHide={onGradeHide} /><Groups sec={SECTION.grading} s={s} asShot={asShot} set={set} /></>,
     detail: () => <><AiDenoise photo={photo} info={info} s={s} set={set} ensure={ensureAi} onDenoised={onDenoised} /><Groups sec={SECTION.detail} s={s} asShot={asShot} set={set} /></>,
     lens: () => (
       <>
@@ -1789,21 +1796,24 @@ function ColorMixer({ s, set }) {
 const WHEELS = [['gMid', 'Midtones'], ['gShadow', 'Shadows'], ['gHigh', 'Highlights'], ['gGlobal', 'Global']];
 const GRADE_VIEWS = [['3way', 'threeWay', '3-Way'], null, ['gShadow', 'shadows', 'Shadows'], ['gMid', 'midtones', 'Midtones'], ['gHigh', 'highlights', 'Highlights'], null, ['gGlobal', 'global', 'Global']];
 
-function ColorGrading({ s, set }) {
+function ColorGrading({ s, set, hidden, onHide }) {
   const [view, setView] = useState('3way');
   const wheels = view === '3way' ? WHEELS.slice(0, 3) : WHEELS.filter(([k]) => k === view);
   return (
     <>
       <IconTabs tabs={GRADE_VIEWS} value={view} onChange={setView} />
       <div className={`dev-wheels${view === '3way' ? '' : ' one'}`}>
-        {wheels.map(([k, title]) => <Wheel key={k} k={k} title={title} s={s} set={set} big={view !== '3way'} />)}
+        {wheels.map(([k, title]) => <Wheel key={k} k={k} title={title} s={s} set={set} big={view !== '3way'} hidden={hidden?.has(k)} onHide={onHide} />)}
       </div>
     </>
   );
 }
 
-// Hue is the angle, saturation the distance from the centre. Shift-drag changes only saturation.
-function Wheel({ k, title, s, set, big }) {
+// Lightroom's wheel: hue counter-clockwise from red at the right (green upper
+// left, blue below), saturation the distance from the grey centre. The ring is
+// the puck; the dot outside shows the hue at full strength and drags the hue
+// alone. Shift-drag on the wheel changes only saturation.
+function Wheel({ k, title, s, set, big, hidden, onHide }) {
   const ref = useRef();
   const hue = s[`${k}Hue`] || 0, sat = s[`${k}Sat`] || 0;
   const drag = useRef(null);
@@ -1818,31 +1828,39 @@ function Wheel({ k, title, s, set, big }) {
   const apply = (e) => {
     const [h, sa] = at(e);
     const d = drag.current;
-    d.want = [e.shiftKey ? null : h, sa];
+    d.want = d.hueOnly ? [h, null] : [e.shiftKey ? null : h, sa];
     if (!d.raf) d.raf = requestAnimationFrame(() => { d.raf = 0; commit(d); });
   };
   const commit = (d) => {
     const [h, sa] = d.want;
     if (h !== null) set(`${k}Hue`, h);
-    set(`${k}Sat`, sa);
+    if (sa !== null) set(`${k}Sat`, sa);
   };
   const end = () => {
     const d = drag.current;
     drag.current = null;
     if (d?.raf) { cancelAnimationFrame(d.raf); commit(d); }
   };
-  const a = (hue * Math.PI) / 180, r = sat / 100;
+  const start = (hueOnly) => (e) => { e.stopPropagation(); e.currentTarget.setPointerCapture(e.pointerId); drag.current = { hueOnly }; apply(e); };
+  const events = { onPointerMove: (e) => drag.current && apply(e), onPointerUp: end, onLostPointerCapture: end };
+  const a = (hue * Math.PI) / 180, r = sat / 100, cos = +Math.cos(a).toFixed(4), sin = +Math.sin(a).toFixed(4);
   return (
-    <div className={`dev-wheel${k === 'gMid' ? ' wheel-mid' : ''}`}>
+    <div className={`dev-wheel${k === 'gMid' ? ' wheel-mid' : ''}${hidden ? ' hidden' : ''}`}>
       <div className="dev-wheel-title">{title}</div>
       <div className="dev-wheel-disc" ref={ref} title={`Hue ${hue}, saturation ${sat}. Drag to tint (Shift: saturation only), double-click to reset`}
-        onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); drag.current = {}; apply(e); }}
-        onPointerMove={(e) => drag.current && apply(e)} onPointerUp={end} onLostPointerCapture={end}
-        onDoubleClick={() => { set(`${k}Hue`, 0); set(`${k}Sat`, 0); }}>
-        <span className="dev-wheel-knob" style={{ left: `${50 + Math.cos(a) * r * 50}%`, top: `${50 - Math.sin(a) * r * 50}%` }} />
+        onPointerDown={start(false)} {...events} onDoubleClick={() => { set(`${k}Hue`, 0); set(`${k}Sat`, 0); }}>
+        <span className="dev-wheel-centre" />
+        <span className="dev-wheel-knob" style={{ left: `${50 + cos * r * 50}%`, top: `${50 - sin * r * 50}%` }} />
+        <span className={`dev-wheel-hue${sat ? '' : ' off'}`} title={`Hue ${hue}: drag to change the hue only`} onPointerDown={start(true)} {...events}
+          style={{ left: `calc(50% + ${cos} * (50% + 11px))`, top: `calc(50% - ${sin} * (50% + 11px))`, background: sat ? `hsl(${hue} 100% 25%)` : undefined }} />
       </div>
       {big && <><Slider sl={SLIDER[`${k}Hue`]} value={hue} def={0} onSet={set} /><Slider sl={SLIDER[`${k}Sat`]} value={sat} def={0} onSet={set} /></>}
-      <Slider sl={{ ...SLIDER[`${k}Lum`], gradient: 'lum' }} value={s[`${k}Lum`]} def={0} onSet={set} />
+      <button className={`dev-wheel-eye${hidden ? ' on' : ''}`} title={`Hold to hide this ${title.toLowerCase()} grade`}
+        onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); onHide?.(k, true); }}
+        onPointerUp={() => onHide?.(k, false)} onLostPointerCapture={() => onHide?.(k, false)}>
+        <Icon name={hidden ? 'eyeOff' : 'eye'} size={13} />
+      </button>
+      <Slider sl={SLIDER[`${k}Lum`]} value={s[`${k}Lum`]} def={0} onSet={set} />
     </div>
   );
 }

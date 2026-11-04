@@ -1052,6 +1052,8 @@ mod tests {
             "width": raw.w, "height": raw.h, "orientation": 1, "asShot": raw.wb,
             "matrices": raw.matrices, "camera": format!("{} {}", raw.make, raw.model),
             "settings": doc.all("crs"), "curves": curves, "own": doc.all("fr"), "denoised": false,
+            // Lightroom's profiles when installed (or in FLIGHTROOM_CAMERA_RAW), as develop_open sends them.
+            "adobe": crate::adobe::for_camera(&crate::adobe::camera_names(&raw.make, &raw.model, &raw.exif_model), Some(text.as_str()), &std::env::temp_dir()),
         });
         std::fs::write(p.with_extension("json"), info.to_string()).unwrap();
     }

@@ -169,3 +169,33 @@ Highlights and Shadows shift the edge-aware base in stops:
 2. Render them in the Playwright rig (mocked Tauri) with single-slider overrides
    and the curves removed.
 3. Bin the pixels by the neutral render's L*, then take the median change per band.
+
+## A second photo: adaptive Shadows and Blacks, Whites, colour grading (2.10.5)
+Lightroom export of JWL_7345 (same shoot, ISO 3600, 0.86 stop brighter than
+JWL_7451 at defaults) with Contrast -95, Highlights -94, Shadows +91, Whites -95,
+Blacks +91, the point curve (121->51, 175->183), Red saturation -24 and colour
+grading (shadows 217/45, midtones 11/20, blending 50). Compared after a dense
+optical-flow alignment (Lightroom's export is lens-corrected). A second export
+of a virtual copy with the grading at 0 (test-4.jpg) separates the tone from
+the grade: fit the tone against the ungraded export, then the grade as the
+change between the two exports.
+
+- Darks came out 6-9 L* light. Lightroom's PV2012 sliders adapt to the photo:
+  `liftScale` (renderer.js) scales positive Shadows and Blacks by
+  2^(-0.4 * (key - -3.97)), key = median scene brightness (log2, from the
+  guide), clamped 0.6-1.3; `highlightTop` tapers the Highlights top end the same
+  way. Whites below 0 pull the top in with a soft knee (shaders.js) so the sky
+  keeps its cloud texture.
+- Colour grading is fitted in OKLab (shaders.js, luts.js `gradeTints`):
+  logistic regions on OKLab L (centre 0.639, offset 0.165, width 0.0943 at
+  blending 50), each adds K=0.0787 * amount * L^0.361 along the wheel hue's
+  OKLab direction turned -45.5 degrees, scales existing chroma by
+  1 - 0.18 * amount, and darkens L by 0.248 * amount, less for colours already
+  leaning the tint's way (1 - 7 * ab.dir). An RGB multiply fitted the bands but
+  turned red suits maroon; Lightroom keeps them within ~2 L*.
+
+Result: median dE 8.6 -> 5.3. The grade's shift matches Lightroom's within
+~1 L* and ~1.5 a*/b* per band; the sky is L 72.5 a +1.6 b -5.3 against
+Lightroom's 70.6 / +1.5 / -7.7 (2.10.4: 75.5 / +1.0 / -2.0). Left: the
+ungraded base is ~1.7 L* brighter and ~2 b* less blue in the sky, saturated
+reds ~4 L* darker, and the orange kart renders red.
