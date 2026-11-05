@@ -24,13 +24,16 @@ const LINEAR = [[0, 0], [255, 255]];
 const FLAT_CURVE = { curve: LINEAR, curveR: LINEAR, curveG: LINEAR, curveB: LINEAR, pShadows: 0, pDarks: 0, pLights: 0, pHighlights: 0 };
 
 // Lightroom's tone sliders are image-adaptive. Fitted on Lightroom exports of
-// two photos from one shoot: JWL_7451 (middle brightness 2^-3.97 of white,
-// where the sliders were fitted) and JWL_7345, 0.86 stop brighter, where
-// positive Shadows and Blacks lift 0.79 as much and Highlights doesn't ease off
-// on the brightest tones, so a bright sky comes down with the rest
-// (tools/lr-tone.md).
-const KEY_REF = -3.97, KEY_SPAN = 0.86, LIFT_K = 0.4, HL_TOP = 0.55;
-export const liftScale = (keyL) => (keyL == null ? 1 : Math.min(1.3, Math.max(0.6, 2 ** (-LIFT_K * (keyL - KEY_REF)))));
+// three photos (tools/lr-tone.md): JWL_7451 (middle brightness 2^-3.97 of
+// white, where the sliders were fitted), JWL_7345 (0.86 stop brighter, where
+// Highlights doesn't ease off on the brightest tones, so a bright sky comes
+// down with the rest) and the night shot JWL_7530. Positive Shadows and Blacks
+// follow the photo's range above its middle (stops from the median to the
+// brightest 0.1%): full on JWL_7451 (2.0 stops), 0.79 on JWL_7345 (3.0) and
+// next to nothing on JWL_7530 (4.0, with bright lights), where Lightroom's
+// +90 / +90 leaves the night dark.
+const KEY_REF = -3.97, KEY_SPAN = 0.86, HL_TOP = 0.55, SPAN_MID = 3.24, SPAN_W = 0.205;
+export const liftScale = (span) => (span == null ? 1 : 1 / (1 + Math.exp((span - SPAN_MID) / SPAN_W)));
 /** How much Highlights eases off on the brightest tones (shaders.js uHlTop). */
 export const highlightTop = (keyL) => (keyL == null ? HL_TOP : HL_TOP * Math.min(1, Math.max(0, 1 - (keyL - KEY_REF) / KEY_SPAN)));
 
@@ -636,7 +639,12 @@ export class Renderer {
     if (this.masks.length) this.updateMaskCurves();
     if ((s.dehaze || this.masks.some((m) => m.adj?.dehaze)) && this.airY == null) this.measureAir();
     // The photo's middle brightness, for the adaptive sliders: read once per photo, when they're used.
-    if ((s.shadows > 0 || s.blacks > 0 || s.highlights < 0) && this.keySrc !== this.src) { const lum = this.guideLum(); this.keyL = lum[lum.length >> 1]; this.keySrc = this.src; }
+    if ((s.shadows > 0 || s.blacks > 0 || s.highlights < 0) && this.keySrc !== this.src) {
+      const lum = this.guideLum();
+      this.keyL = lum[lum.length >> 1];
+      this.spanL = lum[Math.min(lum.length - 1, Math.floor(lum.length * 0.999))] - this.keyL;
+      this.keySrc = this.src;
+    }
     const out2ori = mm(geo.frameToOriented(frame), out2frame);
     // Retouch layers on top (compose.js); `live` is a stroke still being painted.
     const layers = renderLayers(s.layers || [], live?.layerId);
@@ -712,7 +720,7 @@ export class Renderer {
     const hi = sharper || this.hi;
     const look = lookFor(info, s);
     const key = this.keySrc === this.src ? this.keyL : null;
-    const lift = liftScale(key);
+    const lift = liftScale(key == null ? null : this.spanL);
     const { cx, cy, half } = centred(geo);
     const [tS, tM, tH, tG] = gradeTints(s);
     const gradeLum = [s.gShadowLum, s.gMidLum, s.gHighLum, s.gGlobalLum].map((v) => (v || 0) / 100);
