@@ -395,12 +395,13 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
       if (k === 'r') { if (s) setCrop((c) => !c); return; }
       // X while cropping: the ratio between landscape and portrait, as in Lightroom.
       if (k === 'x' && crop && s && geo && ratingForKey(keys, e.key) === undefined) { cropTools(geo, s.crop, (c) => update({ crop: c })).flip(); return; }
-      // Masks: K brush, M linear, Shift+M radial, O overlay, [ ] brush size.
+      // Masks: K brush, M linear, Shift+M radial, O overlay, H outlines and pins, [ ] brush size.
       const free = ratingForKey(keys, e.key) === undefined;
       if (s && free && !before) {
         if (k === 'k') { acts.create('brush'); return; }
         if (k === 'm') { acts.create(e.shiftKey ? 'radial' : 'linear'); return; }
         if (k === 'o') { setOverlay({ show: !overlay.show }); return; }
+        if (k === 'h' && selMask) { setOverlay({ pinsHidden: !overlay.pinsHidden }); return; }
         if ((e.key === '[' || e.key === ']') && selPart?.type === 'brush') {
           setBrush({ size: Math.min(100, Math.max(1, brush.size + (e.key === ']' ? 5 : -5))) });
           return;
@@ -500,7 +501,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
             <DevelopStage key={photo.id} photo={photo} meta={curMeta} info={info} s={shown} editS={s} cropMode={crop} cropOverlay={cropOverlay} clip={clip}
               onCrop={(c) => update({ crop: c })} apiRef={stageApi} nextPhoto={photos[index + way.current] || photos[index - way.current]} before={before} picker={picker}
               maskView={editing && !retouch ? mainMaskView : null} previewView={layout.nav && !retouch ? maskView(selMask, overlay) || 'none' : null}
-              maskTool={editing && selPart && !picker && !retouch ? { part: selPart, brush, onPart: (patch) => acts.changePart(selMask.id, selPart.id, patch) } : null}
+              maskTool={editing && selPart && !picker && !retouch ? { part: selPart, brush, hidden: overlay.pinsHidden, onPart: (patch) => acts.changePart(selMask.id, selPart.id, patch) } : null}
               retouch={retouch && s ? { rx, toast: setToast } : null} />
           ) : (
             <div className="hero-empty dev-msg"><h2>{list?.loading ? 'Reading folder…' : filter !== 'all' && allPhotos.length ? 'No photos with those stars' : 'No photos in this folder'}</h2></div>
@@ -1316,7 +1317,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
           live={setLive} commit={commitOp} pickColor={pickColor} zoomAt={zoomAt} toast={retouch.toast} onSpaceTap={() => apiRef.current.toggleZoom?.()} />
       )}
       {maskTool && !cropMode && ready && css2ori && maskTool.part.type !== 'luminance' && maskTool.part.type !== 'ai' && (
-        <MaskOverlay geo={geo} part={maskTool.part} brush={maskTool.brush} onPart={maskTool.onPart}
+        <MaskOverlay geo={geo} part={maskTool.part} brush={maskTool.brush} onPart={maskTool.onPart} hidden={maskTool.hidden}
           toOri={(x, y) => ap(css2ori, x, y)} toCss={(x, y) => ap(ori2css, x, y)} />
       )}
       {cropMode && ready && frame && geo && s && (
