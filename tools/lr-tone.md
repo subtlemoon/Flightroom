@@ -250,3 +250,38 @@ reds ~4 L* darker, and the orange kart renders red.
 - Left on 7345 (Lab error per hue band, after grading): reds b +5 (yellow),
   oranges a +3.5..+7.6 (red; ungraded only +2.7, so the grade adds it),
   greens b +5, purples chroma -6.
+
+## 2.12.0: test charts (2026-11-05)
+
+Method: `tools/charts/make_charts.py` writes linear DNGs that Lightroom reads as
+a Z7 II raw (Adobe Standard, D65), one slider per file, plus rig frames. Jaewon
+imported and exported them untouched; patches are compared in Lab. Charts match
+Lightroom's reset best with base exposure -0.03, contrast 0, sat 1 (real NEFs
+keep BASE in renderer.js). `--grad` makes 600x400 log-grey gradients (-10..+1
+stops) for the tone sliders.
+
+- Tone sliders measured on the gradients (gain in stops vs log brightness)
+  reproduce each slider on the gradient to ~1 L*, but on real photos with all
+  four at +-90 they flatten everything (JWL_7345 median dE 4.8 -> 27). Lightroom
+  scales them to the image (patch charts show strong locality too), so the
+  2.11.3 tone code stays. Table builder: scratchpad buildlut.py (not kept).
+- Color Mixer: Lightroom works like Adobe's hue/sat map: hue, saturation and
+  value of linear ProPhoto RGB. Fitted band centres (ProPhoto HSV hue)
+  356, 33, 52, 86, 162, 229, 278, 336; hue 38 deg per 100; saturation +0.21 /
+  -0.69 per 100 (clipped at 1); value +0.93 / -0.83 per 100, and luminance also
+  scales saturation by -0.13. Faded in over ProPhoto saturation 0..0.06 so
+  greys never move. Chart effect error 8.2 -> 4.3 dE.
+- Saturation / Vibrance: OKLab chroma scaling. Saturation +100 = +80%, -100 =
+  -92%. Vibrance + = 1.29 (1 - S/0.96)^0.77 (S = ProPhoto HSV saturation),
+  Vibrance - = 0.77 flat. 10.5 -> 6.1 dE (rest is per-hue scatter).
+- Colour grading: on the charts it fits (9.0 -> 4.0 dE) as a soft-light style
+  tint added in display RGB, (4d(1-d))^0.48 per channel, OKLab-L regions
+  (c 0.634, off 0.128, w 0.145), hue -12.5 deg, tint offset
+  2.475 mean - 1.475 luma, strengths S .316 M .667 H .551 G .306; Blending 100
+  needs width x3 and strength x2. Greys barely change brightness. But on
+  JWL_7345 Lightroom's grade darkens 3.5-5 L* and is ~2x stronger in the
+  shadows than on the charts (heavy tone edits + steep point curve), and with
+  the chart model both real photos got worse (7345 4.8 -> 5.4, 7530 4.7 -> 6.7),
+  so 2.12.0 keeps the 2.10.5 grade. Next: find where in Lightroom's order the
+  grade sits relative to the point curve (a chart with a steep curve plus a
+  grade would settle it).

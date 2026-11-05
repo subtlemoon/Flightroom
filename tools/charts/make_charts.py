@@ -150,6 +150,51 @@ def dng(path, cam16, xmp_bytes, cm1, cm2, fm1, fm2, neutral):
         f.write(b'II*\0' + struct.pack('<I', 8) + ifd + extra + b'\0' * (strip - extra_off - len(extra)) + data)
 
 
+def grad_scene(cam_of):
+    """Smooth full-frame field, so Lightroom's local tone sliders see each level as its own surroundings:
+    x = brightness (log2 -10..+1 of white, ProPhoto Y), top half grey, bottom half hue (y) at fixed colourfulness."""
+    xs = 2.0 ** np.linspace(-10, 1, W)
+    xyz2pp = np.linalg.inv(PP2XYZ)
+    img = np.zeros((H, W, 3))
+    img[:H // 2] = (xs[:, None] * np.ones(3))[None]
+    for y in range(H // 2, H):
+        h = (y - H // 2) / (H - H // 2) * 2 * np.pi
+        pp = xyz2pp @ (BRAD65_50 @ oklab_to_xyz65(0.7, 0.08 * np.cos(h), 0.08 * np.sin(h)))
+        pp = np.maximum(pp, 0) / (PP2XYZ[1] @ np.maximum(pp, 0))
+        img[y] = xs[:, None] * pp[None]
+    return img, xs
+
+
+def main_grad(ref_json, out):
+    global W, H
+    W, H = 600, 400  # small enough to send; smooth, so size doesn't matter
+    os.makedirs(out, exist_ok=True); os.makedirs(os.path.join(out, 'rig'), exist_ok=True)
+    ref = json.load(open(ref_json))
+    ill = ref['adobe']['profiles']['Adobe Standard']['illuminants']
+    cm1, cm2 = np.array(ill[0]['color']).reshape(3, 3), np.array(ill[1]['color']).reshape(3, 3)
+    fm1, fm2 = np.array(ill[0]['forward']).reshape(3, 3), np.array(ill[1]['forward']).reshape(3, 3)
+    neutral = cm2 @ D65; neutral /= neutral.max()
+    to_cam = np.diag(neutral) @ np.linalg.inv(fm2) @ PP2XYZ
+    pp_img, xs = grad_scene(None)
+    img = np.clip(np.einsum('ij,hwj->hwi', to_cam, pp_img) * 0.5, 0, 1)
+    q = np.round(img * 65535).astype(np.uint16)
+    frim = struct.pack('<4sIII', b'FRIM', W, H, 3) + (q.astype(np.float32) / 65535).astype('<f2').tobytes()
+    open(os.path.join(out, 'rig', 'grad.frim'), 'wb').write(frim)
+    v = [('reset', {}), ('Exposure2012-1.00', {'Exposure2012': '-1.00'}), ('Exposure2012+1.00', {'Exposure2012': '+1.00'})]
+    for k in ('Contrast2012', 'Highlights2012', 'Shadows2012', 'Whites2012', 'Blacks2012'):
+        v += [(f'{k}{x}', {k: x}) for x in ('-100', '-50', '+50', '+100')]
+    for i, (name, ch) in enumerate(v):
+        st = {**BASE, **ch}
+        fname = f'g{i:02d}_grad_{name}'
+        dng(os.path.join(out, fname + '.dng'), q, xmp(st, LINEAR), cm1.flat, cm2.flat, fm1.flat, fm2.flat, neutral)
+        os.symlink('grad.frim', os.path.join(out, 'rig', fname + '.frim'))
+        rj = {**ref, 'width': W, 'height': H, 'orientation': 1, 'lens': None, 'asShot': list(1 / neutral), 'own': {},
+              'settings': st, 'curves': {f'ToneCurvePV2012{c}': ['0, 0', '255, 255'] for c in ('', 'Red', 'Green', 'Blue')}}
+        json.dump(rj, open(os.path.join(out, 'rig', fname + '.json'), 'w'))
+    json.dump({'xs': list(xs)}, open(os.path.join(out, 'rig', 'grad.json'), 'w'))
+    print(len(v), 'gradient charts')
+
+
 def main(ref_json, out):
     os.makedirs(out, exist_ok=True); os.makedirs(os.path.join(out, 'rig'), exist_ok=True)
     ref = json.load(open(ref_json))
@@ -190,4 +235,4 @@ def main(ref_json, out):
 
 
 if __name__ == '__main__':
-    main(sys.argv[1], sys.argv[2])
+    (main_grad if '--grad' in sys.argv else main)(*[a for a in sys.argv[1:] if not a.startswith('--')])
