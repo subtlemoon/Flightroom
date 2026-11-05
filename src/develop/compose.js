@@ -9,7 +9,7 @@
 // follow every Develop change. Heals then even out the colour difference at
 // their edge with a smooth fill (push-pull pyramid), like a healing brush.
 import { VERT } from './shaders.js';
-import { BLEND_INDEX, REGION, SNAPSHOT, SOURCED, STROKED, isIdent, kindOf, opBounds, selectionCanvas, strokeDabs, stretchLine, stretchMap, tfPx, tfScale } from './retouch.js';
+import { BLEND_INDEX, REGION, SNAPSHOT, SOURCED, STROKED, isIdent, kindOf, layerBounds, opBounds, selectionCanvas, strokeDabs, stretchLine, stretchMap, tfPx, tfScale } from './retouch.js';
 import { ADJ_GLSL, adjustmentLut, adjustmentUniforms } from './adjust.js';
 import { BLUR_FRAG, FX_FRAG, filterPlan } from './filters.js';
 import { rasterize } from './raster.js';
@@ -220,13 +220,32 @@ void main() {
   float a = clamp(texture(uTex, (gl_FragCoord.xy - uOff) / uOutSize * uScale).a * uGain, 0.0, 1.0);
   o = vec4(uColor * a, a);
 }`;
+// Inner shadows and glows: the layer's edge (where a blurred, shifted copy of
+// its shape thins out), coloured, inside the shape only.
+const INNER = `${HEAD}
+uniform sampler2D uTex, uBlur;
+uniform vec2 uOff, uOutSize, uScale;
+uniform vec3 uColor;
+uniform float uGain, uOpacity;
+void main() {
+  float a0 = texelFetch(uTex, ivec2(gl_FragCoord.xy), 0).a;
+  float b = texture(uBlur, (gl_FragCoord.xy - uOff) / uOutSize * uScale).a;
+  float a = clamp((1.0 - b) * uGain, 0.0, 1.0) * a0 * uOpacity;
+  o = vec4(uColor * a, a);
+}`;
 const STYLE = `${HEAD}
-uniform sampler2D uTex, uDil;
-uniform vec2 uOutSize, uScale;
-uniform float uFill, uUseStroke, uUseOverlay, uOverlayA, uStrokeA;
-uniform vec3 uStrokeC, uOverlayC;
+uniform sampler2D uTex, uDil, uInner;
+uniform vec2 uOutSize, uScale, uG0, uG1;
+uniform float uFill, uUseStroke, uUseOverlay, uOverlayA, uStrokeA, uUseInner, uUseGrad, uGradA, uGradRadial;
+uniform vec3 uStrokeC, uOverlayC, uGC0, uGC1;
 void main() {
   vec4 c0 = texelFetch(uTex, ivec2(gl_FragCoord.xy), 0), c = c0;
+  if (uUseInner > 0.5) { vec4 i = texelFetch(uInner, ivec2(gl_FragCoord.xy), 0); c.rgb = i.rgb + c.rgb * (1.0 - i.a / max(c.a, 1e-5)); }
+  if (uUseGrad > 0.5) {
+    vec2 d = uG1 - uG0, p = gl_FragCoord.xy - uG0;
+    float g = clamp(uGradRadial > 0.5 ? length(p) / max(length(d), 1e-3) : dot(p, d) / max(dot(d, d), 1e-3), 0.0, 1.0);
+    c.rgb = mix(c.rgb, mix(uGC0, uGC1, g) * c.a, uGradA);
+  }
   if (uUseOverlay > 0.5) c.rgb = mix(c.rgb, uOverlayC * c.a, uOverlayA);
   c *= uFill;
   if (uUseStroke > 0.5) {
@@ -348,6 +367,7 @@ const GRAD = { linear: 0, radial: 1, angle: 2, reflected: 3, diamond: 4 };
 // Full-size buffers per output size, each made the first time it's needed.
 const BUFFERS = ['acc0', 'acc1', 'src', 'layer', 'tmp', 'snap', 'mask', 'clipA', 'fxA', 'fxB', 'cov'];
 const on = (x) => !!x && x.on !== false;
+const STYLE_KEYS = ['shadow', 'glow', 'innerShadow', 'innerGlow', 'gradient', 'overlay', 'stroke'];
 
 export class Composer {
   constructor(r) {
@@ -357,14 +377,14 @@ export class Composer {
       dab: program(gl, DAB_VERT, DAB_FRAG), op: program(gl, VERT, OP), covsel: program(gl, VERT, COVSEL), inside: program(gl, VERT, INSIDE),
       healL0: program(gl, VERT, HEAL_L0), pull: program(gl, VERT, PULL), push: program(gl, VERT, PUSH), comp: program(gl, VERT, COMP),
       adj: program(gl, VERT, ADJ), blur: program(gl, VERT, BLUR_FRAG), fx: program(gl, VERT, FX_FRAG), shade: program(gl, VERT, SHADE),
-      style: program(gl, VERT, STYLE), clipa: program(gl, VERT, CLIPA), stretch: program(gl, VERT, STRETCH),
+      style: program(gl, VERT, STYLE), inner: program(gl, VERT, INNER), clipa: program(gl, VERT, CLIPA), stretch: program(gl, VERT, STRETCH),
     };
     this.vao = gl.createVertexArray();
     this.sets = new Map(); // "WxH" -> buffers for that output size
     this.bufs = new Map(); // op -> { buf, n } (its dabs on the graphics card)
     this.sels = new Map(); // selection -> texture
     this.luts = new Map(); // adjustment -> lookup texture
-    this.rasters = new Map(); // text / shape key -> { tex, rect }
+    this.rasters = new Map(); // text / shape / placed picture key -> { tex, rect }
     this.fillOps = new WeakMap(); // a gradient fill layer's settings -> its op
     this.bounds = new WeakMap(); // op -> its box (oriented px)
   }
@@ -454,27 +474,29 @@ export class Composer {
   lutTex(adj) {
     let t = this.luts.get(adj);
     if (t) return t;
-    const data = adjustmentLut(adj);
-    if (!data) return null;
+    const lut = adjustmentLut(adj);
+    if (!lut) return null;
     const gl = this.gl;
     t = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, t);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, lut.w, lut.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, lut.data);
     for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
     this.luts.set(adj, t);
     this.trim(this.luts, 16);
     return t;
   }
 
-  /** A text or shape layer drawn at about `scale` output px per oriented px (in steps, so zooming doesn't redraw it every frame). */
+  /** A text, shape or placed-picture layer drawn at about `scale` output px per oriented px (in steps, so zooming doesn't redraw it every frame). */
   rasterOf(l, geo, scale) {
     const step = 1.25 ** Math.ceil(Math.log(Math.max(scale, 1e-3)) / Math.log(1.25));
-    const key = `${l.kind}|${JSON.stringify(l.kind === 'text' ? l.text : l.shape)}|${step.toFixed(4)}`;
+    const what = l.kind === 'image' ? { ...l.image, src: l.image.src.length + l.image.src.slice(-48) } : l.kind === 'text' ? l.text : l.shape;
+    const key = `${l.kind}|${JSON.stringify(what)}|${step.toFixed(4)}`;
     let hit = this.rasters.get(key);
     if (hit) { this.rasters.delete(key); this.rasters.set(key, hit); return hit; }
-    const { canvas, rect } = rasterize(l, geo.ow, geo.oh, step, Math.min(4096, this.r.maxTex));
-    hit = { tex: this.texOf(canvas, true), rect };
+    const ras = rasterize(l, geo.ow, geo.oh, step, Math.min(4096, this.r.maxTex));
+    if (!ras) return null;
+    hit = { tex: this.texOf(ras.canvas, true), rect: ras.rect };
     this.rasters.set(key, hit);
     this.trim(this.rasters, 24, (h) => h.tex);
     return hit;
@@ -610,8 +632,9 @@ export class Composer {
       this.r.draw(this.progs.adj, T.layer, { uBack: T.acc[this.cur].tex, uAdj: type, uP: p, uLut: this.lutTex(layer.adj) || T.acc[this.cur].tex });
     } else if (kind === 'fill' && layer.fillDef?.type === 'gradient') {
       this.drawOp(this.fillOp(layer), T, lc, T.layer);
-    } else if ((kind === 'text' && layer.text) || (kind === 'shape' && layer.shape)) {
+    } else if ((kind === 'text' && layer.text) || (kind === 'shape' && layer.shape) || (kind === 'image' && layer.image)) {
       const ras = this.rasterOf(layer, lc.geo, lc.k);
+      if (!ras) { for (const op of layer.ops) this.drawOp(op, T, lc, T.layer); return; }
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
       const t = ras.tex;
@@ -664,30 +687,57 @@ export class Composer {
       });
       if (!final) this.cur = 1 - this.cur;
     };
-    const st = layer.style || {};
+    const st = layer.style && !layer.style.hidden ? layer.style : {};
     const fill = (layer.fill ?? 100) / 100, opacity = layer.opacity / 100;
     // The base of a clipping group: its shape, for the layers clipped to it.
     if (next?.clip && !layer.clip) {
       this.r.draw(this.progs.clipa, T.clipA, { uTex: T.layer.tex, uMask: masked ? T.mask.tex : T.layer.tex, uUseMask: masked ? 1 : 0, uDensity: density, uOpacity: opacity });
     }
-    if (!on(st.shadow) && !on(st.glow) && !on(st.stroke) && !on(st.overlay)) { comp(T.layer.tex, layer.blend, opacity * fill, last); return; }
+    if (!STYLE_KEYS.some((k) => on(st[k]))) { comp(T.layer.tex, layer.blend, opacity * fill, last); return; }
     // Shadows and glows go under the layer, each with its own blend mode.
     const lin = (dx, dy) => { const a = ap(ctx.ori2out, dx, dy), o = ap(ctx.ori2out, 0, 0); return [a[0] - o[0], a[1] - o[1]]; };
+    const shift = (sh) => { const ang = ((sh.angle ?? 120) * Math.PI) / 180; return lin(-Math.cos(ang) * sh.distance * L, Math.sin(ang) * sh.distance * L); };
     for (const [fx, sh] of [['shadow', st.shadow], ['glow', st.glow]]) {
       if (!on(sh)) continue;
       const b = this.blur(T, T.layer, Math.max(0.01, sh.size * L * ctx.k * 0.5), 0);
-      const ang = ((sh.angle ?? 120) * Math.PI) / 180;
-      const off = fx === 'shadow' ? lin(-Math.cos(ang) * sh.distance * L, Math.sin(ang) * sh.distance * L) : [0, 0];
       this.r.draw(this.progs.shade, T.fxA, {
-        uTex: b.tex, uOff: off, uOutSize: [ctx.W, ctx.H], ...this.blurScale(b, ctx), uColor: sh.color, uGain: (fx === 'shadow' ? 1 : 2) + (sh.spread || 0) / 20,
+        uTex: b.tex, uOff: fx === 'shadow' ? shift(sh) : [0, 0], uOutSize: [ctx.W, ctx.H], ...this.blurScale(b, ctx), uColor: sh.color, uGain: (fx === 'shadow' ? 1 : 2) + (sh.spread || 0) / 20,
       });
       comp(T.fxA.tex, sh.blend || (fx === 'shadow' ? 'multiply' : 'screen'), (opacity * sh.opacity) / 100, false);
     }
+    // The stroke's shape (ends in T.snap), then inner glow and inner shadow over
+    // it in T.tmp, which the style pass lays on the layer.
     const dil = on(st.stroke) ? this.dilate(T, T.layer, Math.max(0.5, st.stroke.size * L * ctx.k)) : null;
+    let inner = false;
+    for (const [fx, sh] of [['innerGlow', st.innerGlow], ['innerShadow', st.innerShadow]]) {
+      if (!on(sh)) continue;
+      const b = this.blur(T, T.layer, Math.max(0.01, sh.size * L * ctx.k * 0.5), 0);
+      if (inner) { gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); }
+      this.r.draw(this.progs.inner, T.tmp, {
+        uTex: T.layer.tex, uBlur: b.tex, uOff: fx === 'innerShadow' ? shift(sh) : [0, 0], uOutSize: [ctx.W, ctx.H], ...this.blurScale(b, ctx),
+        uColor: sh.color, uGain: 1 + (sh.choke || 0) / 20, uOpacity: sh.opacity / 100,
+      });
+      gl.disable(gl.BLEND);
+      inner = true;
+    }
+    // Gradient Overlay: across the layer's box (the whole photo for a photo layer), at its angle.
+    let g0 = [0, 0], g1 = [0, 0];
+    if (on(st.gradient)) {
+      const bx = layerBounds({ ...layer, tf: null }, ctx.geo.ow, ctx.geo.oh) || [0, 0, ctx.geo.ow, ctx.geo.oh];
+      const cx = (bx[0] + bx[2]) / 2, cy = (bx[1] + bx[3]) / 2, ang = ((st.gradient.angle ?? 90) * Math.PI) / 180;
+      const dx = Math.cos(ang), dy = -Math.sin(ang);
+      const ext = st.gradient.style === 'radial' ? Math.hypot(bx[2] - bx[0], bx[3] - bx[1]) / 2 : Math.abs(dx) * (bx[2] - bx[0]) / 2 + Math.abs(dy) * (bx[3] - bx[1]) / 2;
+      const radial = st.gradient.style === 'radial';
+      g0 = ap(lc.ori2out, radial ? cx : cx - dx * ext, radial ? cy : cy - dy * ext);
+      g1 = ap(lc.ori2out, cx + dx * ext, cy + dy * ext);
+    }
+    const gr = st.gradient || {};
     this.r.draw(this.progs.style, T.fxB, {
-      uTex: T.layer.tex, uDil: dil ? dil.tex : T.layer.tex, uOutSize: [ctx.W, ctx.H], uScale: [1, 1],
+      uTex: T.layer.tex, uDil: dil ? dil.tex : T.layer.tex, uInner: inner ? T.tmp.tex : T.layer.tex, uUseInner: inner ? 1 : 0, uOutSize: [ctx.W, ctx.H], uScale: [1, 1],
       uFill: fill, uUseStroke: dil ? 1 : 0, uStrokeC: st.stroke?.color || [0, 0, 0], uStrokeA: (st.stroke?.opacity ?? 100) / 100,
       uUseOverlay: on(st.overlay) ? 1 : 0, uOverlayC: st.overlay?.color || [1, 0, 0], uOverlayA: (st.overlay?.opacity ?? 100) / 100,
+      uUseGrad: on(st.gradient) ? 1 : 0, uG0: g0, uG1: g1, uGC0: gr.reverse ? gr.c1 || [1, 1, 1] : gr.c0 || [0, 0, 0], uGC1: gr.reverse ? gr.c0 || [0, 0, 0] : gr.c1 || [1, 1, 1],
+      uGradA: (gr.opacity ?? 100) / 100, uGradRadial: gr.style === 'radial' ? 1 : 0,
     });
     comp(T.fxB.tex, layer.blend, opacity, last);
   }

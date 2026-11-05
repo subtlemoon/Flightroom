@@ -42,11 +42,66 @@ export function textLayout(t, ow, oh) {
   return { lines, lh, px, box: [left, ay, left + W, ay + lh * lines.length] };
 }
 
-/** The canvas that holds a text or shape layer at `scale` output px per oriented px. */
+// Placed pictures (File > Place, drag and drop, paste): kept in the layer as a
+// data URL and decoded once. Until one is decoded its layer draws nothing, and
+// 'retouch:image' asks the stage to draw again when it is.
+const IMAGES = new Map(); // src -> HTMLImageElement (null while loading)
+export function placedImage(src) {
+  if (IMAGES.has(src)) return IMAGES.get(src);
+  IMAGES.set(src, null);
+  const img = new Image();
+  img.onload = () => { IMAGES.set(src, img); window.dispatchEvent(new Event('retouch:image')); };
+  img.onerror = () => IMAGES.delete(src);
+  img.src = src;
+  return null;
+}
+
+/**
+ * A picture file as a layer's image: { src (data URL), w, h }, at most `edge`
+ * px on its long side. JPEG unless it has see-through pixels (then PNG).
+ */
+export async function loadPlaced(blob, edge = 4096) {
+  const bmp = await createImageBitmap(blob);
+  const k = Math.min(1, edge / Math.max(bmp.width, bmp.height));
+  const w = Math.max(1, Math.round(bmp.width * k)), h = Math.max(1, Math.round(bmp.height * k));
+  const c = canvas(w, h);
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bmp, 0, 0, w, h);
+  bmp.close?.();
+  const px = ctx.getImageData(0, 0, w, h).data;
+  let alpha = false;
+  for (let i = 3; i < px.length; i += 4 * 7) if (px[i] < 250) { alpha = true; break; }
+  const out = c.convertToBlob ? await c.convertToBlob({ type: alpha ? 'image/png' : 'image/jpeg', quality: 0.92 })
+    : await new Promise((res) => c.toBlob(res, alpha ? 'image/png' : 'image/jpeg', 0.92));
+  const src = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(out); });
+  IMAGES.set(src, null);
+  const img = new Image();
+  img.src = src;
+  await img.decode();
+  IMAGES.set(src, img);
+  return { src, w, h };
+}
+
+/** Where a placed picture goes: centred, fitting inside 80% of the photo, as fractions. */
+export function placeRect(w, h, ow, oh) {
+  const k = Math.min((ow * 0.8) / w, (oh * 0.8) / h, 1e9);
+  const pw = (w * k) / ow, ph = (h * k) / oh;
+  return { x0: 0.5 - pw / 2, y0: 0.5 - ph / 2, x1: 0.5 + pw / 2, y1: 0.5 + ph / 2 };
+}
+
+/** The canvas that holds a text, shape or placed-picture layer at `scale` output px per oriented px (null: not decoded yet). */
 export function rasterize(l, ow, oh, scale, maxSide) {
   const L = Math.max(ow, oh);
   let box, draw;
-  if (l.kind === 'text') {
+  if (l.kind === 'image') {
+    const im = l.image, el = placedImage(im.src);
+    if (!el) return null;
+    box = [im.x0 * ow, im.y0 * oh, im.x1 * ow, im.y1 * oh];
+    // Never drawn bigger than the picture itself.
+    scale = Math.min(scale, im.w / Math.max(1, box[2] - box[0]));
+    draw = (ctx) => { ctx.imageSmoothingQuality = 'high'; ctx.drawImage(el, box[0], box[1], box[2] - box[0], box[3] - box[1]); };
+  } else if (l.kind === 'text') {
     const t = l.text;
     const lay = textLayout(t, ow, oh);
     const pad = lay.px * 0.35;

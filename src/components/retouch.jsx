@@ -10,9 +10,11 @@ import { useRef, useState } from 'react';
 import { newId } from '../develop/masks.js';
 import {
   BLEND_MODES, IDENT, PAINTABLE, bitmapSelection, colorSelect, flipRgba, inGroup, isIdent, kindOf, layerBounds, modifyValues, moveSelection,
-  newLayer, nextName, selectionBounds, selectionValues, stretchBounds, thinSelection, tfAbout, tfMul, tfPx, tfUnits, findSpotSource, selectionOutline,
+  newLayer, nextName, selectionBounds, selectionValues, stretchBounds, thinSelection, tfAbout, tfInv, tfMul, tfPx, tfUnits, findSpotSource, selectionOutline,
 } from '../develop/retouch.js';
 import { ADJ_LABEL, newAdjustment } from '../develop/adjust.js';
+import { loadPlaced, placeRect } from '../develop/raster.js';
+import { STYLE_TABS } from './rtmenus.jsx';
 import { FILTER_DEF, newFilter } from '../develop/filters.js';
 
 // [id, label, icon, key]; a group shares one place on the tool bar (Shift+key goes round it).
@@ -76,7 +78,7 @@ export const RETOUCH_DEFAULT = {
   type: { font: 'Arial', size: 0.05, bold: false, italic: false, align: 'left' },
   shape: { noFill: false, strokeOn: false, strokeColor: [0, 0, 0], strokeW: 0.002, radius: 0, sides: 5, star: false, weight: 0.003 },
   swatches: SWATCHES,
-  panels: { color: true, swatches: false, properties: true, adjustments: true, layers: true, history: false },
+  panels: { color: true, swatches: false, properties: true, adjustments: true, layers: true, history: false, histogram: false },
   collapsed: {},
   view: { rulers: false, grid: false, guides: true, extras: true },
 };
@@ -289,7 +291,9 @@ export function useRetouch(ctx) {
   const [xform, setXform] = useState(null); // free transform: { what: 'layer'|'selection', id, tf0, tf }
   const [guides, setGuides] = useState([]); // [{ v: true|false, at (fraction) }]
   const [clip, setClip] = useState(null); // a copied layer
+  const [styleClip, setStyleClip] = useState(null); // a copied layer style
   const lastFilter = useRef(null);
+  const lastTf = useRef(null); // { what, d }: the last Free Transform, for Transform Again
   const setSelection = (sel) => { setSelectionState((old) => { if (old) lastSel.current = old; return sel; }); };
   const acts = retouchActions(s, update, active, setActive, toast);
   const cur = acts.byId(active);
@@ -420,6 +424,28 @@ export function useRetouch(ctx) {
     }), 'Stroke');
   };
 
+  // --- placing pictures (File > Place, drag and drop, paste) ---
+  const placeFile = useRef();
+  /** Another photo or picture on a layer of its own, with Free Transform ready to size it. */
+  const place = async (blob, name = 'Placed picture') => {
+    if (!blob?.type?.startsWith('image/')) { toast('Only pictures (JPEG, PNG, WebP, GIF, BMP) can be placed'); return; }
+    let im;
+    try { im = await loadPlaced(blob); } catch { toast(`Can't read ${name}`); return; }
+    if (xform) commitTransform();
+    const r = placeRect(im.w, im.h, ow, oh);
+    const id = acts.insert(newLayer(acts.layers, nextName(acts.layers, name.replace(/\.[^.]+$/, '')), 'image', { image: { ...im, ...r } }), 'Place');
+    setActive(id);
+    setXform({ what: 'layer', id, box: [r.x0 * ow, r.y0 * oh, r.x1 * ow, r.y1 * oh], tf0: IDENT, tf: IDENT });
+    toast('Drag the handles to size it, Enter to place');
+  };
+  const placeFiles = (files) => [...files].filter((f) => f.type.startsWith('image/')).forEach((f) => place(f, f.name));
+  /** Ctrl+V: a picture on the system clipboard is placed; otherwise the copied layer is pasted. */
+  const onPaste = (e) => {
+    const f = [...(e.clipboardData?.files || [])].find((x) => x.type.startsWith('image/'));
+    if (f) { e.preventDefault(); place(f, 'Pasted picture'); return; }
+    if (clip) acts.insert(copyLayer(clip, { name: clip.name.replace(/( copy)?$/, ' copy') }), 'Paste');
+  };
+
   // --- filters ---
   /** Adds a filter to the active layer (a copy of the photo when there's none), clipped to the selection. */
   const applyFilter = (type, params) => {
@@ -477,7 +503,16 @@ export function useRetouch(ctx) {
     if (!x) return;
     if (x.what === 'layer') acts.change(x.id, { tf: isIdent(x.tf) ? undefined : x.tf }, 'Free Transform');
     else if (selection) setSelectionState({ ...selection, tf: isIdent(x.tf) ? undefined : x.tf });
+    if (!isIdent(x.tf)) lastTf.current = { what: x.what, d: tfMul(x.tf, tfInv(x.tf0 || IDENT)) };
     setXform(null);
+  };
+  /** Edit > Transform > Again: the last Free Transform once more, on the active layer (or the selection). */
+  const transformAgain = () => {
+    const t = lastTf.current;
+    if (!t) return;
+    if (t.what === 'selection' || !cur) { if (selection) setSelectionState({ ...selection, tf: tfMul(t.d, selection.tf || IDENT) }); return; }
+    if (cur.lock?.position || cur.lock?.all) { toast(`${cur.name} is locked`); return; }
+    acts.change(cur.id, { tf: tfMul(t.d, cur.tf || IDENT) }, 'Transform Again');
   };
 
   // --- auto levels from the picture ---
@@ -528,10 +563,13 @@ export function useRetouch(ctx) {
   // --- the menus: every command, with its key (as Photoshop writes them on Windows) ---
   const noLayer = !cur || cur.kind === 'group';
   const has = { layer: !!cur, sel: !!selection, mask: !!cur?.mask };
-  const ADJ_ITEMS = ['brightness', 'levels', 'curves', 'exposure', null, 'vibrance', 'hsl', 'balance', 'bw', 'photo', 'mixer', null, 'invert', 'posterize', 'threshold', 'gradmap', 'selective'];
+  const allFxHidden = acts.layers.some((l) => l.style) && acts.layers.every((l) => !l.style || l.style.hidden);
+  const ADJ_ITEMS = ['brightness', 'levels', 'curves', 'exposure', null, 'vibrance', 'hsl', 'balance', 'bw', 'photo', 'mixer', 'lut', null, 'invert', 'posterize', 'threshold', 'gradmap', 'selective'];
   const filterItems = (menu) => Object.values(FILTER_DEF).filter((f) => f.menu === menu).map((f) => ({ label: f.label, run: () => applyFilter(f.type) }));
   const M = [
     { label: 'File', items: [
+      { label: 'Place…', key: 'Shift+Ctrl+P', run: () => placeFile.current?.click() },
+      null,
       { label: 'Export…', key: 'Alt+Shift+Ctrl+W', run: ctx.exportNow },
       { label: 'Revert', key: 'F12', run: ctx.revert },
       null,
@@ -554,6 +592,8 @@ export function useRetouch(ctx) {
       null,
       { label: 'Free Transform', key: 'Ctrl+T', disabled: noLayer && !has.sel, run: () => startTransform() },
       { label: 'Transform', items: [
+        { label: 'Again', key: 'Shift+Ctrl+T', disabled: !lastTf.current, run: transformAgain },
+        null,
         { label: 'Scale / Rotate', run: () => startTransform() },
         null,
         { label: 'Rotate 180°', run: () => quickTransform(180) },
@@ -602,9 +642,15 @@ export function useRetouch(ctx) {
       { label: 'Layer Style', items: [
         { label: 'Blending Options…', disabled: noLayer, run: () => setDialog({ type: 'style', id: cur.id, tab: 'blend' }) },
         null,
-        ...[['stroke', 'Stroke…'], ['overlay', 'Color Overlay…'], ['glow', 'Outer Glow…'], ['shadow', 'Drop Shadow…']].map(([tab, label]) => ({ label, disabled: noLayer, run: () => setDialog({ type: 'style', id: cur.id, tab, enable: true }) })),
+        ...STYLE_TABS.slice(1).map(([tab, label]) => ({ label: `${label}…`, disabled: noLayer, run: () => setDialog({ type: 'style', id: cur.id, tab, enable: true }) })),
+        null,
+        { label: 'Copy Layer Style', disabled: !cur?.style, run: () => { setStyleClip(cur.style); toast('Layer style copied'); } },
+        { label: 'Paste Layer Style', disabled: noLayer || !styleClip, run: () => acts.change(cur.id, { style: { ...styleClip, hidden: undefined } }, 'Paste Layer Style') },
         null,
         { label: 'Clear Layer Style', disabled: !cur?.style, run: () => acts.change(cur.id, { style: undefined }, 'Clear Layer Style') },
+        null,
+        { label: allFxHidden ? 'Show All Effects' : 'Hide All Effects', disabled: !acts.layers.some((l) => l.style),
+          run: () => update((old) => ({ ...old, layers: old.layers.map((l) => (l.style ? { ...l, style: { ...l.style, hidden: !allFxHidden || undefined } } : l)) }), allFxHidden ? 'Show All Effects' : 'Hide All Effects') },
       ] },
       { label: 'Smart Filter', items: [{ label: 'Clear Smart Filters', disabled: !cur?.filters?.length, run: () => acts.change(cur.id, { filters: [] }, 'Clear Smart Filters') }] },
       null,
@@ -697,7 +743,7 @@ export function useRetouch(ctx) {
       { label: 'Clear Guides', disabled: !guides.length, run: () => setGuides([]) },
     ] },
     { label: 'Window', items: [
-      ...[['adjustments', 'Adjustments'], ['color', 'Color'], ['history', 'History'], ['layers', 'Layers', 'F7'], ['properties', 'Properties'], ['swatches', 'Swatches']]
+      ...[['adjustments', 'Adjustments'], ['color', 'Color'], ['histogram', 'Histogram'], ['history', 'History'], ['layers', 'Layers', 'F7'], ['properties', 'Properties'], ['swatches', 'Swatches']]
         .map(([p, label, key]) => ({ label, key, check: rt.panels[p], run: () => setRt({ panels: { ...rt.panels, [p]: !rt.panels[p] } }) })),
     ] },
     { label: 'Help', items: [{ label: 'Keyboard Shortcuts…', run: () => setDialog({ type: 'keys' }) }] },
@@ -732,6 +778,8 @@ export function useRetouch(ctx) {
     if (!s) return false;
     const ctrl = e.ctrlKey || e.metaKey;
     const name = keyName(e);
+    // Left to the browser, whose paste event (onPaste) also carries pictures copied elsewhere.
+    if (name === 'Ctrl+V') return true;
     if (xform) {
       if (e.key === 'Enter') { e.preventDefault(); commitTransform(); return true; }
       if (e.key === 'Escape') { setXform(null); return true; }
@@ -784,9 +832,9 @@ export function useRetouch(ctx) {
   };
 
   return {
-    rt, setRt, setTool, channels: s?.channels, active, setActive: (id) => { if (xform && id !== xform.id) commitTransform(); setActive(id); setEditMask(false); }, cur, acts, selection, setSelection, combine, sel,
+    rt, setRt, setTool, s, toast, showPanel: (id) => setRt({ panels: { ...rt.panels, [id]: true }, collapsed: { ...rt.collapsed, [id]: false } }), channels: s?.channels, active, setActive: (id) => { if (xform && id !== xform.id) commitTransform(); setActive(id); setEditMask(false); }, cur, acts, selection, setSelection, combine, sel,
     editMask, setEditMask, cloneSrc, setCloneSrc, quickMask, setQuickMask, dialog, setDialog, xform, setXform, commitTransform, startTransform,
-    guides, setGuides, menus: M, onKey, paintTarget, fillWith, strokeSel, applyFilter, contentAware, bucket, picture, quickTransform, info, ow, oh, L,
+    guides, setGuides, menus: M, onKey, onPaste, place, placeFiles, placeFile, paintTarget, fillWith, strokeSel, applyFilter, contentAware, bucket, picture, quickTransform, info, ow, oh, L,
     reset: (layers) => { setActive(layers?.at(-1)?.id ?? null); setSelectionState(null); setCloneSrc(null); setXform(null); setEditMask(false); },
   };
 }

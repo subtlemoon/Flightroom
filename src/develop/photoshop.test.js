@@ -3,7 +3,7 @@ import {
   IDENT, colorSelect, inSelection, isIdent, layersFromText, layersToText, modifyValues, moveSelection, newLayer, renderLayers,
   selectionBounds, tfAbout, tfInv, tfMul, tfPx, tfUnits,
 } from './retouch.js';
-import { adjustmentLut, adjustmentUniforms, curveTable, newAdjustment, ADJUSTMENTS } from './adjust.js';
+import { adjustmentLut, adjustmentUniforms, curveTable, newAdjustment, parseCube, ADJUSTMENTS } from './adjust.js';
 import { FILTERS, filterPlan, filterReach, newFilter } from './filters.js';
 import { flattenTree, layerTree } from '../components/retouch.jsx';
 
@@ -61,15 +61,40 @@ describe('adjustment layers', () => {
     const t = curveTable([[0, 0], [255, 255]]);
     expect(t[0]).toBe(0);
     expect(t[128]).toBeCloseTo(128 / 255, 5);
-    const lut = adjustmentLut(newAdjustment('curves'));
+    const lut = adjustmentLut(newAdjustment('curves')).data;
     expect(lut[128 * 4]).toBe(128);
   });
   it('levels: a raised black point', () => {
     const a = newAdjustment('levels');
     a.rgb.in0 = 50;
-    const lut = adjustmentLut(a);
+    const lut = adjustmentLut(a).data;
     expect(lut[40 * 4]).toBe(0);
     expect(lut[255 * 4]).toBe(255);
+  });
+});
+
+describe('Color Lookup (.cube)', () => {
+  const cube = (n, f) => {
+    const rows = ['TITLE "Test look"', `LUT_3D_SIZE ${n}`];
+    for (let b = 0; b < n; b++) for (let g = 0; g < n; g++) for (let r = 0; r < n; r++) rows.push(f(r / (n - 1), g / (n - 1), b / (n - 1)).join(' '));
+    return rows.join('\n');
+  };
+  it('reads a 3D LUT and lays it out as slices', () => {
+    const l = parseCube(cube(3, (r, g, b) => [b, g, r]), 'x.cube');
+    expect(l.name).toBe('Test look');
+    expect(l.n).toBe(3);
+    const t = adjustmentLut({ type: 'lut', lut: l });
+    expect([t.w, t.h]).toEqual([9, 3]);
+    // r=1 (x 2), g=0, b=0 (slice 0) -> (0, 0, 255)
+    expect(Array.from(t.data.slice(2 * 4, 2 * 4 + 3))).toEqual([0, 0, 255]);
+    // r=0, g=0, b=1 (slice 2) -> (255, 0, 0)
+    expect(Array.from(t.data.slice(6 * 4, 6 * 4 + 3))).toEqual([255, 0, 0]);
+    expect(adjustmentUniforms({ type: 'lut', lut: l }).p[0]).toBe(3);
+  });
+  it('says why a file cannot be used', () => {
+    expect(() => parseCube('LUT_1D_SIZE 4')).toThrow(/1D/);
+    expect(() => parseCube('LUT_3D_SIZE 2\n0 0 0')).toThrow(/Expected 8/);
+    expect(adjustmentLut(newAdjustment('lut'))).toBeNull();
   });
 });
 

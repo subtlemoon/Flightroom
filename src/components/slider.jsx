@@ -1,6 +1,7 @@
 // Lightroom-style slider: label, typed value and track. Double-click resets it.
 import { memo, useState } from 'react';
 import { formatValue } from '../develop/params.js';
+import { evalNumber } from '../develop/expr.js';
 
 // Slider track position for a value (temperature uses a log scale, like Lightroom).
 const toPos = (sl, v) => (sl.log ? (Math.log(v) - Math.log(sl.min)) / (Math.log(sl.max) - Math.log(sl.min)) : (v - sl.min) / (sl.max - sl.min));
@@ -16,8 +17,9 @@ export const Slider = memo(function Slider({ sl, value, def, onSet, color }) {
   const zero = sl.log || sl.min >= 0 || sl.max <= 0 ? 0 : toPos(sl, 0);
   const onChange = (v) => onSet(sl.key, v);
   const commitText = () => {
-    const n = Number(String(text).replace(/[^\d.+-]/g, ''));
-    if (text !== null && Number.isFinite(n)) onChange(Math.min(sl.max, Math.max(sl.min, n)));
+    // Typed maths works too: 1920/2, (30+15)*2.
+    const n = text === null ? NaN : evalNumber(text);
+    if (Number.isFinite(n)) onChange(Math.min(sl.max, Math.max(sl.min, n)));
     setText(null);
   };
   return (

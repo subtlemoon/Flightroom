@@ -787,8 +787,8 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .rt-swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(17px, 1fr)); gap: 3px; }
 .rt-sw { aspect-ratio: 1; border: 0; border-radius: 3px; padding: 0; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1); }
 .rt-sw.add { background: var(--panel-2); color: var(--muted); display: grid; place-items: center; }
-.rt-adjs { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; }
-.rt-adj { width: 100%; height: 30px; border-radius: var(--r-sm); }
+.rt-adjs { display: grid; grid-template-columns: repeat(auto-fill, minmax(30px, 1fr)); gap: 2px; }
+.rt-adj { width: 100%; min-width: 0; height: 30px; border-radius: var(--r-sm); }
 .rt-history { display: flex; flex-direction: column; max-height: 220px; overflow-y: auto; }
 .rt-hist { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 6px; border: 0; border-radius: var(--r-sm); background: none; color: var(--text-2); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .rt-hist:hover { background: var(--panel-2); }
@@ -813,6 +813,7 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .rt-layer-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rt-layer-meta { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .rt-thumb { display: grid; place-items: center; width: 26px; height: 22px; border-radius: 4px; background: #3a3a3a; border: 1px solid var(--line-2); color: #b4b4b4; flex-shrink: 0; }
+.rt-thumb[style*="background-image"] { background-size: cover; background-position: center; }
 .rt-thumb.sel { border-color: #fff; }
 .rt-thumb.mask.disabled { opacity: 0.4; background-image: linear-gradient(45deg, transparent 45%, var(--bad) 45%, var(--bad) 55%, transparent 55%); }
 .rt-mask-chip { width: 14px; height: 12px; border-radius: 2px; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25); }
@@ -889,3 +890,10 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .rt-typebox textarea { min-width: 220px; resize: both; font: inherit; font-size: 14px; background: var(--bg); border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 4px 8px; outline: none; }
 .rt-src circle, .rt-src path { fill: none; stroke: white; stroke-width: 1.2; stroke-dasharray: 3 3; filter: drop-shadow(0 0 1.5px rgba(0, 0, 0, 0.9)); pointer-events: none; }
 .rt-src path { stroke-dasharray: none; }
+
+/* Retouch: Histogram panel */
+.rt-histogram { display: flex; flex-direction: column; gap: 6px; }
+.rt-hist-canvas { width: 100%; height: 96px; background: var(--well); border-radius: var(--r-sm); cursor: crosshair; touch-action: none; }
+.rt-hist-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 12px; font-size: 11px; }
+.rt-hist-stat { display: flex; justify-content: space-between; gap: 6px; min-height: 15px; }
+.rt-hist-stat .mono { font-family: var(--mono); color: var(--text); }

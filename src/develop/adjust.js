@@ -26,6 +26,7 @@ export const ADJUSTMENTS = [
   ['posterize', 'Posterize', 'posterize', [S('levels', 'Levels', 2, 255, 4)]],
   ['threshold', 'Threshold', 'threshold', [S('level', 'Threshold Level', 1, 255, 128)]],
   ['gradmap', 'Gradient Map', 'gradient', []],
+  ['lut', 'Color Lookup', 'lut', []],
 ];
 export const ADJ_INDEX = Object.fromEntries(ADJUSTMENTS.map(([k], i) => [k, i]));
 export const ADJ_LABEL = Object.fromEntries(ADJUSTMENTS.map(([k, l]) => [k, l]));
@@ -55,6 +56,7 @@ export function newAdjustment(type) {
   if (type === 'mixer') return { type, out: 'r', mono: false, rows: { r: [100, 0, 0, 0], g: [0, 100, 0, 0], b: [0, 0, 100, 0] } };
   if (type === 'selective') return { type, color: 'reds', absolute: false, cmyk: Object.fromEntries(SELECTIVE_COLORS.map(([k]) => [k, [0, 0, 0, 0]])) };
   if (type === 'gradmap') return { type, c0: [0, 0, 0], c1: [1, 1, 1], reverse: false };
+  if (type === 'lut') return { type, lut: null }; // { name, n, data: base64 RGB bytes, red fastest }
   return base;
 }
 
@@ -101,8 +103,23 @@ function levelsTable(l) {
   return out;
 }
 
-/** 256 x 1 RGBA lookup (r, g, b per channel after the master), or null when the type has none. */
+/**
+ * The adjustment's lookup texture, or null when it has none: { w, h, data (RGBA bytes) }.
+ * Levels and Curves: 256 x 1 (r, g, b per channel after the master).
+ * Color Lookup: the 3D table as n slices of n x n side by side (blue picks the slice).
+ */
 export function adjustmentLut(adj) {
+  if (adj.type === 'lut') {
+    const rgb = adj.lut && fromBase64(adj.lut.data);
+    const n = adj.lut?.n;
+    if (!rgb || rgb.length !== n * n * n * 3) return null;
+    const out = new Uint8Array(n * n * n * 4);
+    for (let b = 0; b < n; b++) for (let g = 0; g < n; g++) for (let r = 0; r < n; r++) {
+      const src = ((b * n + g) * n + r) * 3, dst = (g * n * n + b * n + r) * 4;
+      out[dst] = rgb[src]; out[dst + 1] = rgb[src + 1]; out[dst + 2] = rgb[src + 2]; out[dst + 3] = 255;
+    }
+    return { w: n * n, h: n, data: out };
+  }
   if (adj.type !== 'levels' && adj.type !== 'curves') return null;
   const t = adj.type === 'levels' ? levelsTable : curveTable;
   const m = t(adj.rgb), ch = [t(adj.r), t(adj.g), t(adj.b)];
@@ -112,7 +129,40 @@ export function adjustmentLut(adj) {
     for (let c = 0; c < 3; c++) out[v * 4 + c] = Math.round(at(ch[c], m[v]) * 255);
     out[v * 4 + 3] = 255;
   }
-  return out;
+  return { w: 256, h: 1, data: out };
+}
+
+const toBase64 = (bytes) => { let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(s); };
+const fromBase64 = (b64) => { try { return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)); } catch { return null; } };
+
+/**
+ * A .cube file (Adobe / Resolve 3D LUT) as a Color Lookup table: { name, n, data }.
+ * Throws with a readable reason when the file isn't one Flightroom can use.
+ */
+export function parseCube(text, fileName = 'Look') {
+  let n = 0, name = fileName.replace(/\.cube$/i, ''), min = [0, 0, 0], max = [1, 1, 1];
+  const vals = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line[0] === '#') continue;
+    const [key, ...rest] = line.split(/\s+/);
+    if (key === 'TITLE') { name = line.slice(5).trim().replace(/^"|"$/g, '') || name; continue; }
+    if (key === 'LUT_3D_SIZE') { n = parseInt(rest[0], 10); continue; }
+    if (key === 'LUT_1D_SIZE') throw new Error('1D .cube files are not supported, only 3D ones');
+    if (key === 'DOMAIN_MIN') { min = rest.map(Number); continue; }
+    if (key === 'DOMAIN_MAX') { max = rest.map(Number); continue; }
+    if (/^[A-Z_]+$/.test(key)) continue;
+    const v = line.split(/\s+/).map(Number);
+    if (v.length >= 3 && v.slice(0, 3).every(Number.isFinite)) vals.push(v[0], v[1], v[2]);
+  }
+  if (!(n >= 2 && n <= 65)) throw new Error('No LUT_3D_SIZE between 2 and 65 in the file');
+  if (vals.length !== n * n * n * 3) throw new Error(`Expected ${n * n * n} colours, found ${vals.length / 3}`);
+  const data = new Uint8Array(vals.length);
+  for (let i = 0; i < vals.length; i++) {
+    const c = i % 3;
+    data[i] = Math.round(Math.min(1, Math.max(0, (vals[i] - min[c]) / ((max[c] - min[c]) || 1))) * 255);
+  }
+  return { name, n, data: toBase64(data) };
 }
 
 /** The shader's view of an adjustment: { type, p: Float32Array(48) }. */
@@ -142,6 +192,7 @@ export function adjustmentUniforms(adj) {
     case 'posterize': set(0, adj.levels); break;
     case 'threshold': set(0, adj.level / 255); break;
     case 'gradmap': set(0, ...(adj.reverse ? adj.c1 : adj.c0)); set(1, ...(adj.reverse ? adj.c0 : adj.c1)); break;
+    case 'lut': set(0, adj.lut?.n || 0); break;
     default:
   }
   return { type: ADJ_INDEX[adj.type] ?? -1, p };
@@ -258,5 +309,14 @@ vec3 adjust(vec3 c) {
   if (A == 12) { float n = max(2.0, uP[0].x); return floor(c * n * 0.9999) / (n - 1.0); } // Posterize
   if (A == 13) return vec3(step(uP[0].x, lum(c))); // Threshold
   if (A == 14) return mix(uP[0].xyz, uP[1].xyz, lum(c)); // Gradient Map
+  if (A == 15) { // Color Lookup: n slices of n x n, filtered within a slice, blended across
+    float n = uP[0].x;
+    if (n < 2.0) return c;
+    float bz = clamp(c.b, 0.0, 1.0) * (n - 1.0), b0 = floor(bz), b1 = min(b0 + 1.0, n - 1.0);
+    vec2 rg = clamp(c.rg, 0.0, 1.0) * (n - 1.0) + 0.5;
+    vec3 s0 = texture(uLut, vec2((b0 * n + rg.x) / (n * n), rg.y / n)).rgb;
+    vec3 s1 = texture(uLut, vec2((b1 * n + rg.x) / (n * n), rg.y / n)).rgb;
+    return mix(s0, s1, bz - b0);
+  }
   return c;
 }`;
