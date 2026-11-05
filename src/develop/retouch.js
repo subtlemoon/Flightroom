@@ -52,7 +52,7 @@ export const REGION = new Set(['patch', 'redeye']);
 
 export const kindOf = (l) => l.kind || 'pixel';
 // Layers you can paint on directly (others are painted through their mask).
-export const PAINTABLE = new Set(['pixel', 'photo', 'stamp']);
+export const PAINTABLE = new Set(['pixel', 'photo', 'stamp', 'image']);
 
 // --- pixel stretch -------------------------------------------------------------
 // A one-pixel row or column of the developed photo as a layer of its own:
@@ -177,8 +177,9 @@ export function opBounds(op, ow, oh) {
   return [x0 - r, y0 - r, x1 + r, y1 + r];
 }
 
-/** Text and shape layers: where they draw (oriented px, before the layer's transform). */
+/** Text, shape and placed-picture layers: where they draw (oriented px, before the layer's transform). */
 export function rasterBounds(l, ow, oh) {
+  if (l.kind === 'image' && l.image) return [l.image.x0 * ow, l.image.y0 * oh, l.image.x1 * ow, l.image.y1 * oh];
   if (l.kind === 'shape' && l.shape) {
     const sh = l.shape;
     const pad = (sh.stroke ? sh.stroke.width * Math.max(ow, oh) : 0) + 2;
@@ -370,4 +371,27 @@ export function sourceRegions(layers, geo, toSource, box, scale, max = 16) {
     }
   }
   return out;
+}
+
+// --- the Histogram panel -----------------------------------------------------------
+
+/** Counts of 0-255 per channel of RGB(A) bytes: { r, g, b, lum } (luminosity weighted as Photoshop's). */
+export function histogramOf(rgba, stride = 4) {
+  const r = new Uint32Array(256), g = new Uint32Array(256), b = new Uint32Array(256), lum = new Uint32Array(256);
+  for (let i = 0; i < rgba.length; i += stride) {
+    r[rgba[i]]++; g[rgba[i + 1]]++; b[rgba[i + 2]]++;
+    lum[Math.round(0.3 * rgba[i] + 0.59 * rgba[i + 1] + 0.11 * rgba[i + 2])]++;
+  }
+  return { r, g, b, lum };
+}
+
+/** Mean, standard deviation, median and pixel count of a 256-bin histogram (levels lo..hi). */
+export function histStats(bins, lo = 0, hi = 255) {
+  let n = 0, sum = 0, sq = 0;
+  for (let v = lo; v <= hi; v++) { n += bins[v]; sum += v * bins[v]; sq += v * v * bins[v]; }
+  if (!n) return { mean: 0, dev: 0, median: 0, pixels: 0 };
+  const mean = sum / n;
+  let acc = 0, median = lo;
+  for (let v = lo; v <= hi; v++) { acc += bins[v]; if (acc * 2 >= n) { median = v; break; } }
+  return { mean, dev: Math.sqrt(Math.max(0, sq / n - mean * mean)), median, pixels: n };
 }

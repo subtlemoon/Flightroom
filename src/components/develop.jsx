@@ -362,6 +362,19 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
       update({ crop: geo.toCrop({ cx: ((b[0] + b[2]) / 2) * geo.ow, cy: ((b[1] + b[3]) / 2) * geo.oh, hw: ((b[2] - b[0]) / 2) * geo.ow, hh: ((b[3] - b[1]) / 2) * geo.oh, angle: 0 }) }, 'Crop');
     },
   });
+  // Retouch: pictures pasted (Ctrl+V) or dropped on the window are placed as layers.
+  useEffect(() => {
+    if (!retouch) return undefined;
+    const typing = (e) => /^(INPUT|TEXTAREA)$/.test(e.target?.tagName) || e.target?.isContentEditable;
+    const onPaste = (e) => { if (!typing(e)) rxRef.current.onPaste(e); };
+    const files = (e) => [...(e.dataTransfer?.items || [])].some((it) => it.kind === 'file');
+    const over = (e) => { if (files(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } };
+    const drop = (e) => { if (!files(e)) return; e.preventDefault(); rxRef.current.placeFiles(e.dataTransfer.files); };
+    document.addEventListener('paste', onPaste);
+    document.addEventListener('dragover', over);
+    document.addEventListener('drop', drop);
+    return () => { document.removeEventListener('paste', onPaste); document.removeEventListener('dragover', over); document.removeEventListener('drop', drop); };
+  }, [retouch]);
   rxRef.current = rx;
   useEffect(() => { if (retouch) { setCrop(false); setSelState(null); setPicking(false); } }, [retouch]);
 
@@ -932,6 +945,8 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
 
   const drawRef = useRef(draw);
   drawRef.current = draw;
+  // A placed picture finished decoding (opened from the sidecar): draw it.
+  useEffect(() => { const on = () => drawRef.current(); window.addEventListener('retouch:image', on); return () => window.removeEventListener('retouch:image', on); }, []);
   // Drawn right away, for the colour picker, which reads the canvas straight after.
   const drawNow = () => {
     refineGen.current++;

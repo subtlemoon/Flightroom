@@ -13,6 +13,7 @@ import {
   newLayer, nextName, selectionBounds, selectionValues, stretchBounds, thinSelection, tfAbout, tfMul, tfPx, tfUnits, findSpotSource, selectionOutline,
 } from '../develop/retouch.js';
 import { ADJ_LABEL, newAdjustment } from '../develop/adjust.js';
+import { loadPlaced, placeRect } from '../develop/raster.js';
 import { FILTER_DEF, newFilter } from '../develop/filters.js';
 
 // [id, label, icon, key]; a group shares one place on the tool bar (Shift+key goes round it).
@@ -76,7 +77,7 @@ export const RETOUCH_DEFAULT = {
   type: { font: 'Arial', size: 0.05, bold: false, italic: false, align: 'left' },
   shape: { noFill: false, strokeOn: false, strokeColor: [0, 0, 0], strokeW: 0.002, radius: 0, sides: 5, star: false, weight: 0.003 },
   swatches: SWATCHES,
-  panels: { color: true, swatches: false, properties: true, adjustments: true, layers: true, history: false },
+  panels: { color: true, swatches: false, properties: true, adjustments: true, layers: true, history: false, histogram: false },
   collapsed: {},
   view: { rulers: false, grid: false, guides: true, extras: true },
 };
@@ -420,6 +421,28 @@ export function useRetouch(ctx) {
     }), 'Stroke');
   };
 
+  // --- placing pictures (File > Place, drag and drop, paste) ---
+  const placeFile = useRef();
+  /** Another photo or picture on a layer of its own, with Free Transform ready to size it. */
+  const place = async (blob, name = 'Placed picture') => {
+    if (!blob?.type?.startsWith('image/')) { toast('Only pictures (JPEG, PNG, WebP, GIF, BMP) can be placed'); return; }
+    let im;
+    try { im = await loadPlaced(blob); } catch { toast(`Can't read ${name}`); return; }
+    if (xform) commitTransform();
+    const r = placeRect(im.w, im.h, ow, oh);
+    const id = acts.insert(newLayer(acts.layers, nextName(acts.layers, name.replace(/\.[^.]+$/, '')), 'image', { image: { ...im, ...r } }), 'Place');
+    setActive(id);
+    setXform({ what: 'layer', id, box: [r.x0 * ow, r.y0 * oh, r.x1 * ow, r.y1 * oh], tf0: IDENT, tf: IDENT });
+    toast('Drag the handles to size it, Enter to place');
+  };
+  const placeFiles = (files) => [...files].filter((f) => f.type.startsWith('image/')).forEach((f) => place(f, f.name));
+  /** Ctrl+V: a picture on the system clipboard is placed; otherwise the copied layer is pasted. */
+  const onPaste = (e) => {
+    const f = [...(e.clipboardData?.files || [])].find((x) => x.type.startsWith('image/'));
+    if (f) { e.preventDefault(); place(f, 'Pasted picture'); return; }
+    if (clip) acts.insert(copyLayer(clip, { name: clip.name.replace(/( copy)?$/, ' copy') }), 'Paste');
+  };
+
   // --- filters ---
   /** Adds a filter to the active layer (a copy of the photo when there's none), clipped to the selection. */
   const applyFilter = (type, params) => {
@@ -528,10 +551,12 @@ export function useRetouch(ctx) {
   // --- the menus: every command, with its key (as Photoshop writes them on Windows) ---
   const noLayer = !cur || cur.kind === 'group';
   const has = { layer: !!cur, sel: !!selection, mask: !!cur?.mask };
-  const ADJ_ITEMS = ['brightness', 'levels', 'curves', 'exposure', null, 'vibrance', 'hsl', 'balance', 'bw', 'photo', 'mixer', null, 'invert', 'posterize', 'threshold', 'gradmap', 'selective'];
+  const ADJ_ITEMS = ['brightness', 'levels', 'curves', 'exposure', null, 'vibrance', 'hsl', 'balance', 'bw', 'photo', 'mixer', 'lut', null, 'invert', 'posterize', 'threshold', 'gradmap', 'selective'];
   const filterItems = (menu) => Object.values(FILTER_DEF).filter((f) => f.menu === menu).map((f) => ({ label: f.label, run: () => applyFilter(f.type) }));
   const M = [
     { label: 'File', items: [
+      { label: 'Place…', key: 'Shift+Ctrl+P', run: () => placeFile.current?.click() },
+      null,
       { label: 'Export…', key: 'Alt+Shift+Ctrl+W', run: ctx.exportNow },
       { label: 'Revert', key: 'F12', run: ctx.revert },
       null,
@@ -697,7 +722,7 @@ export function useRetouch(ctx) {
       { label: 'Clear Guides', disabled: !guides.length, run: () => setGuides([]) },
     ] },
     { label: 'Window', items: [
-      ...[['adjustments', 'Adjustments'], ['color', 'Color'], ['history', 'History'], ['layers', 'Layers', 'F7'], ['properties', 'Properties'], ['swatches', 'Swatches']]
+      ...[['adjustments', 'Adjustments'], ['color', 'Color'], ['histogram', 'Histogram'], ['history', 'History'], ['layers', 'Layers', 'F7'], ['properties', 'Properties'], ['swatches', 'Swatches']]
         .map(([p, label, key]) => ({ label, key, check: rt.panels[p], run: () => setRt({ panels: { ...rt.panels, [p]: !rt.panels[p] } }) })),
     ] },
     { label: 'Help', items: [{ label: 'Keyboard Shortcuts…', run: () => setDialog({ type: 'keys' }) }] },
@@ -732,6 +757,8 @@ export function useRetouch(ctx) {
     if (!s) return false;
     const ctrl = e.ctrlKey || e.metaKey;
     const name = keyName(e);
+    // Left to the browser, whose paste event (onPaste) also carries pictures copied elsewhere.
+    if (name === 'Ctrl+V') return true;
     if (xform) {
       if (e.key === 'Enter') { e.preventDefault(); commitTransform(); return true; }
       if (e.key === 'Escape') { setXform(null); return true; }
@@ -784,9 +811,9 @@ export function useRetouch(ctx) {
   };
 
   return {
-    rt, setRt, setTool, channels: s?.channels, active, setActive: (id) => { if (xform && id !== xform.id) commitTransform(); setActive(id); setEditMask(false); }, cur, acts, selection, setSelection, combine, sel,
+    rt, setRt, setTool, s, toast, channels: s?.channels, active, setActive: (id) => { if (xform && id !== xform.id) commitTransform(); setActive(id); setEditMask(false); }, cur, acts, selection, setSelection, combine, sel,
     editMask, setEditMask, cloneSrc, setCloneSrc, quickMask, setQuickMask, dialog, setDialog, xform, setXform, commitTransform, startTransform,
-    guides, setGuides, menus: M, onKey, paintTarget, fillWith, strokeSel, applyFilter, contentAware, bucket, picture, quickTransform, info, ow, oh, L,
+    guides, setGuides, menus: M, onKey, onPaste, place, placeFiles, placeFile, paintTarget, fillWith, strokeSel, applyFilter, contentAware, bucket, picture, quickTransform, info, ow, oh, L,
     reset: (layers) => { setActive(layers?.at(-1)?.id ?? null); setSelectionState(null); setCloneSrc(null); setXform(null); setEditMask(false); },
   };
 }

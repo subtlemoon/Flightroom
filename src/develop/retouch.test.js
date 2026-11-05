@@ -116,3 +116,20 @@ describe('pixel stretch', () => {
     expect(g.y + g.h).toBeGreaterThanOrEqual(300);
   });
 });
+
+describe('Histogram panel', () => {
+  it('counts channels and works out the statistics', async () => {
+    const { histogramOf, histStats } = await import('./retouch.js');
+    const px = new Uint8Array([0, 0, 0, 255, 255, 255, 255, 255, 100, 50, 0, 255, 100, 50, 0, 255]);
+    const h = histogramOf(px);
+    expect(h.r[100]).toBe(2);
+    expect(h.g[50]).toBe(2);
+    expect(h.lum[255]).toBe(1);
+    const st = histStats(h.r);
+    expect(st.pixels).toBe(4);
+    expect(st.mean).toBeCloseTo(113.75);
+    expect(st.median).toBe(100);
+    expect(st.dev).toBeCloseTo(Math.sqrt((113.75 ** 2 + 141.25 ** 2 + 2 * 13.75 ** 2) / 4));
+    expect(histStats(h.r, 101, 255).pixels).toBe(1);
+  });
+});

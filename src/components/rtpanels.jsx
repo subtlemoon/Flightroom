@@ -1,12 +1,12 @@
 // Retouch's tool bar, options bar and panels (Color, Swatches, Properties,
-// Adjustments, Layers, History), laid out like Photoshop's.
+// Adjustments, Layers, History, Histogram), laid out like Photoshop's.
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Dropdown, Icon } from './ui.jsx';
 import { Slider } from './slider.jsx';
 import { CurveEditor } from './curve.jsx';
-import { BLEND_BREAKS, BLEND_MODES, PAINTABLE, inGroup, isIdent, kindOf, newLayer, nextName, tfPx } from '../develop/retouch.js';
-import { ADJUSTMENTS, ADJ_LABEL, CURVE_CHANNELS, PHOTO_FILTERS, SELECTIVE_COLORS } from '../develop/adjust.js';
+import { BLEND_BREAKS, BLEND_MODES, PAINTABLE, histStats, histogramOf, inGroup, isIdent, kindOf, newLayer, nextName, tfPx } from '../develop/retouch.js';
+import { ADJUSTMENTS, ADJ_LABEL, CURVE_CHANNELS, PHOTO_FILTERS, SELECTIVE_COLORS, parseCube } from '../develop/adjust.js';
 import { FILTER_DEF, filterName } from '../develop/filters.js';
 import { FONTS } from '../develop/raster.js';
 import { BRUSHES, RETOUCH_DEFAULT, SELECTORS, SHAPE_TOOLS, TOOL, TOOL_GROUPS, hex, layerTree, unhex } from './retouch.jsx';
@@ -253,6 +253,7 @@ export function RetouchPanels({ rx, history, onDevelop }) {
       {p.adjustments && <Panel rx={rx} id="adjustments" title="Adjustments" icon="adjust"><AdjustmentsPanel rx={rx} /></Panel>}
       {p.layers && <Panel rx={rx} id="layers" title="Layers" icon="layers"><LayersPanel rx={rx} onDevelop={onDevelop} /></Panel>}
       {p.history && history && <Panel rx={rx} id="history" title="History" icon="history"><HistoryPanel history={history} /></Panel>}
+      {p.histogram && <Panel rx={rx} id="histogram" title="Histogram" icon="histogram"><HistogramPanel rx={rx} /></Panel>}
     </div>
   );
 }
@@ -321,9 +322,75 @@ function HistoryPanel({ history }) {
   );
 }
 
+// --- Histogram: the picture as it looks now, layers and all, with Photoshop's statistics ---
+
+const HIST_CHANNELS = [['colors', 'Colors'], ['lum', 'Luminosity'], ['r', 'Red'], ['g', 'Green'], ['b', 'Blue']];
+const HIST_FILL = { r: '#e05252', g: '#4fbf65', b: '#5c8dff', lum: '#d8d8d8' };
+
+function HistogramPanel({ rx }) {
+  const ref = useRef();
+  const [h, setH] = useState(null);
+  const [ch, setCh] = useState('colors');
+  const [range, setRange] = useState(null); // [lo, hi] levels under the pointer or dragged over
+  const drag = useRef(null);
+  // Counted again a moment after each change (a small copy of the picture, so it's quick).
+  useEffect(() => {
+    const t = setTimeout(() => { const p = rx.picture(384); if (p) setH(histogramOf(p.rgb, 3)); }, 250);
+    return () => clearTimeout(t);
+  }, [rx.s]); // eslint-disable-line react-hooks/exhaustive-deps
+  const bins = h && (ch === 'colors' ? null : h[ch]);
+  useEffect(() => {
+    const c = ref.current;
+    if (!c || !h) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = (c.width = c.clientWidth * dpr), ht = (c.height = c.clientHeight * dpr);
+    const g = c.getContext('2d');
+    const list = ch === 'colors' ? ['r', 'g', 'b'] : [ch];
+    let max = 1;
+    for (const k of list) for (let i = 1; i < 255; i++) max = Math.max(max, h[k][i]);
+    g.globalCompositeOperation = ch === 'colors' ? 'lighter' : 'source-over';
+    for (const k of list) {
+      g.fillStyle = HIST_FILL[k];
+      g.globalAlpha = ch === 'colors' ? 0.75 : 1;
+      g.beginPath();
+      g.moveTo(0, ht);
+      for (let i = 0; i < 256; i++) g.lineTo(((i + 0.5) / 256) * w, ht - Math.min(1, h[k][i] / max) * ht * 0.95);
+      g.lineTo(w, ht);
+      g.fill();
+    }
+    g.globalCompositeOperation = 'source-over';
+    g.globalAlpha = 1;
+    if (range) { g.fillStyle = 'rgba(255,255,255,.14)'; g.fillRect((range[0] / 256) * w, 0, ((range[1] - range[0] + 1) / 256) * w, ht); }
+  }, [h, ch, range]);
+  if (!h) return <p className="muted small rt-note">Counting…</p>;
+  const lum = bins || h.lum;
+  const all = histStats(lum);
+  const part = range && histStats(lum, range[0], range[1]);
+  let below = 0;
+  if (range) for (let v = 0; v < range[0]; v++) below += lum[v];
+  const level = (e) => { const r = e.currentTarget.getBoundingClientRect(); return Math.max(0, Math.min(255, Math.floor(((e.clientX - r.left) / r.width) * 256))); };
+  const stat = (label, v) => <div className="rt-hist-stat"><span className="muted">{label}</span><span className="mono">{v}</span></div>;
+  return (
+    <div className="rt-histogram">
+      <div className="rt-prop-row"><span className="muted small grow">Channel</span><Dropdown value={ch} onChange={setCh} options={HIST_CHANNELS.map(([value, label]) => ({ value, label }))} /></div>
+      <canvas ref={ref} className="rt-hist-canvas" title="Point at a level or drag across a range"
+        onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); drag.current = level(e); setRange([drag.current, drag.current]); }}
+        onPointerMove={(e) => { const v = level(e); if (drag.current != null) setRange([Math.min(drag.current, v), Math.max(drag.current, v)]); else setRange([v, v]); }}
+        onPointerUp={() => { drag.current = null; }}
+        onPointerLeave={() => { if (drag.current == null) setRange(null); }} />
+      <div className="rt-hist-stats">
+        {stat('Mean', all.mean.toFixed(2))}{stat('Level', range ? (range[0] === range[1] ? range[0] : `${range[0]}..${range[1]}`) : '')}
+        {stat('Std Dev', all.dev.toFixed(2))}{stat('Count', part ? part.pixels.toLocaleString() : '')}
+        {stat('Median', all.median)}{stat('Percentile', part ? ((100 * (below + part.pixels)) / all.pixels).toFixed(2) : '')}
+        {stat('Pixels', all.pixels.toLocaleString())}{stat('Source', 'Whole picture')}
+      </div>
+    </div>
+  );
+}
+
 // --- Layers -----------------------------------------------------------------------------
 
-const KIND_ICON = { pixel: 'brush', photo: 'photo', stamp: 'layers', stretch: 'stretch', adjust: 'adjust', fill: 'palette', text: 'type', shape: 'shapeRect', group: 'folder2' };
+const KIND_ICON = { pixel: 'brush', photo: 'photo', stamp: 'layers', stretch: 'stretch', adjust: 'adjust', fill: 'palette', text: 'type', shape: 'shapeRect', group: 'folder2', image: 'photo' };
 const KIND_FILTER = [{ value: 'all', label: 'All kinds' }, { value: 'pixel', label: 'Pixel' }, { value: 'adjust', label: 'Adjustment' }, { value: 'type', label: 'Type' },
   { value: 'shape', label: 'Shape' }, { value: 'smart', label: 'With filters' }, { value: 'group', label: 'Group' }];
 const matches = (l, f) => f === 'all' || (f === 'pixel' ? PAINTABLE.has(kindOf(l)) : f === 'type' ? l.kind === 'text' : f === 'smart' ? !!l.filters?.length : f === 'adjust' ? l.kind === 'adjust' || l.kind === 'fill' : l.kind === f);
@@ -383,8 +450,8 @@ function LayersPanel({ rx, onDevelop }) {
                 )}
                 <span className={`rt-thumb${l.id === active && !rx.editMask ? ' sel' : ''}`} title={l.kind === 'adjust' ? ADJ_LABEL[l.adj?.type] : undefined}
                   onClick={(e) => { e.stopPropagation(); rx.setActive(l.id); }}
-                  style={l.kind === 'fill' && l.fillDef?.type !== 'gradient' ? { background: hex(l.fillDef?.color || [0, 0, 0]) } : undefined}>
-                  <Icon name={l.kind === 'adjust' ? ADJUSTMENTS.find((a) => a[0] === l.adj?.type)?.[2] || 'adjust' : KIND_ICON[kindOf(l)]} size={13} />
+                  style={l.kind === 'fill' && l.fillDef?.type !== 'gradient' ? { background: hex(l.fillDef?.color || [0, 0, 0]) } : l.kind === 'image' ? { backgroundImage: `url(${l.image.src})` } : undefined}>
+                  {l.kind !== 'image' && <Icon name={l.kind === 'adjust' ? ADJUSTMENTS.find((a) => a[0] === l.adj?.type)?.[2] || 'adjust' : KIND_ICON[kindOf(l)]} size={13} />}
                 </span>
                 {l.mask && (
                   <span className={`rt-thumb mask${rx.editMask && l.id === active ? ' sel' : ''}${l.mask.off ? ' disabled' : ''}`} title="Layer mask: click to paint on it, Shift+click to turn it off"
@@ -564,6 +631,7 @@ function AdjustProps({ rx, l }) {
           <CurveEditor s={{ pts: a[a.ch] }} channel="pts" set={(k, pts) => set({ [a.ch]: pts })} />
         </>
       )}
+      {a.type === 'lut' && <LutProps rx={rx} a={a} set={set} />}
       {a.type === 'gradmap' && (
         <>
           {row('From', <ColorInput value={a.c0} onChange={(c0) => set({ c0 })} />)}
@@ -572,6 +640,30 @@ function AdjustProps({ rx, l }) {
           {check('reverse', 'Reverse')}
         </>
       )}
+    </>
+  );
+}
+
+function LutProps({ rx, a, set }) {
+  const file = useRef();
+  const load = async (e) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    try { set({ lut: parseCube(await f.text(), f.name) }); rx.toast?.(`${f.name} loaded`); } catch (err) { rx.toast?.(`Can't use ${f.name}: ${err.message}`); }
+  };
+  return (
+    <>
+      <div className="rt-prop-row">
+        <span className="small grow">{a.lut ? a.lut.name : <span className="muted">No look loaded</span>}</span>
+        {a.lut && <span className="muted small mono">{a.lut.n}³</span>}
+      </div>
+      <div className="rt-prop-row">
+        <button className="btn btn-sm" onClick={() => file.current.click()}>{a.lut ? 'Load another .cube…' : 'Load .cube…'}</button>
+        {a.lut && <button className="btn btn-sm btn-ghost" onClick={() => set({ lut: null })}>Clear</button>}
+      </div>
+      <input ref={file} type="file" accept=".cube" hidden onChange={load} />
+      <p className="muted small rt-note">3D LUTs from Photoshop, Resolve or a LUT pack. Use the layer's opacity for strength.</p>
     </>
   );
 }

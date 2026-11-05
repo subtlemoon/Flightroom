@@ -84,7 +84,13 @@ const row = (label, el) => <div className="rt-prop-row"><span className="muted s
 
 export function RetouchDialogs({ rx }) {
   const d = rx.dialog;
-  if (!d) return null;
+  // File > Place's file picker (the browser's, so any picture file works).
+  const picker = <input ref={rx.placeFile} type="file" accept="image/*" multiple hidden onChange={(e) => { rx.placeFiles(e.target.files); e.target.value = ''; }} />;
+  if (!d) return picker;
+  return <>{picker}<Dialog1 rx={rx} d={d} /></>;
+}
+
+function Dialog1({ rx, d }) {
   const close = () => rx.setDialog(null);
   const props = { rx, d, close };
   switch (d.type) {

@@ -364,7 +364,7 @@ export class Composer {
     this.bufs = new Map(); // op -> { buf, n } (its dabs on the graphics card)
     this.sels = new Map(); // selection -> texture
     this.luts = new Map(); // adjustment -> lookup texture
-    this.rasters = new Map(); // text / shape key -> { tex, rect }
+    this.rasters = new Map(); // text / shape / placed picture key -> { tex, rect }
     this.fillOps = new WeakMap(); // a gradient fill layer's settings -> its op
     this.bounds = new WeakMap(); // op -> its box (oriented px)
   }
@@ -454,27 +454,29 @@ export class Composer {
   lutTex(adj) {
     let t = this.luts.get(adj);
     if (t) return t;
-    const data = adjustmentLut(adj);
-    if (!data) return null;
+    const lut = adjustmentLut(adj);
+    if (!lut) return null;
     const gl = this.gl;
     t = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, t);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, lut.w, lut.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, lut.data);
     for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
     this.luts.set(adj, t);
     this.trim(this.luts, 16);
     return t;
   }
 
-  /** A text or shape layer drawn at about `scale` output px per oriented px (in steps, so zooming doesn't redraw it every frame). */
+  /** A text, shape or placed-picture layer drawn at about `scale` output px per oriented px (in steps, so zooming doesn't redraw it every frame). */
   rasterOf(l, geo, scale) {
     const step = 1.25 ** Math.ceil(Math.log(Math.max(scale, 1e-3)) / Math.log(1.25));
-    const key = `${l.kind}|${JSON.stringify(l.kind === 'text' ? l.text : l.shape)}|${step.toFixed(4)}`;
+    const what = l.kind === 'image' ? { ...l.image, src: l.image.src.length + l.image.src.slice(-48) } : l.kind === 'text' ? l.text : l.shape;
+    const key = `${l.kind}|${JSON.stringify(what)}|${step.toFixed(4)}`;
     let hit = this.rasters.get(key);
     if (hit) { this.rasters.delete(key); this.rasters.set(key, hit); return hit; }
-    const { canvas, rect } = rasterize(l, geo.ow, geo.oh, step, Math.min(4096, this.r.maxTex));
-    hit = { tex: this.texOf(canvas, true), rect };
+    const ras = rasterize(l, geo.ow, geo.oh, step, Math.min(4096, this.r.maxTex));
+    if (!ras) return null;
+    hit = { tex: this.texOf(ras.canvas, true), rect: ras.rect };
     this.rasters.set(key, hit);
     this.trim(this.rasters, 24, (h) => h.tex);
     return hit;
@@ -610,8 +612,9 @@ export class Composer {
       this.r.draw(this.progs.adj, T.layer, { uBack: T.acc[this.cur].tex, uAdj: type, uP: p, uLut: this.lutTex(layer.adj) || T.acc[this.cur].tex });
     } else if (kind === 'fill' && layer.fillDef?.type === 'gradient') {
       this.drawOp(this.fillOp(layer), T, lc, T.layer);
-    } else if ((kind === 'text' && layer.text) || (kind === 'shape' && layer.shape)) {
+    } else if ((kind === 'text' && layer.text) || (kind === 'shape' && layer.shape) || (kind === 'image' && layer.image)) {
       const ras = this.rasterOf(layer, lc.geo, lc.k);
+      if (!ras) { for (const op of layer.ops) this.drawOp(op, T, lc, T.layer); return; }
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
       const t = ras.tex;
