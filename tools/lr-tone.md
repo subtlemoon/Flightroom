@@ -216,3 +216,22 @@ reds ~4 L* darker, and the orange kart renders red.
   need optical flow: direct median dE 4.85.
 - Left: the brightest sunlit cloud (Lightroom L* ~98) tops out at ~92; the
   corners are ~0.1 stop darker than Lightroom's (vignetting not applied).
+
+## Night shots: adaptive Shadows/Blacks (2.11.2)
+- JWL_7530 (night kart shot, Shadows +90, Blacks +90, Highlights/Whites -89,
+  Contrast -92) rendered ~25 L* brighter and flatter than Lightroom with the
+  same xmp: Lightroom's positive Shadows/Blacks do almost nothing here.
+- The key (median log2 brightness) doesn't explain it: JWL_7530's median is
+  -4.04, like JWL_7451 (-3.98), where the sliders work in full. What differs
+  is the range above the middle, span = p99.9 - p50 of the guide:
+  7451 1.96, 7345 2.97, 7530 4.04 (bright lights). The lift now follows a
+  logistic on span (SPAN_MID 3.24, SPAN_W 0.205): 1, 0.79, ~0.01.
+  JWL_7530 median dE 29.8 -> 5.0; JWL_7345 unchanged (4.8).
+- Tried and dropped: subtracting a per-channel black floor (0.1% percentile)
+  brought the darkest band to 0 L* but median dE 5.8 (k 0.5: 4.9), and it
+  would darken photos with no true blacks.
+- Left on JWL_7530: L* 10-50 is ~+5 L* and ~+9 b* (too yellow). Its Shadow
+  wheel is hue 221 sat 92; ours moves the darks ~8 b* bluer, Lightroom ~17.
+  A superlinear saturation response (sat^2, matched at 45) fixes the darks
+  but costs JWL_7345 (4.8 -> 5.9) through its weaker midtone 20, so it needs
+  more photos with high wheel saturation before changing.
