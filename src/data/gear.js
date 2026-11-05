@@ -92,6 +92,9 @@ export const BODIES = [
   body({ id: 'pana-g9ii', brand: 'Panasonic', model: 'Lumix G9II', mount: 'Micro Four Thirds', sensor: 'Micro Four Thirds', megapixels: 25, ibis: true, maxVideo: '5.7K 30p', rawFormat: 'RW2', videoFormats: ['ProRes 422 HQ', 'H.265 (HEVC)', 'H.264'], cardSlots: ['SD', 'SD'], battery: 'DMW-BLK22', shoe: 'Panasonic TTL', weight: 658, year: 2023 }),
   // September 2026
   body({ id: 'canon-r8ii', brand: 'Canon', model: 'EOS R8 Mark II', mount: 'Canon RF', sensor: 'Full Frame', megapixels: 24.2, ibis: true, maxVideo: '4K 60p (6K oversampled)', rawFormat: 'CR3', videoFormats: ['H.265 (HEVC)', 'H.264'], cardSlots: ['SD'], battery: 'LP-E17', shoe: 'Canon Multi-function', weight: 546, year: 2026 }),
+  // October 2026
+  body({ id: 'sigma-fp2', brand: 'Sigma', model: 'fp2', mount: 'L-Mount', sensor: 'Full Frame', megapixels: 24.6, ibis: false, maxVideo: '6K 60p open gate', rawFormat: 'DNG', videoFormats: ['ProRes RAW'], cardSlots: ['SD'], battery: 'BP-91', weight: 446, year: 2026,
+    notes: 'No IBIS (electronic stabilization for video only). 70 GB internal storage. ProRes RAW records to an external SSD over USB-C.' }),
 ];
 
 // fType applies to Nikon F lenses: how they focus, which decides adapter support.
@@ -205,6 +208,20 @@ export const LENSES = [
   lens({ id: 'sigma-85f12-l', brand: 'Sigma', model: '85mm F1.2 DG | Art (L)', mount: 'L-Mount', coverage: 'Full Frame', focal: '85mm', aperture: 'f/1.2', stabilized: false, filterThread: 82, weight: 905 }),
   lens({ id: 'sigma-2060-e', brand: 'Sigma', model: '20-60mm F2.8-4 DG | Contemporary (E)', mount: 'Sony E', coverage: 'Full Frame', focal: '20-60mm', aperture: 'f/2.8-4', stabilized: false, weight: 385 }),
   lens({ id: 'sigma-2060-l', brand: 'Sigma', model: '20-60mm F2.8-4 DG | Contemporary (L)', mount: 'L-Mount', coverage: 'Full Frame', focal: '20-60mm', aperture: 'f/2.8-4', stabilized: false, weight: 385 }),
+  // October 2026
+  lens({ id: 'nikon-z120300tc', brand: 'Nikon', model: 'NIKKOR Z 120-300mm f/2.8 TC VR S', mount: 'Nikon Z', coverage: 'Full Frame', focal: '120-300mm (168-420mm with built-in 1.4x TC)', aperture: 'f/2.8 (f/4 with TC)', stabilized: true, filterThread: 112, weight: 2735,
+    notes: 'Built-in 1.4x teleconverter. Also takes 46mm rear slip-in filters.' }),
+  lens({ id: 'tamron-2040-z', brand: 'Tamron', model: '20-40mm F/2.8 Di III VXD (Z)', mount: 'Nikon Z', coverage: 'Full Frame', focal: '20-40mm', aperture: 'f/2.8', stabilized: false, filterThread: 67, weight: 380 }),
+  lens({ id: 'tamron-1650-z', brand: 'Tamron', model: '16-50mm F2.8 Di III A (B091, Z)', mount: 'Nikon Z', coverage: 'APS-C', focal: '16-50mm', aperture: 'f/2.8', filterThread: 55, weight: 315 }),
+  lens({ id: 'tamron-1650-e', brand: 'Tamron', model: '16-50mm F2.8 Di III A (B091, E)', mount: 'Sony E', coverage: 'APS-C', focal: '16-50mm', aperture: 'f/2.8', filterThread: 55, weight: 305 }),
+  lens({ id: 'tamron-1650-rf', brand: 'Tamron', model: '16-50mm F2.8 Di III A (B091, RF)', mount: 'Canon RF', coverage: 'APS-C', focal: '16-50mm', aperture: 'f/2.8', filterThread: 55, weight: 305 }),
+  lens({ id: 'tamron-1650-x', brand: 'Tamron', model: '16-50mm F2.8 Di III A (B091, X)', mount: 'Fujifilm X', coverage: 'APS-C', focal: '16-50mm', aperture: 'f/2.8', filterThread: 55, weight: 305 }),
+  lens({ id: 'viltrox-35f14pro-z', brand: 'Viltrox', model: 'AF 35mm F1.4 Pro (Z)', mount: 'Nikon Z', coverage: 'Full Frame', focal: '35mm', aperture: 'f/1.4', filterThread: 77, weight: 780 }),
+  lens({ id: 'viltrox-35f14pro-e', brand: 'Viltrox', model: 'AF 35mm F1.4 Pro (E)', mount: 'Sony E', coverage: 'Full Frame', focal: '35mm', aperture: 'f/1.4', filterThread: 77, weight: 760 }),
+  lens({ id: 'sigma-50120-e', brand: 'Sigma', model: '50-120mm F2.8 DC OS | Contemporary (E)', mount: 'Sony E', coverage: 'APS-C', focal: '50-120mm', aperture: 'f/2.8', stabilized: true, weight: 390 }),
+  lens({ id: 'sigma-50120-x', brand: 'Sigma', model: '50-120mm F2.8 DC OS | Contemporary (X)', mount: 'Fujifilm X', coverage: 'APS-C', focal: '50-120mm', aperture: 'f/2.8', stabilized: true }),
+  lens({ id: 'sigma-50120-rf', brand: 'Sigma', model: '50-120mm F2.8 DC OS | Contemporary (RF)', mount: 'Canon RF', coverage: 'APS-C', focal: '50-120mm', aperture: 'f/2.8', stabilized: true }),
+  lens({ id: 'sigma-16300-z', brand: 'Sigma', model: '16-300mm F3.5-6.7 DC OS | Contemporary (Z)', mount: 'Nikon Z', coverage: 'APS-C', focal: '16-300mm', aperture: 'f/3.5-6.7', stabilized: true }),
 ];
 
 // Adapter AF support levels:

@@ -2,6 +2,128 @@
   "version": 1,
   "months": [
     {
+      "id": "2026-10",
+      "title": "October 2026",
+      "summary": "A lens month, and finally a big one for Nikon. Nikon released the NIKKOR Z 120-300mm f/2.8 TC VR S, the first constant f/2.8 telephoto zoom with a built-in 1.4x teleconverter, aimed squarely at sports. Third-party makers kept filling out Z mount: Tamron brought its 20-40mm f/2.8 and a new 16-50mm f/2.8 APS-C zoom, Viltrox finished its f/1.4 Pro trio with a 35mm, and Sigma ported its 16-300mm superzoom. Sigma also announced the fp2, a tiny full-frame L-mount camera with a partially stacked sensor and 6K open gate, plus a compact 50-120mm f/2.8 for APS-C and an all-metal 50mm f/1.4 CL. Sony, Canon and Panasonic were quiet, and Fujifilm raised its prices in Japan instead of launching anything.",
+      "forYou": "The 120-300mm f/2.8 TC is the one to watch for sports on your Z7 II: it covers your Sigma 70-200 and goes to 420mm, but at $13,997 it's a rental for most jobs. The Viltrox 35mm f/1.4 Pro ($829) and Tamron 20-40mm f/2.8 are native Z lenses that would fill the wide gap below your 24-70 without the FTZ.",
+      "items": [
+        {
+          "date": "2026-10-28",
+          "brand": "Nikon",
+          "kind": "Lens",
+          "name": "NIKKOR Z 120-300mm f/2.8 TC VR S",
+          "catalogId": "nikon-z120300tc",
+          "highlights": [
+            "Built-in 1.4x teleconverter takes it to 420mm f/4 with one lever",
+            "2,735 g, about 515 g lighter than the F-mount 120-300mm",
+            "6.5-stop VR with Synchro VR bodies, 112mm front filters"
+          ],
+          "price": "$13,996.99",
+          "availability": "Mid-November 2026",
+          "source": "https://www.newsshooter.com/2026/10/28/nikon-nikkor-z-120-300mm-f-2-8-tc-vr-s/"
+        },
+        {
+          "date": "2026-10-23",
+          "brand": "Sigma",
+          "kind": "Camera",
+          "name": "Sigma fp2",
+          "catalogId": "sigma-fp2",
+          "highlights": [
+            "24.6MP partially stacked full-frame sensor in a 446 g L-mount body",
+            "6K open gate up to 60p, ProRes RAW to an external SSD, 70 GB built in",
+            "No IBIS; single SD slot"
+          ],
+          "price": "$2,199 body",
+          "availability": "Ships November 11, 2026",
+          "source": "https://press.sigmaphoto.com/"
+        },
+        {
+          "date": "2026-10-23",
+          "brand": "Sigma",
+          "kind": "Lens",
+          "name": "50mm F1.4 CL DG | Contemporary",
+          "highlights": [
+            "New all-metal compact prime line for Sony E and L-Mount",
+            "RDD autofocus motor, aperture ring, distance and depth-of-field scales"
+          ],
+          "price": "Not announced",
+          "availability": "Early spring 2027",
+          "source": "https://press.sigmaphoto.com/product/10/sigma-announces-50mm-f1-4-cl-dg-contemporary/",
+          "note": "Not in the catalog yet: weight and filter size not published."
+        },
+        {
+          "date": "2026-10-29",
+          "brand": "Viltrox",
+          "kind": "Lens",
+          "name": "AF 35mm F1.4 Pro",
+          "catalogId": "viltrox-35f14pro-z",
+          "highlights": [
+            "Nikon Z (780 g) and Sony E (760 g), 77mm filters",
+            "Weather sealed, aperture ring with de-click, Hyper VCM autofocus"
+          ],
+          "price": "$829 ($663 launch price)",
+          "availability": "Now, Viltrox store and B&H",
+          "source": "https://www.digitalcameraworld.com/cameras/lenses/viltrox-launches-new-af-35mm-f-1-4-pro-prime-lens-for-nikon-z-and-sony-e-mount-mirrorless-cameras"
+        },
+        {
+          "date": "2026-10-14",
+          "brand": "Tamron",
+          "kind": "Lens",
+          "name": "16-50mm F2.8 Di III A (Model B091)",
+          "catalogId": "tamron-1650-z",
+          "highlights": [
+            "Constant f/2.8 APS-C standard zoom for E, Z, RF and X, about 305-315 g",
+            "55mm filters, 0.15 m close focus at 16mm"
+          ],
+          "price": "Not announced",
+          "availability": "E and RF Oct 29; Z Nov 19; X Dec 17, 2026",
+          "source": "https://en.pronews.com/news/20261015132916395.html"
+        },
+        {
+          "date": "2026-10-08",
+          "brand": "Tamron",
+          "kind": "Lens",
+          "name": "20-40mm F/2.8 Di III VXD for Nikon Z",
+          "catalogId": "tamron-2040-z",
+          "highlights": [
+            "The compact 20-40mm f/2.8 comes to Z mount, 380 g, 67mm filters",
+            "0.17 m close focus at 20mm, VXD linear AF"
+          ],
+          "price": "Not stated",
+          "availability": "October 22, 2026",
+          "source": "https://nikonrumors.com/2026/10/08/tamron-20-40mm-f-2-8-di-iii-vxd-model-a062-lens-for-nikon-z-mount-announced.aspx/"
+        },
+        {
+          "date": "2026-10-08",
+          "brand": "Sigma",
+          "kind": "Lens",
+          "name": "50-120mm F2.8 DC OS | Contemporary",
+          "catalogId": "sigma-50120-e",
+          "highlights": [
+            "Constant f/2.8 APS-C tele zoom (75-180mm equivalent) for E, X and RF, about 390 g",
+            "OS2 stabilization (6.5 stops wide), aperture ring"
+          ],
+          "price": "$799",
+          "availability": "October 22, 2026",
+          "source": "https://press.sigmaphoto.com/product/10/sigma-announces-50-120mm-f2-8-dc-os-contemporary/"
+        },
+        {
+          "date": "2026-10-08",
+          "brand": "Sigma",
+          "kind": "Lens",
+          "name": "16-300mm F3.5-6.7 DC OS | Contemporary for Nikon Z",
+          "catalogId": "sigma-16300-z",
+          "highlights": [
+            "18.8x APS-C superzoom now on Z mount",
+            "1:2 close-up, 6-stop stabilization"
+          ],
+          "price": "$769",
+          "availability": "November 5, 2026",
+          "source": "https://press.sigmaphoto.com/product/10/sigma-announces-release-of-16-300mm-f3-5-6-7-dc-os-contemporary-lens-for-nikon-z-mount/"
+        }
+      ]
+    },
+    {
       "id": "2026-09",
       "title": "September 2026",
       "summary": "A big month for telephoto lenses and a quiet one for Nikon. Sony shrank the super-telephoto with a sub-1 kg 400mm f/4.5 and 600mm f/6.3, and added its first full-frame fisheye zoom. Canon finally put IBIS in its cheapest full-frame body with the EOS R8 Mark II. Fujifilm gave X shooters a 400mm f/4.5 prime, and Sigma filled out its E and L lineups with an 85mm f/1.2 and a wide 20-60mm walkaround zoom. OM System revived the PEN name. Nikon only announced products in development: nine cinema lenses built with RED, and firmware 2.0 for the ZR.",
