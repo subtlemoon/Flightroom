@@ -256,6 +256,7 @@ function OverlaySettings({ overlay, setOverlay }) {
     <div className="mask-overlay-set">
       <div className="dev-group-title">Overlay</div>
       <label className="dev-check"><input type="checkbox" checked={overlay.show} onChange={(e) => setOverlay({ show: e.target.checked })} />Also show on the main photo (O)</label>
+      <label className="dev-check"><input type="checkbox" checked={!overlay.pinsHidden} onChange={(e) => setOverlay({ pinsHidden: !e.target.checked })} />Show outlines and pins on the photo (H)</label>
       <div className="dev-line dev-wb"><span className="muted">Style</span>
         <Dropdown value={overlay.style} options={OVERLAY_STYLES.map(([value, label]) => ({ value, label }))} onChange={(v) => setOverlay({ style: v })} />
       </div>
@@ -482,7 +483,7 @@ export function MaskAdjust({ m, part, acts, brush, setBrush, options, setOptions
  * Draws and edits the selected part on the photo. toOri / toCss convert
  * between stage css px and oriented photo px.
  */
-export function MaskOverlay({ geo, toOri, toCss, part, onPart, brush }) {
+export function MaskOverlay({ geo, toOri, toCss, part, onPart, brush, hidden }) {
   const svg = useRef();
   const drag = useRef(null);
   const [cursor, setCursor] = useState(null); // [x, y, alt]
@@ -599,7 +600,7 @@ export function MaskOverlay({ geo, toOri, toCss, part, onPart, brush }) {
   return (
     <svg ref={svg} className={`mask-stage${part.type === 'brush' ? ' brush' : ''}`} onPointerDown={down} onPointerMove={move} onPointerUp={up}
       onPointerLeave={() => setCursor(null)}>
-      {shapes}
+      {!hidden && shapes}
       {part.type === 'brush' && cursor && (
         <g className={`mask-cursor${erase ? ' erase' : ''}`} transform={`translate(${cursor[0]} ${cursor[1]})`}>
           <circle r={r} />
