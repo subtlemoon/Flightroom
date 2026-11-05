@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Counts, GroupDot, Icon, Modal, Status, LEVEL_META } from './ui.jsx';
+import { confirmAction, openMenu } from './menu.jsx';
 import { GearCard, GearPicker } from './gear.jsx';
 import { applyResolved, checkKey, checkPreset, LEVELS } from '../engine/compat.js';
 import { listKey } from '../store.js';
@@ -8,11 +9,11 @@ export function usePresetResult(preset, gearById, settings, gear) {
   return useMemo(() => applyResolved(checkPreset(preset, gearById, settings, gear), preset.resolved), [preset, gearById, settings, gear]);
 }
 
-function PresetCard({ preset, gearById, settings, gear, onOpen }) {
+function PresetCard({ preset, gearById, settings, gear, onOpen, onMenu }) {
   const r = usePresetResult(preset, gearById, settings, gear);
   const items = [...preset.bodyIds, ...preset.lensIds].map((id) => gearById[id]).filter(Boolean);
   return (
-    <button className={`preset-card lvl-${r.overall}`} onClick={onOpen}>
+    <button className={`preset-card lvl-${r.overall}`} onClick={onOpen} onContextMenu={onMenu}>
       <div className="preset-top">
         <h3>{preset.name}</h3>
         <Status level={r.overall} small text={LEVEL_META[r.overall].short} />
@@ -66,7 +67,14 @@ export function GroupView({ group, store, onOpenPreset }) {
       </header>
       <div className="preset-grid">
         {group.presets.map((p) => (
-          <PresetCard key={p.id} preset={p} gearById={gearById} gear={gear} settings={state.settings} onOpen={() => onOpenPreset(p.id)} />
+          <PresetCard key={p.id} preset={p} gearById={gearById} gear={gear} settings={state.settings} onOpen={() => onOpenPreset(p.id)}
+            onMenu={(e) => openMenu(e, [
+              { heading: p.name },
+              { label: 'Open', icon: 'grid', onClick: () => onOpenPreset(p.id) },
+              { label: 'Duplicate', icon: 'copy', onClick: () => actions.duplicatePreset(group.id, p.id) },
+              '-',
+              { label: 'Delete preset…', icon: 'trash', danger: true, onClick: () => confirmAction({ title: `Delete ${p.name}?`, text: 'The preset is deleted. The gear in it stays in My Gear.', ok: 'Delete', onOk: () => actions.deletePreset(group.id, p.id) }) },
+            ])} />
         ))}
         <button className="preset-card add" onClick={() => setNaming(true)}><Icon name="plus" size={28} /><span>New preset</span></button>
       </div>

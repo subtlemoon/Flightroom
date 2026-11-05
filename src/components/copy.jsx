@@ -1,5 +1,6 @@
 // Copy Settings (Ctrl+C), its checklist of what to copy, and Develop presets.
 import { useState } from 'react';
+import { openMenu } from './menu.jsx';
 import { Icon, Modal } from './ui.jsx';
 import { COPY_GROUPS, DEFAULT_GROUPS, describe } from '../develop/copy.js';
 
@@ -53,7 +54,14 @@ export const BUILT_IN = [
 /** Presets in the left panel: hover to preview, click to apply. */
 export function PresetPanel({ presets, open, setOpen, disabled, onApply, onHover, onNew, onDelete }) {
   const row = (p, mine) => (
-    <div key={p.id} className="preset-row" title={describe(p.groups)}>
+    <div key={p.id} className="preset-row" title={describe(p.groups)}
+      onContextMenu={(e) => openMenu(e, [
+        { heading: p.name },
+        { label: 'Apply', icon: 'check', disabled, onClick: () => onApply(p) },
+        { label: 'New preset from this photo…', icon: 'plus', disabled, onClick: onNew },
+        mine && '-',
+        mine && { label: 'Delete preset', icon: 'trash', danger: true, onClick: () => onDelete(p) },
+      ])}>
       <button className="preset-name grow" disabled={disabled} onClick={() => onApply(p)}
         onMouseEnter={() => onHover(p)} onMouseLeave={() => onHover(null)}>{p.name}</button>
       {mine && <button className="icon-btn tiny" title="Delete preset" onClick={() => onDelete(p)}><Icon name="x" size={11} /></button>}

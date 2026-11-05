@@ -3,6 +3,7 @@
 // Navigator), the shapes are drawn on the photo, and the selected mask's
 // sliders take over the right panel.
 import { useEffect, useRef, useState } from 'react';
+import { openMenu } from './menu.jsx';
 import { Dropdown, Icon } from './ui.jsx';
 import { Slider } from './slider.jsx';
 import { CurveEditor } from './curve.jsx';
@@ -70,10 +71,10 @@ export function maskActions(s, update, sel, setSel, options = MASK_OPTIONS_DEFAU
       if (sel?.part === pid) setSel({ mask: id, part: m.parts.find((p) => p.id !== pid).id });
     },
     remove,
-    duplicate(id) {
+    duplicate(id, patch = {}) {
       const m = masks.find((x) => x.id === id);
       if (!m || masks.length >= MAX_MASKS) return;
-      const copy = { ...m, id: newId(), name: `${m.name} copy`, parts: m.parts.map((p) => ({ ...p, id: newId() })) };
+      const copy = { ...m, id: newId(), name: `${m.name} copy`, parts: m.parts.map((p) => ({ ...p, id: newId() })), ...patch };
       setMasks((ms) => { const i = ms.findIndex((x) => x.id === id); return [...ms.slice(0, i + 1), copy, ...ms.slice(i + 1)]; });
       setSel({ mask: copy.id, part: copy.parts[0].id });
     },
@@ -151,7 +152,22 @@ function MaskRow({ m, size, active, selPart, setSel, acts, menu, setMenu, full, 
   );
   return (
     <div className={`mask-item${active ? ' on' : ''}${m.hidden ? ' off' : ''}`}>
-      <div className="mask-row" onClick={() => setSel(active ? null : { mask: m.id, part: m.parts[0]?.id })}>
+      <div className="mask-row" onClick={() => setSel(active ? null : { mask: m.id, part: m.parts[0]?.id })}
+        onContextMenu={(e) => openMenu(e, [
+          { heading: m.name },
+          { label: 'Rename…', icon: 'edit', onClick: () => setRenaming(true) },
+          !full && { label: 'Duplicate', icon: 'copy', onClick: () => acts.duplicate(m.id) },
+          !full && { label: 'Duplicate and invert', icon: 'invert', onClick: () => acts.duplicate(m.id, { invert: !m.invert, name: `${m.name} inverted` }) },
+          '-',
+          { label: 'Invert', checked: !!m.invert, onClick: () => acts.change(m.id, { invert: !m.invert }) },
+          { label: m.hidden ? 'Show mask' : 'Hide mask', icon: m.hidden ? 'eye' : 'eyeOff', onClick: () => acts.change(m.id, { hidden: !m.hidden }) },
+          { label: 'Reset mask sliders', icon: 'reset', onClick: () => acts.change(m.id, { adj: {}, tint: null, point: null, curve: null, off: {} }) },
+          '-',
+          { label: 'Add to mask', icon: 'plus', onClick: () => { setSel({ mask: m.id, part: m.parts[0]?.id }); setMenu({ mask: m.id, mode: 'add' }); } },
+          { label: 'Subtract from mask', icon: 'minus', onClick: () => { setSel({ mask: m.id, part: m.parts[0]?.id }); setMenu({ mask: m.id, mode: 'subtract' }); } },
+          '-',
+          { label: 'Delete mask', icon: 'trash', danger: true, hint: active ? 'Del' : undefined, onClick: () => acts.remove(m.id) },
+        ])}>
         <MaskThumb m={m} size={size} />
         {renaming ? (
           <input className="mask-rename" autoFocus defaultValue={m.name} onClick={(e) => e.stopPropagation()}
@@ -170,7 +186,14 @@ function MaskRow({ m, size, active, selPart, setSel, acts, menu, setMenu, full, 
       {active && (
         <div className="mask-parts">
           {m.parts.map((p) => (
-            <div key={p.id} className={`mask-part${selPart === p.id ? ' on' : ''}`} onClick={() => setSel({ mask: m.id, part: p.id })}>
+            <div key={p.id} className={`mask-part${selPart === p.id ? ' on' : ''}`} onClick={() => setSel({ mask: m.id, part: p.id })}
+              onContextMenu={(e) => openMenu(e, [
+                m.parts.length > 1 && p.mode !== 'intersect' && { label: p.mode === 'subtract' ? 'Change to Add' : 'Change to Subtract', onClick: () => acts.changePart(m.id, p.id, { mode: p.mode === 'subtract' ? 'add' : 'subtract' }) },
+                p.type === 'radial' && { label: 'Outside the shape', checked: !!p.invert, onClick: () => acts.changePart(m.id, p.id, { invert: !p.invert }) },
+                { label: 'Duplicate', icon: 'copy', onClick: () => acts.addPartObj(m.id, { ...p, id: newId() }) },
+                '-',
+                { label: m.parts.length > 1 ? 'Delete' : 'Delete mask', icon: 'trash', danger: true, onClick: () => acts.removePart(m.id, p.id) },
+              ])}>
               <Icon name={p.type === 'ai' ? 'ai' : p.type} size={14} />
               <span className="grow">{p.type === 'ai' ? aiName(p.kind.split('+')[0]) + (p.kind.includes('+') ? ' +' : '') : PART_LABEL[p.type]}{p.placed === false && <span className="muted"> · drag on the photo</span>}</span>
               {m.parts.length > 1 && <span className={`mask-mode ${p.mode}`}>{MODE_LABEL[p.mode]}</span>}

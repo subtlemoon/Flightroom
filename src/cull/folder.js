@@ -97,3 +97,32 @@ export function usePosition(actions, folder, pos) {
   }, [folder, pos]);
   useEffect(() => () => { if (last.current) actions.setCullPosition(...last.current); }, []);
 }
+
+/**
+ * Photos selected in the filmstrip along with the current one (Ctrl+click adds
+ * or removes one, Shift+click a run), as Culling and Develop share it. Moving
+ * to a photo outside the selection, or to another folder, ends it.
+ * selectInStrip(i, event) is the filmstrip's click; a plain click goes to the photo.
+ */
+export function useStripPick(photos, index, go, folder) {
+  const [picked, setPicked] = useState(() => new Set());
+  const photo = photos[index];
+  useEffect(() => { if (photo && picked.size && !picked.has(photo.id)) setPicked(new Set()); }, [photo?.id]);
+  useEffect(() => { setPicked(new Set()); }, [folder]);
+  const selectInStrip = (i, e) => {
+    const p = photos[i];
+    if (!p) return;
+    if (e?.ctrlKey || e?.metaKey) {
+      setPicked((old) => { const n = new Set(old); if (photo) n.add(photo.id); n.has(p.id) && p.id !== photo?.id ? n.delete(p.id) : n.add(p.id); return n; });
+      return;
+    }
+    if (e?.shiftKey && photo) {
+      const [a, b] = [Math.min(index, i), Math.max(index, i)];
+      setPicked(new Set(photos.slice(a, b + 1).map((x) => x.id)));
+      return;
+    }
+    setPicked(new Set());
+    go(i);
+  };
+  return { picked, setPicked, selectInStrip };
+}

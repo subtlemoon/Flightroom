@@ -8,7 +8,7 @@ import { screenColorOn, screenProfile, setScreenColor } from '../develop/icc.js'
 import { DEFAULT_RATING_KEYS, DEFAULT_ZOOM_KEY, RESERVED_KEYS, ZOOM_LEVELS, assignKey, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zoomLevel } from '../cull/keys.js';
 
 export function MyGearView({ store, onOpenGear, onBrowse, onCustom }) {
-  const { gear, state } = store;
+  const { gear, state, actions } = store;
   const mine = gear.filter((g) => state.owned.includes(g.id));
   const { filtered, bar } = useGearFilter(mine);
   const counts = { body: 0, lens: 0, accessory: 0 };
@@ -34,7 +34,7 @@ export function MyGearView({ store, onOpenGear, onBrowse, onCustom }) {
       ) : (
         <>
           {bar}
-          <div className="gear-grid">{filtered.map((g) => <GearCard key={g.id} item={g} owned onOpen={onOpenGear} />)}</div>
+          <div className="gear-grid">{filtered.map((g) => <GearCard key={g.id} item={g} owned onOpen={onOpenGear} onToggleOwned={actions.toggleOwned} />)}</div>
         </>
       )}
     </div>
@@ -59,7 +59,7 @@ export function CatalogView({ store, onOpenGear, onCustom }) {
         {filtered.map((g) => {
           const owned = state.owned.includes(g.id);
           return (
-            <GearCard key={g.id} item={g} owned={owned} onOpen={onOpenGear}
+            <GearCard key={g.id} item={g} owned={owned} onOpen={onOpenGear} onToggleOwned={actions.toggleOwned}
               action={<button className="btn btn-sm" onClick={() => actions.toggleOwned(g.id)}>
                 <Icon name={owned ? 'check' : 'plus'} size={14} />{owned ? 'Owned' : 'Add'}</button>} />
           );

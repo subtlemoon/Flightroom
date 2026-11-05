@@ -2,6 +2,7 @@
 import { memo, useState } from 'react';
 import { formatValue } from '../develop/params.js';
 import { evalNumber } from '../develop/expr.js';
+import { openMenu } from './menu.jsx';
 
 // Slider track position for a value (temperature uses a log scale, like Lightroom).
 const toPos = (sl, v) => (sl.log ? (Math.log(v) - Math.log(sl.min)) / (Math.log(sl.max) - Math.log(sl.min)) : (v - sl.min) / (sl.max - sl.min));
@@ -23,7 +24,15 @@ export const Slider = memo(function Slider({ sl, value, def, onSet, color }) {
     setText(null);
   };
   return (
-    <div className="dev-slider" onDoubleClick={(e) => { if (!e.target.closest('input[type=text]')) onChange(def ?? 0); }} title="Double-click to reset">
+    <div className="dev-slider" onDoubleClick={(e) => { if (!e.target.closest('input[type=text]')) onChange(def ?? 0); }} title="Double-click to reset"
+      onContextMenu={(e) => {
+        if (e.target.closest('input[type=text]')) return;
+        openMenu(e, [
+          { heading: `${sl.label}: ${formatValue(sl, value)}` },
+          { label: `Reset ${sl.label}`, icon: 'reset', hint: 'Double-click', disabled: (value ?? def ?? 0) === (def ?? 0), onClick: () => onChange(def ?? 0) },
+          { label: 'Copy value', icon: 'copy', onClick: () => navigator.clipboard?.writeText(formatValue(sl, value)).catch(() => {}) },
+        ]);
+      }}>
       <span className="dev-slider-label">{sl.label}</span>
       <input type="text" className="dev-slider-value" value={text ?? formatValue(sl, value)} onChange={(e) => setText(e.target.value)}
         onBlur={commitText} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { setText(null); e.currentTarget.blur(); } }} />

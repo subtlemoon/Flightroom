@@ -46,11 +46,6 @@ export function shoulder(rgb) {
   return [shoulder1(rgb[0]), shoulder1(rgb[1]), shoulder1(rgb[2])];
 }
 
-export function srgbEncode1(x) {
-  const v = Math.max(0, x);
-  return v < 0.0031308 ? v * 12.92 : 1.055 * v ** (1 / 2.4) - 0.055;
-}
-
 // --- 1. Sigmoid (modified log-logistic around middle gray 0.18) -------------
 
 /**

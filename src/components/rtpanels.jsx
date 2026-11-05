@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Dropdown, Icon } from './ui.jsx';
+import { fromMenuBar, menuAt, openMenu } from './menu.jsx';
 import { Slider } from './slider.jsx';
 import { CurveEditor } from './curve.jsx';
 import { BLEND_BREAKS, BLEND_MODES, PAINTABLE, histStats, histogramOf, inGroup, isIdent, kindOf, newLayer, nextName, tfPx } from '../develop/retouch.js';
@@ -412,6 +413,24 @@ function LayersPanel({ rx, onDevelop }) {
   });
   walk(layerTree(layers), 0);
   const fillSl = sl('fill', 'Fill', 0, 100), opSl = sl('opacity', 'Opacity', 0, 100);
+  // Right-click on a layer, as in Photoshop: it becomes the active layer, then
+  // its menu (the Layer menu's commands, read once that has happened).
+  const rxNow = useRef(rx);
+  rxNow.current = rx;
+  const layerMenu = (e, l) => {
+    const at = menuAt(e);
+    if (rx.active !== l.id) rx.setActive(l.id);
+    requestAnimationFrame(() => openMenu(at, [
+      { heading: l.name },
+      ...fromMenuBar(rxNow.current.menus, [
+        'Layer/Layer Style/Blending Options…', 'Layer/Duplicate Layer…', ['Layer/Delete/Layer', 'Delete Layer'], 'Layer/Rename Layer…', '-',
+        'Layer/Layer Mask', 'Layer/Create Clipping Mask', 'Layer/Release Clipping Mask', '-',
+        'Layer/Layer Style/Copy Layer Style', 'Layer/Layer Style/Paste Layer Style', 'Layer/Layer Style/Clear Layer Style', 'Layer/Smart Filter/Clear Smart Filters', '-',
+        'Layer/Group Layers', 'Layer/Ungroup Layers', 'Layer/Hide Layers', 'Layer/Show Layers', 'Layer/Lock Layer', 'Layer/Unlock Layer', 'Layer/Arrange', '-',
+        'Layer/Merge Down', 'Layer/Stamp Visible',
+      ]),
+    ]));
+  };
   return (
     <div className="rt-layers-panel">
       <div className="rt-layer-props">
@@ -438,7 +457,8 @@ function LayersPanel({ rx, onDevelop }) {
                 onDragLeave={() => setOver(null)}
                 onDrop={(e) => { e.preventDefault(); if (dragId.current) acts.moveTo(dragId.current, l.id, over?.into); dragId.current = null; setOver(null); }}
                 onDragEnd={() => { dragId.current = null; setOver(null); }}
-                onClick={() => rx.setActive(l.id)} onDoubleClick={() => l.kind !== 'group' && rx.setDialog({ type: 'style', id: l.id, tab: 'blend' })}>
+                onClick={() => rx.setActive(l.id)} onDoubleClick={() => l.kind !== 'group' && rx.setDialog({ type: 'style', id: l.id, tab: 'blend' })}
+                onContextMenu={(e) => { if (!e.target.closest('input')) layerMenu(e, l); }}>
                 <button className="icon-btn tiny" title={l.hidden ? 'Show layer' : 'Hide layer'} onClick={(e) => { e.stopPropagation(); acts.change(l.id, { hidden: !l.hidden }, l.hidden ? 'Show Layer' : 'Hide Layer'); }}>
                   <Icon name={l.hidden ? 'eyeOff' : 'eye'} size={13} />
                 </button>

@@ -136,8 +136,9 @@ impl Photos {
         }
     }
 
+    /// The file behind a photo id (a virtual copy's is its photo's), if its folder is open.
     pub fn allowed(&self, p: &str) -> Option<PathBuf> {
-        let path = clean(p);
+        let path = clean(photo_file(p));
         let dir = path.parent()?.to_path_buf();
         self.folders.lock().unwrap().contains(&dir).then_some(path)
     }
@@ -180,6 +181,52 @@ impl Photos {
         h.update(format!("{}|{}", p.to_string_lossy(), key).as_bytes());
         self.thumbs.join(format!("{}.jpg", hex::encode(h.finalize())))
     }
+
+    /// Where the thumbnail of a photo as developed is kept: named after the
+    /// photo (or virtual copy) and its sidecar as it is now, so an edit made
+    /// anywhere else (Lightroom, a paste) leaves it unused until it's made again.
+    fn developed_path(&self, id: &str, sidecar: &Path) -> PathBuf {
+        let key = file_key(sidecar).unwrap_or_else(|_| "none".into());
+        let mut h = Sha1::new();
+        h.update(format!("developed|{id}|{key}").as_bytes());
+        self.thumbs.join(format!("d{}.jpg", hex::encode(h.finalize())))
+    }
+}
+
+// --- virtual copies ------------------------------------------------------------
+
+/// Virtual copies, as in Lightroom: more versions of one photo, each with its
+/// own develop settings and stars, kept in its own sidecar next to the photo,
+/// "<name> [Copy N].xmp" (Lightroom ignores it: no photo has that name). A
+/// copy's id is the photo's path with this and its number after it.
+pub const COPY_TAG: &str = "|copy-";
+
+/// The photo file a photo id stands for (a virtual copy's id has COPY_TAG and its number on the end).
+pub fn photo_file(id: &str) -> &str {
+    match id.rfind(COPY_TAG) {
+        Some(i) if id[i + COPY_TAG.len()..].parse::<u32>().is_ok() => &id[..i],
+        _ => id,
+    }
+}
+
+fn copy_sidecar_name(base: &str, n: u32) -> String {
+    format!("{base} [Copy {n}].xmp")
+}
+
+/// "JWL_7345 [Copy 2].xmp" -> ("JWL_7345", 2).
+fn parse_copy_sidecar(name: &str) -> Option<(&str, u32)> {
+    if lib::ext_of(name) != ".xmp" {
+        return None;
+    }
+    let stem = name[..name.len() - 4].strip_suffix(']')?;
+    let i = stem.rfind(" [Copy ")?;
+    let n = stem[i + 7..].parse::<u32>().ok().filter(|&n| n > 0)?;
+    Some((&stem[..i], n))
+}
+
+/// A sidecar with develop settings in it (Lightroom's or Flightroom's), not just stars.
+fn has_develop(text: &str) -> bool {
+    text.contains("crs:") || text.contains("fr:")
 }
 
 /// Reads an embedded JPEG. Its offset and length come from the photo's own
@@ -324,6 +371,12 @@ pub fn jpeg_gray(jpg: &[u8], x: usize, y: usize, w: usize, h: usize) -> Option<V
 //                          auto-rating: the window never has to hold the whole picture.
 pub fn handle_photo(app: &AppHandle, kind: &str, q: &HashMap<String, String>) -> HttpResponse {
     let photos = app.state::<Photos>();
+    if kind == "developed" {
+        let (Some(id), Some(sidecar)) = (q.get("p").filter(|p| photos.allowed(p).is_some()), q.get("s").and_then(|s| photos.allowed(s))) else {
+            return respond(403, "text/plain", Vec::new());
+        };
+        return fs::read(photos.developed_path(id, &sidecar)).map_or_else(|_| not_found(), |b| respond(200, "image/jpeg", b));
+    }
     let Some(p) = q.get("p").and_then(|p| photos.allowed(p)) else { return respond(403, "text/plain", Vec::new()) };
     let Ok((key, info)) = photos.info(&p) else { return not_found() };
     if kind == "preview" {
@@ -364,6 +417,11 @@ pub struct Photo {
     sidecar: String,
     rating_in: &'static str,
     rating: Option<i32>,
+    /// The sidecar has develop settings (the filmstrip then shows the photo as developed).
+    developed: bool,
+    /// A virtual copy's number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    copy: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -420,17 +478,44 @@ pub async fn cull_scan(app: AppHandle, folder: String, subfolders: Option<bool>)
         for (dir, names) in scan_dirs(&root, subfolders.unwrap_or(false))? {
             app.state::<Photos>().folders.lock().unwrap().insert(dir.clone());
             let join = |n: &str| dir.join(n).to_string_lossy().to_string();
+            let sidecar = |n: &str| read_sidecar(&dir.join(n)).ok().flatten();
+            let mut copies: HashMap<String, Vec<(u32, &String)>> = HashMap::new();
+            for n in &names {
+                if let Some((base, k)) = parse_copy_sidecar(n) {
+                    copies.entry(base.to_lowercase()).or_default().push((k, n));
+                }
+            }
             for g in lib::group_photos(&names) {
-                let rating = g.sidecar.as_ref().and_then(|s| read_sidecar(&dir.join(s)).ok().flatten()).and_then(|x| lib::read_rating(&x));
+                let text = g.sidecar.as_deref().and_then(sidecar);
+                let id = join(&g.file);
                 photos.push(Photo {
-                    id: join(&g.file),
+                    id: id.clone(),
                     name: g.file.clone(),
                     raw: g.raw.as_deref().map(join),
                     jpeg: g.jpeg.as_deref().map(join),
                     sidecar: join(g.sidecar.as_deref().unwrap_or(&format!("{}.xmp", g.base))),
                     rating_in: if g.rating_in_file { "file" } else { "sidecar" },
-                    rating,
+                    rating: text.as_deref().and_then(lib::read_rating),
+                    developed: text.as_deref().is_some_and(has_develop),
+                    copy: None,
                 });
+                // Its virtual copies right after it (only RAW files are developed).
+                let Some(list) = g.raw.as_ref().and_then(|_| copies.get_mut(&g.base.to_lowercase())) else { continue };
+                list.sort();
+                for &(k, name) in list.iter() {
+                    let text = sidecar(name);
+                    photos.push(Photo {
+                        id: format!("{id}{COPY_TAG}{k}"),
+                        name: g.file.clone(),
+                        raw: g.raw.as_deref().map(join),
+                        jpeg: g.jpeg.as_deref().map(join),
+                        sidecar: join(name),
+                        rating_in: "sidecar",
+                        rating: text.as_deref().and_then(lib::read_rating),
+                        developed: text.as_deref().is_some_and(has_develop),
+                        copy: Some(k),
+                    });
+                }
             }
         }
         Ok(Scan { folder: root.to_string_lossy().to_string(), photos })
@@ -547,6 +632,136 @@ pub async fn cull_save_thumb(app: AppHandle, request: tauri::ipc::Request<'_>) -
     .map_err(|e| e.to_string())?
 }
 
+/// Keeps a thumbnail of a photo as developed (body = JPEG bytes), for its sidecar as it is now.
+#[tauri::command]
+pub async fn cull_save_developed(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<bool, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("expected bytes".into()) };
+    let header = |k: &str| request.headers().get(k).and_then(|v| v.to_str().ok()).map(|s| percent_encoding::percent_decode_str(s).decode_utf8_lossy().to_string());
+    let (id, sidecar) = (header("x-id"), header("x-sidecar"));
+    let bytes = bytes.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let photos = app.state::<Photos>();
+        let (Some(id), Some(sidecar)) = (id.filter(|id| photos.allowed(id).is_some()), sidecar.and_then(|s| photos.allowed(&s))) else { return Ok(false) };
+        fs::create_dir_all(&photos.thumbs).map_err(|e| e.to_string())?;
+        write_cache(&photos.developed_path(&id, &sidecar), &bytes).map_err(|e| e.to_string())?;
+        prune_developed(&photos.thumbs);
+        Ok(true)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+const DEVELOPED_KEPT: usize = 4000;
+
+/// Old developed thumbnails (edited since, or of photos long gone) go, a few hundred at a time.
+fn prune_developed(dir: &Path) {
+    static SAVED: AtomicU64 = AtomicU64::new(0);
+    if SAVED.fetch_add(1, Ordering::Relaxed) % 100 != 99 {
+        return;
+    }
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = rd
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with('d'))
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .collect();
+    if files.len() <= DEVELOPED_KEPT {
+        return;
+    }
+    files.sort();
+    for (_, p) in &files[..files.len() - DEVELOPED_KEPT * 3 / 4] {
+        let _ = fs::remove_file(p);
+    }
+}
+
+/// Of these photos ([id, sidecar]), the ones with no developed thumbnail for their sidecar as it is now.
+#[tauri::command]
+pub async fn cull_developed_missing(app: AppHandle, items: Vec<(String, String)>) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let photos = app.state::<Photos>();
+        items
+            .into_iter()
+            .filter(|(id, s)| photos.allowed(id).is_some() && photos.allowed(s).is_some_and(|s| !photos.developed_path(id, &s).exists()))
+            .map(|(id, _)| id)
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopyArgs {
+    id: String,
+    sidecar: String,
+}
+
+/// Makes a virtual copy of a photo (or of a copy): a new sidecar with the same
+/// settings and stars, numbered after the copies already there. Answers the new photo.
+#[tauri::command]
+pub async fn cull_virtual_copy(app: AppHandle, args: CopyArgs) -> Result<Photo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let photos = app.state::<Photos>();
+        let file = photos.allowed(&args.id).ok_or("This photo's folder isn't open")?;
+        let source = photos.allowed(&args.sidecar).filter(|s| lib::ext_of(&s.to_string_lossy()) == ".xmp").ok_or("Invalid sidecar")?;
+        let dir = file.parent().ok_or("Invalid photo")?;
+        let name = file.file_name().map(|n| n.to_string_lossy().to_string()).ok_or("Invalid photo")?;
+        let base = lib::base_of(&name).to_string();
+        let taken = fs::read_dir(dir)
+            .map_err(|e| e.to_string())?
+            .flatten()
+            .filter_map(|e| {
+                let n = e.file_name().to_string_lossy().to_string();
+                parse_copy_sidecar(&n).filter(|(b, _)| b.eq_ignore_ascii_case(&base)).map(|(_, k)| k)
+            })
+            .max()
+            .unwrap_or(0);
+        let k = taken + 1;
+        let target = dir.join(copy_sidecar_name(&base, k));
+        let text = read_sidecar(&source)?;
+        let bytes = match text.as_deref() {
+            Some(_) => fs::read(&source).map_err(|e| e.to_string())?,
+            None => lib::set_rating(None, 0).into_bytes(),
+        };
+        photos.locked(&target, || if target.exists() { Err("That copy is already there".to_string()) } else { atomic_write(&target, &bytes).map_err(|e| e.to_string()) })?;
+        let path = |p: &Path| p.to_string_lossy().to_string();
+        let master = photo_file(&args.id).to_string();
+        let raw = Some(path(&file)).filter(|f| lib::RAW_EXTS.contains(&lib::ext_of(f).as_str()));
+        Ok(Photo {
+            id: format!("{master}{COPY_TAG}{k}"),
+            name,
+            raw,
+            jpeg: None,
+            sidecar: path(&target),
+            rating_in: "sidecar",
+            rating: text.as_deref().and_then(lib::read_rating),
+            developed: text.as_deref().is_some_and(has_develop),
+            copy: Some(k),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Removes a virtual copy: its own sidecar (never the photo or its main sidecar).
+#[tauri::command]
+pub async fn cull_remove_copy(app: AppHandle, sidecar: String) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let photos = app.state::<Photos>();
+        let s = photos.allowed(&sidecar).ok_or("This photo's folder isn't open")?;
+        let name = s.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        if parse_copy_sidecar(&name).is_none() {
+            return Err("That isn't a virtual copy".to_string());
+        }
+        photos.locked(&s, || match fs::remove_file(&s) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(true),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[derive(Serialize)]
 pub struct CacheSize {
     bytes: u64,
@@ -592,6 +807,28 @@ mod tests {
         assert_eq!(rel(scan_dirs(&d, true).unwrap()), ["", "Day 2", "Day 2/b", "Day 10"]);
         assert_eq!(rel(scan_dirs(&d, false).unwrap()), [""]);
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn virtual_copy_names() {
+        assert_eq!(parse_copy_sidecar("JWL_7345 [Copy 2].xmp"), Some(("JWL_7345", 2)));
+        assert_eq!(parse_copy_sidecar("a b [Copy 10].XMP"), Some(("a b", 10)));
+        assert_eq!(parse_copy_sidecar("JWL_7345.xmp"), None);
+        assert_eq!(parse_copy_sidecar("JWL_7345 [Copy 0].xmp"), None);
+        assert_eq!(parse_copy_sidecar("JWL_7345 [Copy x].xmp"), None);
+        assert_eq!(parse_copy_sidecar("JWL_7345 [Copy 1].jpg"), None);
+        assert_eq!(copy_sidecar_name("JWL_7345", 3), "JWL_7345 [Copy 3].xmp");
+        assert_eq!(photo_file(r"C:\a\b.NEF|copy-2"), r"C:\a\b.NEF");
+        assert_eq!(photo_file(r"C:\a\b|copy.NEF"), r"C:\a\b|copy.NEF");
+        assert_eq!(photo_file("/a/b.NEF"), "/a/b.NEF");
+    }
+
+    #[test]
+    fn copy_sidecars_dont_show_as_photos() {
+        let names: Vec<String> = ["a.NEF", "a.xmp", "a [Copy 1].xmp", "a [Copy 2].xmp"].iter().map(|s| s.to_string()).collect();
+        let groups = lib::group_photos(&names);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].sidecar.as_deref(), Some("a.xmp"));
     }
 
     fn tmp_dir(name: &str) -> PathBuf {

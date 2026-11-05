@@ -2,6 +2,7 @@ import { bridge as app } from './bridge.js';
 import { Component, Suspense, lazy, useEffect, useState } from 'react';
 import { useStore } from './store.js';
 import { GroupDot, Icon, PanelHandle } from './components/ui.jsx';
+import { ContextMenuHost, confirmAction, openMenu } from './components/menu.jsx';
 import { toggle, toggleSides, useLayout } from './layout.js';
 import { GearDetail, GearForm } from './components/gear.jsx';
 import { GroupForm, GroupView, PresetView } from './components/groups.jsx';
@@ -100,7 +101,17 @@ export default function App() {
         <div className="group-list">
           {state.groups.map((g) => (
             <button key={g.id} className={`nav-item group${view.name === 'group' && view.groupId === g.id ? ' active' : ''}`}
-              onClick={() => setView({ name: 'group', groupId: g.id })} title={rail ? g.name : undefined}>
+              onClick={() => setView({ name: 'group', groupId: g.id })} title={rail ? g.name : undefined}
+              onContextMenu={(e) => openMenu(e, [
+                { heading: g.name },
+                { label: 'Open', icon: 'grid', onClick: () => setView({ name: 'group', groupId: g.id }) },
+                { label: 'New group…', icon: 'plus', onClick: () => setNewGroup(true) },
+                '-',
+                { label: 'Delete group…', icon: 'trash', danger: true, onClick: () => confirmAction({
+                  title: `Delete ${g.name}?`, text: `The group and its ${g.presets.length} preset${g.presets.length === 1 ? "" : "s"} are deleted. Your gear stays in My Gear.`, ok: 'Delete',
+                  onOk: () => { actions.deleteGroup(g.id); if (view.groupId === g.id) setView({ name: 'group', groupId: state.groups.find((x) => x.id !== g.id)?.id }); },
+                }) },
+              ])}>
               <span className="nav-dot"><GroupDot color={g.color} /></span><span className="grow">{g.name}</span><span className="nav-count">{g.presets.length}</span>
             </button>
           ))}
@@ -134,6 +145,7 @@ export default function App() {
       {group && view.name === 'group' && !preset && (
         <DeleteGroupButton onDelete={() => { actions.deleteGroup(group.id); setView({ name: 'group', groupId: state.groups.find((g) => g.id !== group.id)?.id }); }} name={group.name} />
       )}
+      <ContextMenuHost />
     </div>
   );
 }
