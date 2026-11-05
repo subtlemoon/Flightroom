@@ -374,6 +374,8 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .stage-info { color: var(--text-2); font-size: 13px; font-variant-numeric: tabular-nums; }
 .pill-mini { font: 11px var(--mono); padding: 2px 6px; border-radius: 4px; background: rgba(0, 0, 0, 0.45); color: var(--text-2); }
 .pill-mini.zoom { margin-left: auto; }
+.pill-mini.exported { color: var(--ok); }
+.cull-folder .pill-mini { margin-left: 8px; vertical-align: 2px; }
 .pill-mini.clip { color: #f0a3ab; }
 .stars { display: flex; align-items: center; gap: 2px; pointer-events: auto; height: 40px; padding: 0 12px; border-radius: 20px; background: rgba(28, 28, 28, 0.86); border: 1px solid var(--line); }
 .star { border: 0; background: transparent; font-size: 24px; line-height: 1; padding: 2px; cursor: pointer; color: rgba(255, 255, 255, 0.22); transition: color 0.1s var(--ease); }
@@ -455,25 +457,6 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 
 /* ── Develop ────────────────────────────────────────────── */
 
-/* Graphics diagnostics */
-.gpu-diag-note { padding: 11px 13px; border-radius: 10px; background: rgba(139, 123, 255, .08); border: 1px solid rgba(139, 123, 255, .2); color: #d8d4ee; font-size: 12.5px; line-height: 1.5; }
-.gpu-diag-device { display: flex; align-items: center; gap: 9px; min-width: 0; }
-.gpu-diag-device .muted { margin-left: auto; max-width: 55%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.gpu-diag-dot { width: 9px; height: 9px; flex: 0 0 9px; border-radius: 50%; background: #777; }
-.gpu-diag-dot.active { background: #ff6969; box-shadow: 0 0 0 4px rgba(255, 105, 105, .14); animation: pulse 1.2s infinite; }
-.gpu-diag-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.gpu-diag-grid > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: 9px; background: rgba(255,255,255,.045); }
-.gpu-diag-grid strong { font-size: 18px; font-variant-numeric: tabular-nums; }
-.gpu-diag-grid span { color: var(--muted); font-size: 11px; }
-.gpu-diag-detail { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 12px; font-size: 12px; }
-.gpu-diag-detail > span:last-child { overflow-wrap: anywhere; }
-.gpu-diag-events { display: flex; flex-direction: column; gap: 6px; max-height: 160px; overflow: auto; padding: 10px 12px; border-radius: 9px; background: rgba(0,0,0,.13); font-size: 12px; }
-.gpu-diag-events > div { display: flex; gap: 12px; border-top: 1px solid rgba(255,255,255,.05); padding-top: 5px; }
-.gpu-diag-events > div span { flex: 0 0 48px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.gpu-diag-save-message { padding: 8px 10px; border-radius: 8px; background: rgba(255,255,255,.05); font-size: 12px; }
-.gpu-diag-empty { display: flex; flex-direction: column; gap: 6px; padding: 18px; border: 1px dashed var(--line-2); border-radius: 10px; text-align: center; }
-.gpu-diag-empty span { color: var(--muted); font-size: 12px; }
-@keyframes pulse { 50% { opacity: .45; } }
 
 .develop { display: flex; flex-direction: column; height: 100%; position: relative; }
 .dev-tools { display: flex; align-items: center; gap: 8px; }
@@ -913,4 +896,5 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .cm-more { display: flex; color: var(--muted); margin-right: -2px; }
 .cm-sep { height: 1px; margin: 4px 6px; background: var(--line); }
 .cm-head { padding: 6px 8px 3px; font-size: 11px; font-weight: 600; color: var(--muted); }
+.thumb-exported { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; display: grid; place-items: center; border-radius: 3px; color: var(--ok); background: rgba(0, 0, 0, 0.6); pointer-events: none; }
 .thumb-copy { position: absolute; top: 3px; right: 3px; padding: 0 4px; border-radius: 3px; font: 600 10px/14px var(--mono); color: var(--text); background: rgba(0, 0, 0, 0.6); pointer-events: none; }

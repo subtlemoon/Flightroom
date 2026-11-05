@@ -8,6 +8,7 @@ import { asShotTempTint } from '../develop/color.js';
 import { Geometry, Renderer } from '../develop/renderer.js';
 import { exportPhoto, exportSize } from '../develop/export.js';
 import { session } from '../develop/session.js';
+import { setExported } from '../develop/exported.js';
 
 const SIZES = [['Full size', 0], ['Long edge 4096 px', 4096], ['Long edge 2048 px', 2048]];
 
@@ -59,6 +60,7 @@ export function ExportModal({ photo, photos, shown = photos, picked = null, meta
           pS = edits.get(p.id) || fromXmp(pInfo.settings, pInfo.curves, asShotTempTint(pInfo), pInfo.own, pInfo.look);
         }
         saved.push(await exportPhoto(p, pInfo, pS, { folder: target, longEdge, quality, replace, renderer, cancelled: () => cancel.current, onProgress: (part) => setRun((r) => r && { ...r, part }) }));
+        setExported([p.id], true);
       } catch (err) {
         if (String(err.message) !== 'cancelled') failed.push(`${p.name}: ${err.message || err}`);
       }
