@@ -296,6 +296,7 @@ vec3 gamutIn(vec3 d) {
 }
 // Display colour <-> OKLab (sRGB curve, signed so colours past the gamut edge
 // keep going), for colour grading.
+const float HSL_SAT_P = 1.56;
 const float GRADE_OFF = 0.165, GRADE_K = 0.0787, GRADE_D = 0.248, GRADE_Q = 0.18;
 vec3 srgbToLin(vec3 c) {
   vec3 a = abs(c);
@@ -676,12 +677,19 @@ void main() {
     float yc = dot(d, W709), mx = max(d.r, max(d.g, d.b)), sv = mx > 0.0 ? (mx - min(d.r, min(d.g, d.b))) / mx : 0.0;
     d = yc + (d - yc) * max(1.0 + cs * (CS_K + CS_V * (1.0 - sv) * (1.0 - sv)), 0.0);
   }
-  // Tone curve: per channel (Lightroom's way, which adds saturation), eased
-  // toward a brightness-only curve by Refine Saturation; then red, green, blue.
+  // Tone curve: on the brightest and darkest channel, the middle one keeping its
+  // place (Adobe's RGBTone: adds saturation but keeps hue; per channel it pulled
+  // reds and oranges toward each other on JWL_7345/7530), eased toward a
+  // brightness-only curve by Refine Saturation; then red, green, blue.
   // Like Lightroom it works in ProPhoto primaries with the sRGB tone response
   // ("Melissa RGB"), where per-channel curves change saturation as Lightroom's do.
   d = encode(clamp(SRGB_TO_PP * decodeS(d), 0.0, 1.0));
-  vec3 dc = vec3(texture(uCurve, vec2(d.r, 0.5)).r, texture(uCurve, vec2(d.g, 0.5)).r, texture(uCurve, vec2(d.b, 0.5)).r);
+  vec3 dc;
+  {
+    float hi = max(d.r, max(d.g, d.b)), lo = min(d.r, min(d.g, d.b));
+    float hi2 = texture(uCurve, vec2(hi, 0.5)).r, lo2 = texture(uCurve, vec2(lo, 0.5)).r;
+    dc = hi - lo > 1e-5 ? lo2 + (d - lo) * ((hi2 - lo2) / (hi - lo)) : vec3(hi2);
+  }
   if (uRefineSat < 1.0) {
     float yc0 = dot(d, W709);
     float yc = texture(uCurve, vec2(yc0, 0.5)).r;
@@ -713,9 +721,13 @@ void main() {
   float chroma = smoothstep(0.02, 0.25, h.y);
   if (adj.x != 0.0) d = rotateHue(d, adj.x * chroma);
   if (LD.x != 0.0) d = rotateHue(d, LD.x * 60.0 * chroma);
+  // The mixer's saturation scales colour in OKLab, keeping brightness, and
+  // starts gently: Lightroom's Red -24 takes ~11% of the reds' colour and
+  // leaves their brightness (JWL_7345); -100 still turns them grey.
+  if (adj.y != 0.0) { vec3 o = toOklab(d); o.yz *= max(1.0 + sign(adj.y) * pow(abs(adj.y), HSL_SAT_P) * chroma, 0.0); d = fromOklab(o); }
   float yd = dot(d, W709);
   float skin = 1.0 - 0.5 * exp(-pow((h.x > 180.0 ? h.x - 360.0 : h.x) - 25.0, 2.0) / 450.0);
-  float sat = (1.0 + adj.y * chroma) * (1.0 + uSaturation + LC.y) * (1.0 + uVibrance * pow(1.0 - h.y, 2.0) * skin);
+  float sat = (1.0 + uSaturation + LC.y) * (1.0 + uVibrance * pow(1.0 - h.y, 2.0) * skin);
   d = yd + (d - yd) * max(sat, 0.0);
   d *= 1.0 + adj.z * 0.6 * chroma;
   // A mask's colour swatch: tints its area, keeping the brightness.
