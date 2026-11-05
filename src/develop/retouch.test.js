@@ -133,3 +133,18 @@ describe('Histogram panel', () => {
     expect(histStats(h.r, 101, 255).pixels).toBe(1);
   });
 });
+
+describe('placed pictures and Color Lookup layers in the sidecar', () => {
+  it('come back as they were', () => {
+    const image = { src: 'data:image/jpeg;base64,AAAA', w: 40, h: 20, x0: 0.25, y0: 0.4, x1: 0.75, y1: 0.6 };
+    const layers = [
+      { id: 'a', name: 'Dog', kind: 'image', hidden: false, opacity: 100, fill: 100, blend: 'normal', ops: [], image, style: { innerGlow: { on: true, color: [1, 0, 0], opacity: 75, size: 0.005 } } },
+      { id: 'b', name: 'Look', kind: 'adjust', hidden: false, opacity: 60, fill: 100, blend: 'normal', ops: [], adj: { type: 'lut', lut: { name: 'Warm', n: 2, data: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYX' } } },
+    ];
+    const back = layersFromText(layersToText(layers));
+    expect(back[0].image).toEqual(image);
+    expect(back[0].style.innerGlow.color).toEqual([1, 0, 0]);
+    expect(back[1].adj.lut.name).toBe('Warm');
+    expect(layerBounds(back[0], 400, 200)).toEqual([100, 80, 300, 120]);
+  });
+});

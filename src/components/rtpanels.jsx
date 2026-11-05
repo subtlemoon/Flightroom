@@ -382,7 +382,7 @@ function HistogramPanel({ rx }) {
         {stat('Mean', all.mean.toFixed(2))}{stat('Level', range ? (range[0] === range[1] ? range[0] : `${range[0]}..${range[1]}`) : '')}
         {stat('Std Dev', all.dev.toFixed(2))}{stat('Count', part ? part.pixels.toLocaleString() : '')}
         {stat('Median', all.median)}{stat('Percentile', part ? ((100 * (below + part.pixels)) / all.pixels).toFixed(2) : '')}
-        {stat('Pixels', all.pixels.toLocaleString())}{stat('Source', 'Whole picture')}
+        {stat('Pixels', all.pixels.toLocaleString())}<div className="rt-hist-stat"><span className="muted">Source</span><span>Whole picture</span></div>
       </div>
     </div>
   );
