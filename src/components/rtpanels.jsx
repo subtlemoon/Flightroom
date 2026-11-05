@@ -438,7 +438,7 @@ function LayersPanel({ rx, onDevelop }) {
                 onDragLeave={() => setOver(null)}
                 onDrop={(e) => { e.preventDefault(); if (dragId.current) acts.moveTo(dragId.current, l.id, over?.into); dragId.current = null; setOver(null); }}
                 onDragEnd={() => { dragId.current = null; setOver(null); }}
-                onClick={() => rx.setActive(l.id)} onDoubleClick={() => setRenaming(l.id)}>
+                onClick={() => rx.setActive(l.id)} onDoubleClick={() => l.kind !== 'group' && rx.setDialog({ type: 'style', id: l.id, tab: 'blend' })}>
                 <button className="icon-btn tiny" title={l.hidden ? 'Show layer' : 'Hide layer'} onClick={(e) => { e.stopPropagation(); acts.change(l.id, { hidden: !l.hidden }, l.hidden ? 'Show Layer' : 'Hide Layer'); }}>
                   <Icon name={l.hidden ? 'eyeOff' : 'eye'} size={13} />
                 </button>
@@ -450,6 +450,7 @@ function LayersPanel({ rx, onDevelop }) {
                 )}
                 <span className={`rt-thumb${l.id === active && !rx.editMask ? ' sel' : ''}`} title={l.kind === 'adjust' ? ADJ_LABEL[l.adj?.type] : undefined}
                   onClick={(e) => { e.stopPropagation(); rx.setActive(l.id); }}
+                  onDoubleClick={(e) => { e.stopPropagation(); rx.setActive(l.id); if (['adjust', 'fill', 'text', 'shape'].includes(l.kind)) rx.showPanel('properties'); else if (l.kind !== 'group') rx.setDialog({ type: 'style', id: l.id, tab: 'blend' }); }}
                   style={l.kind === 'fill' && l.fillDef?.type !== 'gradient' ? { background: hex(l.fillDef?.color || [0, 0, 0]) } : l.kind === 'image' ? { backgroundImage: `url(${l.image.src})` } : undefined}>
                   {l.kind !== 'image' && <Icon name={l.kind === 'adjust' ? ADJUSTMENTS.find((a) => a[0] === l.adj?.type)?.[2] || 'adjust' : KIND_ICON[kindOf(l)]} size={13} />}
                 </span>
@@ -464,7 +465,7 @@ function LayersPanel({ rx, onDevelop }) {
                     onBlur={(e) => { const n = e.target.value.trim(); if (n && n !== l.name) acts.rename(l.id, n); setRenaming(null); }}
                     onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setRenaming(null); }} />
                 ) : (
-                  <span className="rt-layer-name grow">{l.name}</span>
+                  <span className="rt-layer-name grow" title="Double-click to rename; double-click the row for Layer Style" onDoubleClick={(e) => { e.stopPropagation(); setRenaming(l.id); }}>{l.name}</span>
                 )}
                 {l.style && Object.values(l.style).some((x) => x && x.on !== false) && (
                   <button className="icon-btn tiny rt-fx" title="Layer style" onClick={(e) => { e.stopPropagation(); rx.setDialog({ type: 'style', id: l.id, tab: 'blend' }); }}><Icon name="fx" size={12} /></button>

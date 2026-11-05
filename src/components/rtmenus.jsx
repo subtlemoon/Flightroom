@@ -6,7 +6,7 @@ import { Dropdown, Icon } from './ui.jsx';
 import { Slider } from './slider.jsx';
 import { BLEND_MODES, COLOR_RANGES, bitmapSelection, colorRange } from '../develop/retouch.js';
 import { FILTER_DEF } from '../develop/filters.js';
-import { TOOLS } from './retouch.jsx';
+import { TOOLS, hex } from './retouch.jsx';
 import { ColorInput, FilterParams, sl } from './rtpanels.jsx';
 
 export function MenuBar({ menus }) {
@@ -201,13 +201,17 @@ function FilterDialog({ rx, d, close }) {
   );
 }
 
-const STYLE_DEFAULTS = {
+export const STYLE_DEFAULTS = {
   shadow: { on: true, color: [0, 0, 0], opacity: 75, angle: 120, distance: 0.004, size: 0.004, spread: 0, blend: 'multiply' },
+  innerShadow: { on: true, color: [0, 0, 0], opacity: 75, angle: 120, distance: 0.003, size: 0.004, choke: 0 },
+  innerGlow: { on: true, color: [1, 1, 0.75], opacity: 75, size: 0.005, choke: 0 },
+  gradient: { on: true, c0: [0, 0, 0], c1: [1, 1, 1], opacity: 100, angle: 90, style: 'linear', reverse: false },
   glow: { on: true, color: [1, 1, 0.75], opacity: 75, size: 0.006, spread: 0, blend: 'screen' },
   stroke: { on: true, color: [1, 0, 0], opacity: 100, size: 0.002 },
   overlay: { on: true, color: [1, 0, 0], opacity: 100 },
 };
-const STYLE_TABS = [['blend', 'Blending Options'], ['stroke', 'Stroke'], ['overlay', 'Color Overlay'], ['glow', 'Outer Glow'], ['shadow', 'Drop Shadow']];
+export const STYLE_TABS = [['blend', 'Blending Options'], ['stroke', 'Stroke'], ['innerShadow', 'Inner Shadow'], ['innerGlow', 'Inner Glow'],
+  ['overlay', 'Color Overlay'], ['gradient', 'Gradient Overlay'], ['glow', 'Outer Glow'], ['shadow', 'Drop Shadow']];
 
 function StyleDialog({ rx, d, close }) {
   const l = rx.acts.byId(d.id);
@@ -243,12 +247,21 @@ function StyleDialog({ rx, d, close }) {
             <>
               <label className="dev-check"><input type="checkbox" checked={!!fx.on} onChange={(e) => set(tab, { on: e.target.checked })} />{STYLE_TABS.find(([k]) => k === tab)[1]}</label>
               {(tab === 'shadow' || tab === 'glow') && row('Blend Mode', <Dropdown value={fx.blend} onChange={(blend) => set(tab, { blend })} options={BLEND_MODES.map(([value, label]) => ({ value, label }))} />)}
-              {row('Colour', <ColorInput value={fx.color} onChange={(color) => set(tab, { color })} />)}
+              {tab === 'gradient' ? (
+                <>
+                  {row('From', <ColorInput value={fx.c0} onChange={(c0) => set(tab, { c0 })} />)}
+                  {row('To', <ColorInput value={fx.c1} onChange={(c1) => set(tab, { c1 })} />)}
+                  <div className="rt-gradbar" style={{ background: `linear-gradient(90deg, ${hex(fx.reverse ? fx.c1 : fx.c0)}, ${hex(fx.reverse ? fx.c0 : fx.c1)})` }} />
+                  {row('Style', <Dropdown value={fx.style} onChange={(style) => set(tab, { style })} options={[{ value: 'linear', label: 'Linear' }, { value: 'radial', label: 'Radial' }]} />)}
+                  <label className="dev-check"><input type="checkbox" checked={!!fx.reverse} onChange={(e) => set(tab, { reverse: e.target.checked })} />Reverse</label>
+                </>
+              ) : row('Colour', <ColorInput value={fx.color} onChange={(color) => set(tab, { color })} />)}
               <Slider sl={sl('opacity', 'Opacity', 0, 100)} value={fx.opacity} def={STYLE_DEFAULTS[tab].opacity} onSet={(k, v) => set(tab, { opacity: v })} />
-              {tab === 'shadow' && <Slider sl={sl('angle', 'Angle', -180, 180)} value={fx.angle} def={120} onSet={(k, v) => set(tab, { angle: v })} />}
-              {tab === 'shadow' && pxSl('distance', 'Distance', 500)}
+              {['shadow', 'innerShadow', 'gradient'].includes(tab) && <Slider sl={sl('angle', 'Angle', -180, 180)} value={fx.angle} def={STYLE_DEFAULTS[tab].angle} onSet={(k, v) => set(tab, { angle: v })} />}
+              {(tab === 'shadow' || tab === 'innerShadow') && pxSl('distance', 'Distance', 500)}
               {(tab === 'shadow' || tab === 'glow') && <Slider sl={sl('spread', 'Spread', 0, 100)} value={fx.spread} def={0} onSet={(k, v) => set(tab, { spread: v })} />}
-              {tab !== 'overlay' && pxSl('size', 'Size')}
+              {(tab === 'innerShadow' || tab === 'innerGlow') && <Slider sl={sl('choke', 'Choke', 0, 100)} value={fx.choke} def={0} onSet={(k, v) => set(tab, { choke: v })} />}
+              {tab !== 'overlay' && tab !== 'gradient' && pxSl('size', 'Size')}
             </>
           )}
         </div>
