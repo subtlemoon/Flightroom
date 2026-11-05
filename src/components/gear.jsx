@@ -1,13 +1,21 @@
 import { useMemo, useState } from 'react';
 import { Dropdown, Icon, Modal, keySpecs, typeIcon, typeLabel } from './ui.jsx';
+import { openMenu } from './menu.jsx';
 import { MOUNTS, SENSORS, ACCESSORY_CATEGORIES } from '../data/gear.js';
 import { VIDEO_SUPPORT } from '../data/software.js';
 import { uid } from '../store.js';
 
 
-export function GearCard({ item, owned, onOpen, action, compact }) {
+export function GearCard({ item, owned, onOpen, action, compact, onToggleOwned }) {
   return (
     <div className={`gear-card${compact ? ' compact' : ''}`} onClick={() => onOpen?.(item)} role="button" tabIndex={0}
+      onContextMenu={(e) => openMenu(e, [
+        { heading: `${item.brand} ${item.model}` },
+        onOpen && { label: 'Show details', icon: 'search', onClick: () => onOpen(item) },
+        onToggleOwned && { label: owned ? 'Remove from My Gear' : 'Add to My Gear', icon: owned ? 'x' : 'plus', onClick: () => onToggleOwned(item.id) },
+        '-',
+        { label: 'Copy name', icon: 'copy', onClick: () => navigator.clipboard?.writeText(`${item.brand} ${item.model}`).catch(() => {}) },
+      ])}
       onKeyDown={(e) => e.key === 'Enter' && onOpen?.(item)}>
       <div className="gear-icon"><Icon name={typeIcon(item)} size={compact ? 16 : 20} /></div>
       <div className="gear-main">

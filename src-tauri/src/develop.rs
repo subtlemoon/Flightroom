@@ -606,26 +606,58 @@ pub struct Opened {
 #[tauri::command]
 pub async fn develop_open(app: AppHandle, id: String, sidecar: Option<String>) -> Result<Opened, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let photos = app.state::<Photos>();
-        let p = photos.allowed(&id).ok_or("This photo's folder isn't open")?;
+        let p = app.state::<Photos>().allowed(&id).ok_or("This photo's folder isn't open")?;
         let raw = app.state::<Develop>().raw(&p, true)?;
-        let orientation = photos.info(&p).map(|(_, i)| i.orientation).unwrap_or(1);
-        let text = sidecar_text(&photos, sidecar)?;
-        let cameras = crate::adobe::camera_names(&raw.make, &raw.model, &raw.exif_model);
-        let looks = app.path().app_local_data_dir().unwrap_or_default().join("looks");
-        let adobe = crate::adobe::for_camera(&cameras, text.as_deref(), &looks);
-        Ok(Opened {
-            width: raw.w,
-            height: raw.h,
-            orientation,
-            as_shot: raw.wb,
-            matrices: raw.matrices.clone(),
-            camera: format!("{} {}", raw.make, raw.model),
-            saved: saved(text.as_deref()),
-            adobe,
-            denoised: denoise_file(&app, &raw).exists(),
-            lens: raw.lens.clone(),
-        })
+        opened(&app, &p, &raw, sidecar)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn opened(app: &AppHandle, p: &Path, raw: &Raw, sidecar: Option<String>) -> Result<Opened, String> {
+    let photos = app.state::<Photos>();
+    let orientation = photos.info(p).map(|(_, i)| i.orientation).unwrap_or(1);
+    let text = sidecar_text(&photos, sidecar)?;
+    let cameras = crate::adobe::camera_names(&raw.make, &raw.model, &raw.exif_model);
+    let looks = app.path().app_local_data_dir().unwrap_or_default().join("looks");
+    let adobe = crate::adobe::for_camera(&cameras, text.as_deref(), &looks);
+    Ok(Opened {
+        width: raw.w,
+        height: raw.h,
+        orientation,
+        as_shot: raw.wb,
+        matrices: raw.matrices.clone(),
+        camera: format!("{} {}", raw.make, raw.model),
+        saved: saved(text.as_deref()),
+        adobe,
+        denoised: denoise_file(app, raw).exists(),
+        lens: raw.lens.clone(),
+    })
+}
+
+/// A photo that isn't on screen, for its filmstrip thumbnail as developed: what
+/// develop_open answers, and a small picture of it (`edge` px), as
+/// [json length (u32)][json][frame]. Its RAW data is read just for this and
+/// not kept, so the photos Develop holds for going back and forth stay.
+#[tauri::command]
+pub async fn develop_peek(app: AppHandle, id: String, sidecar: Option<String>, edge: usize) -> Result<tauri::ipc::Response, String> {
+    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+    tauri::async_runtime::spawn_blocking(move || {
+        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        let p = app.state::<Photos>().allowed(&id).ok_or("This photo's folder isn't open")?;
+        let dev = app.state::<Develop>();
+        let key = std::fs::metadata(&p).map(|m| format!("{}:{:?}", m.len(), m.modified().ok())).map_err(|e| e.to_string())?;
+        let held = dev.raws.lock().unwrap().iter().find(|r| r.path == p && r.key == key).cloned();
+        let raw = match held {
+            Some(r) => r,
+            None => Arc::new(Raw::decode(&p, key)?),
+        };
+        let json = serde_json::to_vec(&opened(&app, &p, &raw, sidecar)?).map_err(|e| e.to_string())?;
+        let (w, h, data) = raw.overview(edge.clamp(64, 2048), None);
+        let mut out = (json.len() as u32).to_le_bytes().to_vec();
+        out.extend(json);
+        out.extend(frame(w, h, &data));
+        Ok(tauri::ipc::Response::new(out))
     })
     .await
     .map_err(|e| e.to_string())?

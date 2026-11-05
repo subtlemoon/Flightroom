@@ -15,32 +15,6 @@ export function pointCurve(points) {
   return splineCurve(pts);
 }
 
-// Monotone cubic through points (Fritsch-Carlson), so the curve never overshoots.
-export function monotoneCurve(points) {
-  const pts = [...points].sort((a, b) => a[0] - b[0]).filter((p, i, a) => i === 0 || p[0] > a[i - 1][0]);
-  const n = pts.length;
-  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
-  if (n < 2) return (x) => x;
-  const d = [], m = new Array(n);
-  for (let i = 0; i < n - 1; i++) d.push((ys[i + 1] - ys[i]) / (xs[i + 1] - xs[i]));
-  m[0] = d[0]; m[n - 1] = d[n - 2];
-  for (let i = 1; i < n - 1; i++) m[i] = d[i - 1] * d[i] <= 0 ? 0 : (d[i - 1] + d[i]) / 2;
-  for (let i = 0; i < n - 1; i++) {
-    if (d[i] === 0) { m[i] = 0; m[i + 1] = 0; continue; }
-    const a = m[i] / d[i], b = m[i + 1] / d[i], h = Math.hypot(a, b);
-    if (h > 3) { m[i] = (3 * a * d[i]) / h; m[i + 1] = (3 * b * d[i]) / h; }
-  }
-  return (x) => {
-    if (x <= xs[0]) return ys[0];
-    if (x >= xs[n - 1]) return ys[n - 1];
-    let i = 0;
-    while (x > xs[i + 1]) i++;
-    const h = xs[i + 1] - xs[i], t = (x - xs[i]) / h;
-    const t2 = t * t, t3 = t2 * t;
-    return (2 * t3 - 3 * t2 + 1) * ys[i] + (t3 - 2 * t2 + t) * h * m[i] + (-2 * t3 + 3 * t2) * ys[i + 1] + (t3 - t2) * h * m[i + 1];
-  };
-}
-
 // The four region sliders lift or lower soft bumps over their part of the
 // range; the three splits move where those parts meet.
 const REGIONS = [['pShadows', 0, 0.5], ['pDarks', 0, 0.75], ['pLights', 0.25, 1], ['pHighlights', 0.5, 1]];

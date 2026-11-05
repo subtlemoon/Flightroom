@@ -121,6 +121,7 @@ const paths = {
   people: <><circle cx="9" cy="8" r="3" /><path d="M3 20c.4-3.5 2.8-5.5 6-5.5s5.6 2 6 5.5" /><circle cx="17" cy="9" r="2.4" /><path d="M16.5 14.5c2.6.2 4.1 2 4.5 5" /></>,
   landscape: <><path d="M2 19l6-9 4 5 3-4 7 8z" /><circle cx="17" cy="6" r="2" /></>,
   dropper: <><path d="M14.5 4.5l5 5" /><path d="M17 2.5a2.1 2.1 0 0 1 3 3L18 7.5l-3-3z" /><path d="M15.5 8.5L6 18l-3 1 1-3 9.5-9.5" /></>,
+  star: <path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" />,
 };
 
 export function Icon({ name, size = 18 }) {

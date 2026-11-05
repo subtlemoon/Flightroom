@@ -5,15 +5,18 @@ import { Slider } from './slider.jsx';
 import { CurveEditor } from './curve.jsx';
 import { BRUSH_DEFAULT, MASK_OPTIONS_DEFAULT, MaskAdjust, MaskOverlay, MaskPanel, OVERLAY_DEFAULT, maskActions, maskView, useStored } from './masks.jsx';
 import { AiDenoise, useAiInstall, useAiMasks } from './ai.jsx';
-import { CopyDialog, PresetPanel } from './copy.jsx';
+import { BUILT_IN, CopyDialog, PresetPanel } from './copy.jsx';
+import { fileItems, fromMenuBar, openMenu, photoLabel, ratingMenu } from './menu.jsx';
+import { copyActions } from '../cull/copies.js';
 import { applyTo, pick as pickSettings } from '../develop/copy.js';
 import { MASK_EDGE, POINT_DEFAULT, newId } from '../develop/masks.js';
 import { toggle, useLayout } from '../layout.js';
 import { Filmstrip, photoRating } from './cull.jsx';
 import { imgUrl, ROTATION } from '../cull/previews.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
-import { cachedFolder, startAt, useFolder, usePosition } from '../cull/folder.js';
-import { pixelsToUrl, setDevelopedThumb } from '../develop/thumbs.js';
+import { cachedFolder, startAt, useFolder, usePosition, useStripPick } from '../cull/folder.js';
+import { keepThumb, pixelsToBlob, thumbSize } from '../develop/thumbs.js';
+import { thumbBuilder } from '../develop/thumbbuilder.js';
 import { keepSettings, session } from '../develop/session.js';
 import { createSaver } from '../develop/saver.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey } from '../cull/keys.js';
@@ -84,7 +87,6 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const [hoverPreset, setHoverPreset] = useState(null);
   // Color grading wheels hidden with their eye (Lightroom's), for the view only.
   const [gradeHidden, setGradeHidden] = useState(() => new Set());
-  const [picked, setPicked] = useState(() => new Set()); // filmstrip photos selected with the current one
   const [picking, setPicking] = useState(false); // 'wb' (white balance selector) | 'point' (a mask's Point Color)
   const [sel, setSelState] = useState(null); // selected mask and part: { mask, part }
   const [overlay, setOverlay] = useStored('flightroom-mask-overlay-2', OVERLAY_DEFAULT);
@@ -121,6 +123,8 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   if (index < 0) index = Math.min(lastIndex.current, Math.max(0, photos.length - 1));
   lastIndex.current = index;
   const photo = photos[index];
+  // Filmstrip photos selected with the current one (Ctrl/Shift+click, Ctrl+A).
+  const { picked, setPicked, selectInStrip } = useStripPick(photos, index, (i) => go(i));
 
   usePosition(actions, list?.folder, photo ? allPhotos.findIndex((p) => p.id === photo.id) : -1);
   useEffect(() => {
@@ -271,6 +275,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   // straight to their sidecars, without decoding their RAW files.
   const applyPart = async (part, what) => {
     const list = targets().filter((p) => p.raw);
+    const changed = [];
     let n = 0;
     for (const p of list) {
       if (p.id === photo?.id) {
@@ -294,29 +299,122 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
       history.current.delete(p.id);
       session.unsaved.delete(p.id);
       session.edited.add(p.id);
+      changed.push(p);
       n++;
+    }
+    // Their filmstrip thumbnails are made again, in the background.
+    if (changed.length) {
+      const ids = new Set(changed.map((p) => p.id));
+      setList((l) => (l?.photos ? { ...l, photos: l.photos.map((x) => (ids.has(x.id) ? { ...x, developed: true } : x)) } : l));
+      builder.current?.redo(changed.map((p) => ({ ...p, developed: true })));
     }
     setToast(n > 1 ? `${what} ${n} photos` : `${what} this photo`);
   };
   const paste = () => clipboard && applyPart(clipboard.part, 'Settings pasted to');
-  // Moving to a photo outside the selection ends it.
-  useEffect(() => { if (photo && picked.size && !picked.has(photo.id)) setPicked(new Set()); }, [photo?.id]);
   const applyPreset = (p) => { setHoverPreset(null); applyPart(p.part, `${p.name} applied to`); };
-  const selectInStrip = (i, e) => {
-    const p = photos[i];
+
+  // Developed thumbnails for the filmstrip, made in the background for photos
+  // edited before (here or in Lightroom) that have none for their sidecar as it is.
+  const builder = useRef(null);
+  const quietSince = useRef(0);
+  const loadingRef = useRef(false);
+  loadingRef.current = !!opened?.loading;
+  useEffect(() => {
+    if (!app) return;
+    const b = thumbBuilder({ busy: () => document.hidden || loadingRef.current || performance.now() - quietSince.current < 1500 });
+    builder.current = b;
+    const mark = (e) => { if (e.type !== 'pointermove' || e.buttons) quietSince.current = performance.now(); };
+    const evs = ['pointerdown', 'pointermove', 'keydown', 'wheel'];
+    for (const ev of evs) window.addEventListener(ev, mark, { capture: true, passive: true });
+    return () => { b.stop(); builder.current = null; for (const ev of evs) window.removeEventListener(ev, mark, { capture: true }); };
+  }, []);
+  useEffect(() => {
+    if (!app || !photos.length) return;
+    const t = setTimeout(async () => {
+      const want = photos.filter((p) => p.developed && p.raw);
+      if (!want.length) return;
+      const missing = await app.cull.developedMissing(want);
+      if (missing?.error || !builder.current) return;
+      const at = new Map(photos.map((p, i) => [p.id, i]));
+      const here = at.get(currentId) ?? 0;
+      const set = new Set(missing);
+      builder.current.want(want.filter((p) => set.has(p.id)).sort((a, b) => Math.abs(at.get(a.id) - here) - Math.abs(at.get(b.id) - here)));
+    }, 2000);
+    return () => clearTimeout(t);
+  }, [list?.folder, photos.length, filter]);
+
+  // Virtual copies (Ctrl+' as in Lightroom): a copy starts with the photo's settings and opens.
+  const copies = copyActions({
+    cull: bridge, setList, toast: setToast, saved: (p) => saver.idle(p.sidecar),
+    show: (c) => { if (filter !== 'all' && !inFilter(filter, photoRating(c, meta[c.id]))) setFilter('all'); setCurrentId(c.id); },
+    forget: (p) => { settingsCache.current.delete(p.id); history.current.delete(p.id); session.unsaved.delete(p.id); session.edited.delete(p.id); },
+  });
+
+  // Right-click on the photo or a filmstrip photo, as in Lightroom. A photo
+  // outside the selection becomes the current one first; `onStage` adds the view items.
+  const photoMenu = (e, p, i, onStage) => {
     if (!p) return;
-    if (e?.ctrlKey || e?.metaKey) {
-      // Ctrl+click adds or removes a photo, keeping the current one.
-      setPicked((old) => { const n = new Set(old); if (photo) n.add(photo.id); n.has(p.id) && p.id !== photo?.id ? n.delete(p.id) : n.add(p.id); return n; });
-      return;
-    }
-    if (e?.shiftKey && photo) {
-      const [a, b] = [Math.min(index, i), Math.max(index, i)];
-      setPicked(new Set(photos.slice(a, b + 1).map((x) => x.id)));
-      return;
-    }
-    setPicked(new Set());
-    go(i);
+    const inPick = picked.size > 1 && picked.has(p.id);
+    if (!inPick && p.id !== photo?.id) selectInStrip(i);
+    const many = inPick ? picked.size : 0;
+    const ready = !!s && p.id === photo?.id;
+    const preset = (x) => ({ label: x.name, onClick: () => applyPreset(x) });
+    openMenu(e, [
+      { heading: many ? `${many} photos selected` : photoLabel(p) },
+      ratingMenu(many ? undefined : photoRating(p, meta[p.id]), (r) => (many ? targets().forEach((x) => rate(x, r)) : rate(p, r)), keys),
+      {
+        label: 'Develop settings', icon: 'sliders', items: [
+          { label: 'Copy settings…', hint: 'Ctrl+C', disabled: !s, onClick: copy },
+          { label: many ? `Paste settings to ${many} photos` : 'Paste settings', hint: 'Ctrl+V', disabled: !clipboard, onClick: paste },
+          '-',
+          { label: 'Auto tone', disabled: !ready || retouch, onClick: autoTone },
+          { label: 'Auto white balance', disabled: !ready || retouch, onClick: autoWb },
+          '-',
+          { label: 'Reset all settings', disabled: !ready, onClick: reset },
+        ],
+      },
+      {
+        label: many ? `Apply preset to ${many} photos` : 'Apply preset', icon: 'palette', disabled: !s, items: [
+          ...(presets.list.length ? [{ heading: 'Yours' }, ...presets.list.map(preset), '-'] : []),
+          { heading: 'Flightroom' }, ...BUILT_IN.map(preset),
+        ],
+      },
+      '-',
+      !many && { label: 'Create virtual copy', icon: 'copy', hint: "Ctrl+'", disabled: !p.raw, onClick: () => copies.make(p) },
+      !many && p.copy && { label: 'Remove virtual copy…', icon: 'trash', danger: true, onClick: () => copies.askRemove(p) },
+      '-',
+      ...(onStage && !retouch ? [
+        { label: 'Before / after', hint: '\\', checked: before, disabled: !s, onClick: () => setBefore((b) => !b) },
+        { label: 'Show clipping', hint: 'J', checked: clip, onClick: () => setClip((c) => !c) },
+        { label: 'Crop and straighten', hint: 'R', checked: crop, disabled: !s, onClick: () => setCrop((c) => !c) },
+        selMask && { label: 'Show mask overlay', hint: 'O', checked: overlay.show, onClick: () => setOverlay({ show: !overlay.show }) },
+        { label: 'Zoom in / fit', hint: keyLabel(zKey), onClick: () => stageApi.current.toggleZoom?.() },
+        '-',
+      ] : []),
+      onMode && { label: retouch ? 'Back to Develop' : 'Edit in Retouch', icon: retouch ? 'develop' : 'layers', hint: 'Ctrl+E', disabled: !s, onClick: () => onMode(retouch ? 'develop' : 'retouch') },
+      onCull && { label: 'Show in Culling', icon: 'photo', hint: 'G', onClick: onCull },
+      { label: many ? `Export ${many} photos…` : 'Export…', icon: 'export', hint: 'Ctrl+Shift+E', disabled: !s, onClick: () => setExporting({}) },
+      '-',
+      !many && fileItems(p, app.reveal)[0],
+      !many && fileItems(p, app.reveal)[1],
+    ]);
+  };
+
+  // Retouch: right-click on the picture, as in Photoshop (what a selection can do when there's one).
+  const retouchMenu = (e) => {
+    if (!s || !info) return;
+    const sel = !!rxRef.current?.selection;
+    openMenu(e, fromMenuBar(rxRef.current.menus, sel ? [
+      'Select/Deselect', 'Select/Inverse', 'Select/Modify/Feather…', 'Select/Transform Selection', '-',
+      'Layer/New/Layer Via Copy', 'Layer/New/Layer Via Cut', '-',
+      'Edit/Free Transform', 'Edit/Fill…', 'Edit/Stroke…', 'Edit/Content-Aware Fill', '-',
+      'Select/Save Selection…',
+    ] : [
+      'Edit/Undo', 'Edit/Redo', '-',
+      'Select/All', 'Select/Reselect', 'Select/Subject', 'Select/Sky', '-',
+      'Edit/Free Transform', 'Layer/New/Layer…', 'Layer/New/Layer Via Copy', 'Layer/New Adjustment Layer', '-',
+      ['File/Export…', 'Export…'], ['File/Close (back to Develop)', 'Back to Develop'],
+    ]));
   };
 
   const rate = useCallback(async (p, rating) => {
@@ -382,7 +480,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   useEffect(() => {
     const onKey = (e) => {
       if (exporting || dialog || (retouch && rx.dialog)) return;
-      const typing = e.target.closest?.('input[type=text], input[type=number], textarea, select, [contenteditable]');
+      const typing = e.target.closest?.('input[type=text], input[type=number], textarea, select, [contenteditable], .overlay');
       if (typing) return;
       const ctrl = e.ctrlKey || e.metaKey;
       const k = e.key.toLowerCase();
@@ -393,6 +491,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
       if (retouch && rx.onKey(e)) return;
       if (retouch && ctrl && (k === 'c' || k === 'v')) return;
       if (retouch && !ctrl && !e.altKey && (k.length === 1 || e.key === 'Delete') && !/^\d$/.test(e.key) && e.key !== '\\' && normKey(e.key) !== zKey) return;
+      if (ctrl && e.key === "'") { e.preventDefault(); copies.make(photo); return; }
       if (ctrl && k === 'z') { e.preventDefault(); undo(e.shiftKey); return; }
       if (ctrl && k === 'y') { e.preventDefault(); undo(true); return; }
       if (ctrl && k === 'c') { e.preventDefault(); copy(); return; }
@@ -471,7 +570,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
       <header className="cull-bar">
         <div className="grow cull-title">
           <div className="eyebrow">{retouch ? 'Retouch' : 'Develop'}</div>
-          <div className="cull-folder" title={list?.folder || folder}>{photo ? photo.name : (list?.folder || folder).split(/[\\/]/).pop()}</div>
+          <div className="cull-folder" title={list?.folder || folder}>{photo ? photoLabel(photo) : (list?.folder || folder).split(/[\\/]/).pop()}</div>
         </div>
         <Dropdown className={`cull-stars${filter !== 'all' ? ' on' : ''}`} value={filter} label={filter === 'all' ? 'Stars…' : undefined} onChange={setFilter} title="Show photos by star rating"
           options={starOptions} />
@@ -504,7 +603,10 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
           )} s={s && info ? s : null} size={geo} sel={selMask ? sel : null} setSel={setSel} acts={acts} overlay={overlay} setOverlay={setOverlay} ai={aiMasks} />
         </aside>}
         {!retouch && <PanelHandle side="left" open={layout.nav} onClick={() => toggle('nav')} title={`${layout.nav ? 'Hide' : 'Show'} masks (F7)`} />}
-        <div className="dev-stage-col">
+        <div className="dev-stage-col" onContextMenu={(e) => {
+          if (!photo || e.target.closest('.strip-wrap, .dev-msg')) return;
+          if (retouch) retouchMenu(e); else photoMenu(e, photo, index, true);
+        }}>
           {photo && opened?.id === photo.id && opened.error ? (
             <div className="hero-empty dev-msg">
               <h2>{opened.error === 'notRaw' ? 'Develop edits RAW files' : "This photo can't be developed"}</h2>
@@ -519,7 +621,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
           ) : (
             <div className="hero-empty dev-msg"><h2>{list?.loading ? 'Reading folder…' : filter !== 'all' && allPhotos.length ? 'No photos with those stars' : 'No photos in this folder'}</h2></div>
           )}
-          <Filmstrip photos={photos} index={index} meta={meta} suggestions={{}} onSelect={selectInStrip} requestMeta={requestMeta} picked={picked.size ? picked : null} />
+          <Filmstrip photos={photos} index={index} meta={meta} suggestions={{}} onSelect={selectInStrip} requestMeta={requestMeta} picked={picked.size ? picked : null} onMenu={(e, i) => photoMenu(e, photos[i], i)} />
         </div>
         <PanelHandle side="right" open={layout.panel} onClick={() => toggle('panel')} title={`${layout.panel ? 'Hide' : 'Show'} adjustments (F8)`} />
         {layout.panel && <aside className="dev-panel">
@@ -675,7 +777,6 @@ function GraphicsDiagnosticsModal({ apiRef, onClose }) {
 // --- the photo ---------------------------------------------------------------
 
 const PREVIEW_W = 224, PREVIEW_H = 168; // css px
-const THUMB_EDGE = 320; // device px, the filmstrip's developed thumbnails
 const fitEdge = () => Math.min(4096, Math.round(Math.max(screen.width, screen.height) * (window.devicePixelRatio || 1)));
 
 async function fetchFrame(url) {
@@ -1177,11 +1278,12 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
       const r = rendererRef.current;
       if (!r) return;
       const f = geo.frame(editS.crop);
-      const k = THUMB_EDGE / (2 * Math.max(f.hw, f.hh));
-      const w = Math.max(8, Math.round(2 * f.hw * k)), h = Math.max(8, Math.round(2 * f.hh * k));
+      const { w, h } = thumbSize(f);
+      // Kept on disk too when there's something to show (an edit, or a sidecar with one).
+      const keep = photo.developed || isEdited(editS, asShotTempTint(info));
       r.preview(info, editS, geo, f, w, h, null, true, 'thumbTarget')
-        .then((px) => (live && px ? pixelsToUrl(px, w, h) : null))
-        .then((url) => { if (url) setDevelopedThumb(photo.id, url); }, () => {});
+        .then((px) => (live && px ? pixelsToBlob(px, w, h) : null))
+        .then((blob) => { if (blob) keepThumb(photo, blob, keep ? saver.idle(photo.sidecar) : null); }, () => {});
     }, 400);
     return () => { live = false; clearTimeout(t); };
   }, [ready, editS, info]);
@@ -1513,7 +1615,12 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
   const [open, setOpen] = useState(() => {
     try { return JSON.parse(localStorage.getItem(PANELS_KEY)) || { basic: true }; } catch { return { basic: true }; }
   });
-  const toggleSection = (id) => setOpen((o) => { const n = { ...o, [id]: !o[id] }; try { localStorage.setItem(PANELS_KEY, JSON.stringify(n)); } catch {} return n; });
+  // Solo mode (Lightroom's, from a panel's right-click): opening a panel closes the others.
+  const [solo, setSoloState] = useState(() => { try { return localStorage.getItem('flightroom-panel-solo') === '1'; } catch { return false; } });
+  const setSolo = (v) => { setSoloState(v); try { localStorage.setItem('flightroom-panel-solo', v ? '1' : '0'); } catch {} };
+  const keepOpen = (n) => { try { localStorage.setItem(PANELS_KEY, JSON.stringify(n)); } catch {} return n; };
+  const toggleSection = (id) => setOpen((o) => keepOpen(solo && !o[id] ? { [id]: true } : { ...o, [id]: !o[id] }));
+  const setAll = (on) => setOpen(() => keepOpen(on ? Object.fromEntries(SECTIONS.map((x) => [x.id, true])) : {}));
 
   // One stable setter for every slider, so moving one redraws only that one.
   const set = useCallback((k, v) => update((old) => {
@@ -1622,7 +1729,17 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
         return (
           <section key={sec.id} className={`dev-section${open[sec.id] ? ' open' : ''}`}>
             <div className="dev-section-head" role="button" tabIndex={0} onClick={() => toggleSection(sec.id)}
-              onKeyDown={(e) => { if (e.key === 'Enter') toggleSection(sec.id); }}>
+              onKeyDown={(e) => { if (e.key === 'Enter') toggleSection(sec.id); }}
+              onContextMenu={(e) => openMenu(e, [
+                { heading: sec.title },
+                { label: `Reset ${sec.title}`, icon: 'reset', disabled: !changed, onClick: () => update((old) => resetSection(old, sec.id, asShot)) },
+                '-',
+                { label: 'Solo mode', checked: solo, onClick: () => setSolo(!solo) },
+                { label: 'Expand all panels', onClick: () => setAll(true) },
+                { label: 'Collapse all panels', onClick: () => setAll(false) },
+                '-',
+                { label: 'Reset all settings', icon: 'reset', onClick: onReset },
+              ])}>
               {changed && !open[sec.id] && <span className="dev-dot" title="Edited" />}
               <span className="grow">{sec.title}</span>
               <span className={`dev-reset${changed ? ' on' : ''}`} role="button" title={`Reset ${sec.title}`}

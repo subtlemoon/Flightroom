@@ -6,8 +6,10 @@ import { clearPreviews, decodeThumb, drawPhoto, fallbackShown, fitEdge, fitKept,
 import { loadAnalysis, measure, saveAnalysis, suggest, upright } from '../cull/analyze.js';
 import { Cancelled, measurePool } from '../cull/measure-pool.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
-import { cachedFolder, setWithSubfolders, startAt, useFolder, usePosition, withSubfolders } from '../cull/folder.js';
+import { cachedFolder, setWithSubfolders, startAt, useFolder, usePosition, useStripPick, withSubfolders } from '../cull/folder.js';
 import { useDevelopedThumb } from '../develop/thumbs.js';
+import { fileItems, openMenu, photoLabel, ratingMenu } from './menu.jsx';
+import { copyActions } from '../cull/copies.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zoomLevel } from '../cull/keys.js';
 
 // A photo in the culling view, as listed by the desktop side:
@@ -136,24 +138,7 @@ export function CullView({ store, onDevelop }) {
 
   // Photos selected along with the current one (Ctrl/Shift+click in the
   // filmstrip, Ctrl+A): ratings and Export apply to all of them.
-  const [picked, setPicked] = useState(() => new Set());
-  useEffect(() => { if (photo && picked.size && !picked.has(photo.id)) setPicked(new Set()); }, [photo?.id]);
-  useEffect(() => { setPicked(new Set()); }, [list?.folder]);
-  const selectInStrip = (i, e) => {
-    const p = photos[i];
-    if (!p) return;
-    if (e?.ctrlKey || e?.metaKey) {
-      setPicked((old) => { const n = new Set(old); if (photo) n.add(photo.id); n.has(p.id) && p.id !== photo?.id ? n.delete(p.id) : n.add(p.id); return n; });
-      return;
-    }
-    if (e?.shiftKey && photo) {
-      const [a, b] = [Math.min(index, i), Math.max(index, i)];
-      setPicked(new Set(photos.slice(a, b + 1).map((x) => x.id)));
-      return;
-    }
-    setPicked(new Set());
-    go(i);
-  };
+  const { picked, setPicked, selectInStrip } = useStripPick(photos, index, go, list?.folder);
 
   const rememberApplied = (id, stars) => setAuto((a) => {
     const applied = { ...a.applied };
@@ -259,10 +244,41 @@ export function CullView({ store, onDevelop }) {
 
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(''), 2200); return () => clearTimeout(t); }, [toast]);
 
+  // Virtual copies (Ctrl+' as in Lightroom).
+  const copies = copyActions({ cull: bridge, setList, toast: setToast, show: (c) => setCurrentId(c.id) });
+
+  // Right-click on a photo (the big one or the filmstrip), as in Lightroom. A
+  // photo outside the selection becomes the current one first.
+  const photoMenu = (e, p, i) => {
+    if (!p) return;
+    const inPick = picked.size > 1 && picked.has(p.id);
+    if (!inPick && p.id !== photo?.id) selectInStrip(i);
+    const many = inPick ? picked.size : 0;
+    const sug = suggestions[p.id];
+    openMenu(e, [
+      { heading: many ? `${many} photos selected` : photoLabel(p) },
+      onDevelop && { label: 'Open in Develop', icon: 'develop', hint: 'D', onClick: () => { setCurrentId(p.id); setTimeout(onDevelop); } },
+      '-',
+      ratingMenu(many ? undefined : photoRating(p, meta[p.id]), (r) => (many ? ratePicked(r) : rate(p, r)), keys),
+      sug && autoMayRate(p) && !many && { label: `Accept suggestion (${'★'.repeat(sug.stars)})`, icon: 'spark', hint: 'Enter', onClick: () => rate(p, sug.stars, { byAuto: true }) },
+      '-',
+      !many && { label: 'Create virtual copy', icon: 'copy', hint: "Ctrl+'", disabled: !p.raw, onClick: () => copies.make(p) },
+      !many && p.copy && { label: 'Remove virtual copy…', icon: 'trash', danger: true, onClick: () => copies.askRemove(p) },
+      '-',
+      { label: many ? `Export ${many} photos…` : 'Export…', icon: 'export', hint: 'Ctrl+Shift+E', onClick: () => setExporting(true) },
+      { label: 'Select all', hint: 'Ctrl+A', onClick: () => setPicked(new Set(photos.map((x) => x.id))) },
+      picked.size > 0 && { label: 'Clear selection', hint: 'Esc', onClick: () => setPicked(new Set()) },
+      '-',
+      !many && fileItems(p, app.reveal)[0],
+      !many && fileItems(p, app.reveal)[1],
+    ]);
+  };
+
   // Keyboard: arrows move, Home/End jump; rating and zoom keys come from Settings.
   useEffect(() => {
     const onKey = (e) => {
-      if (e.target.closest?.('input, textarea, select, [contenteditable]') || exporting) return;
+      if (e.target.closest?.('input, textarea, select, [contenteditable], .overlay') || exporting) return;
+      if ((e.ctrlKey || e.metaKey) && e.key === "'" && photo && !autoOpen) { e.preventDefault(); copies.make(photo); return; }
       // Ctrl+Shift+E: Export, as in Lightroom.
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'e' && allPhotos.length && !autoOpen) { e.preventDefault(); setExporting(true); return; }
       // Ctrl+A selects every photo shown, as in Lightroom; Esc ends the selection.
@@ -368,10 +384,10 @@ export function CullView({ store, onDevelop }) {
 
       {photo ? (
         <>
-          <Stage photo={photo} meta={curMeta} photos={photos} index={index} metaById={meta} zoom={zoom} setZoom={setZoom} scale={zoomPct / 100}
+          <Stage photo={photo} meta={curMeta} photos={photos} index={index} metaById={meta} zoom={zoom} setZoom={setZoom} scale={zoomPct / 100} onMenu={(e) => photoMenu(e, photo, index)}
             subject={showSubject ? auto.measured[photo.id]?.subject?.box : null}>
             <div className="stage-top">
-              <span className="stage-name">{photo.name}{photo.raw && photo.jpeg && <span className="pill-mini">RAW+JPEG</span>}</span>
+              <span className="stage-name">{photoLabel(photo)}{photo.raw && photo.jpeg && <span className="pill-mini">RAW+JPEG</span>}</span>
               <ShotInfo meta={curMeta} />
               {zoom && <span className="pill-mini zoom">{zoomPct}%</span>}
             </div>
@@ -381,7 +397,7 @@ export function CullView({ store, onDevelop }) {
               <Stars value={curRating} onRate={(r) => ratePicked(r)} keys={keys} />
             </div>
           </Stage>
-          <Filmstrip photos={photos} index={index} meta={meta} suggestions={suggestions} onSelect={selectInStrip} requestMeta={requestMeta} picked={picked.size ? picked : null} />
+          <Filmstrip photos={photos} index={index} meta={meta} suggestions={suggestions} onSelect={selectInStrip} requestMeta={requestMeta} picked={picked.size ? picked : null} onMenu={(e, i) => photoMenu(e, photos[i], i)} />
         </>
       ) : (
         <div className="hero-empty">
@@ -478,7 +494,15 @@ function FolderTree({ parent, opened, stats, bridge, onOpen, onForget }) {
           const missing = siblings && !siblings.includes(name);
           const st = stats[opened.find((f) => splitPath(f).name === name)];
           return isOpened ? (
-            <div key={name} className={`tree-item opened${missing ? ' missing' : ''}`}>
+            <div key={name} className={`tree-item opened${missing ? ' missing' : ''}`}
+              onContextMenu={(e) => { const f = opened.find((x) => splitPath(x).name === name); openMenu(e, [
+                { heading: name },
+                !missing && { label: 'Open', icon: 'photo', onClick: () => onOpen(f) },
+                !missing && { label: 'Show in Explorer', icon: 'folder', onClick: () => app.reveal(f) },
+                { label: 'Copy folder path', icon: 'copy', onClick: () => navigator.clipboard?.writeText(f).catch(() => {}) },
+                '-',
+                { label: 'Remove from this list', icon: 'x', onClick: () => onForget(f) },
+              ]); }}>
               <button className="tree-open" onClick={() => onOpen(opened.find((f) => splitPath(f).name === name))} disabled={missing}>
                 <Icon name="photo" size={16} />
                 <span className="grow">
@@ -490,7 +514,13 @@ function FolderTree({ parent, opened, stats, bridge, onOpen, onForget }) {
               <button className="icon-btn tiny tree-forget" title="Remove from this list (nothing on disk is changed)" onClick={() => onForget(opened.find((f) => splitPath(f).name === name))}><Icon name="x" size={12} /></button>
             </div>
           ) : (
-            <div key={name} className="tree-item other">
+            <div key={name} className="tree-item other"
+              onContextMenu={(e) => openMenu(e, [
+                { heading: name },
+                { label: 'Open', icon: 'photo', onClick: () => onOpen(full) },
+                { label: 'Show in Explorer', icon: 'folder', onClick: () => app.reveal(full) },
+                { label: 'Copy folder path', icon: 'copy', onClick: () => navigator.clipboard?.writeText(full).catch(() => {}) },
+              ])}>
               <button className="tree-open" onClick={() => onOpen(full)}><span className="tree-name">{name}</span></button>
             </div>
           );
@@ -630,7 +660,7 @@ const FULL_LINGER_MS = 8000;
 
 // The big photo. Shows the small preview instantly, swaps in the sharp one as soon
 // as it's decoded, and loads the full-resolution preview only when zoomed in.
-function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, scale, subject, children }) {
+function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, scale, subject, children, onMenu }) {
   const wrapRef = useRef();
   const canvasRef = useRef();
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -740,7 +770,7 @@ function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, scale, sub
   };
 
   return (
-    <div className={`stage${zoom ? ' zoomed' : ''}`} ref={wrapRef}>
+    <div className={`stage${zoom ? ' zoomed' : ''}`} ref={wrapRef} onContextMenu={onMenu}>
       <canvas ref={canvasRef} style={{ width: size.w, height: size.h }}
         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} />
       {!bmp && <div className="stage-loading">Loading preview…</div>}
@@ -772,8 +802,9 @@ export function Filmstrip(props) {
   );
 }
 
-// `picked`: ids selected along with the current photo (Develop's Ctrl/Shift+click); onSelect gets the click.
-function FilmstripRow({ photos, index, meta, suggestions, onSelect, requestMeta, picked }) {
+// `picked`: ids selected along with the current photo (Develop's Ctrl/Shift+click); onSelect gets the click,
+// onMenu(event, index) a right-click.
+function FilmstripRow({ photos, index, meta, suggestions, onSelect, requestMeta, picked, onMenu }) {
   const ref = useRef();
   const [scroll, setScroll] = useState({ left: 0, width: 0 });
 
@@ -806,24 +837,33 @@ function FilmstripRow({ photos, index, meta, suggestions, onSelect, requestMeta,
     <div className="filmstrip" ref={ref} onScroll={(e) => setScroll({ left: e.currentTarget.scrollLeft, width: e.currentTarget.clientWidth })} onWheel={onWheel}>
       <div className="filmstrip-track" style={{ width: photos.length * CELL }}>
         {visible.map((p, i) => (
-          <Thumb key={p.id} photo={p} meta={meta[p.id]} suggested={suggestions[p.id]?.stars} active={first + i === index} picked={picked?.has(p.id)} left={(first + i) * CELL} onClick={(e) => onSelect(first + i, e)} />
+          <Thumb key={p.id} photo={p} meta={meta[p.id]} suggested={suggestions[p.id]?.stars} active={first + i === index} picked={picked?.has(p.id)} left={(first + i) * CELL} onClick={(e) => onSelect(first + i, e)} onMenu={onMenu && ((e) => onMenu(e, first + i))} />
         ))}
       </div>
     </div>
   );
 }
 
-function Thumb({ photo, meta, suggested, active, picked, left, onClick }) {
+function Thumb({ photo, meta, suggested, active, picked, left, onClick, onMenu }) {
   const [src, setSrc] = useState(() => imgUrl('thumb', photo.id));
   // Edited in Develop this session: the photo as developed (already upright and cropped).
-  const developed = useDevelopedThumb(photo.id);
+  const session = useDevelopedThumb(photo.id);
+  // Edited before: its developed thumbnail kept on disk, if there's one for its sidecar as it is.
+  const [noStored, setNoStored] = useState(false);
+  const stored = !session && photo.developed && !noStored ? app.cull.developedUrl(photo) : null;
+  const developed = session || stored;
   const rating = photoRating(photo, meta);
   const rot = developed ? 0 : ROTATION[meta?.orientation] || 0;
-  const onError = () => { if (src.startsWith(FILES)) thumbFallbackUrl(photo).then(setSrc, () => {}); };
-  const onLoad = () => { if (!src.startsWith(FILES)) fallbackShown(photo); };
+  const onError = () => {
+    if (stored) setNoStored(true);
+    else if (src.startsWith(FILES)) thumbFallbackUrl(photo).then(setSrc, () => {});
+  };
+  const onLoad = () => { if (!developed && !src.startsWith(FILES)) fallbackShown(photo); };
   return (
-    <button className={`thumb${active ? ' active' : ''}${picked ? ' picked' : ''}`} style={{ left }} onClick={onClick} onMouseDown={(e) => e.preventDefault()} title={photo.name}>
-      <img src={developed || src} alt="" decoding="async" draggable={false} onError={developed ? undefined : onError} onLoad={developed ? undefined : onLoad} style={rot ? { transform: `rotate(${rot}deg)` } : undefined} />
+    <button className={`thumb${active ? ' active' : ''}${picked ? ' picked' : ''}`} style={{ left }} onClick={onClick} onContextMenu={onMenu} onMouseDown={(e) => e.preventDefault()}
+      title={photo.copy ? `${photo.name}, virtual copy ${photo.copy}` : photo.name}>
+      <img src={developed || src} alt="" decoding="async" draggable={false} onError={session ? undefined : onError} onLoad={onLoad} style={rot ? { transform: `rotate(${rot}deg)` } : undefined} />
+      {photo.copy && <span className="thumb-copy" title="Virtual copy">Copy {photo.copy}</span>}
       {rating > 0 ? <span className="thumb-stars">{'★'.repeat(rating)}</span>
         : suggested > 0 && <span className="thumb-stars ghost" title="Suggested by auto-rate">{'☆'.repeat(suggested)}</span>}
     </button>

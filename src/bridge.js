@@ -4,7 +4,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import { openUrl } from '@tauri-apps/plugin-opener';
+import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
 import { withAdobe } from './develop/adobe.js';
 
 const inApp = typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
@@ -31,6 +31,8 @@ export const bridge = inApp ? {
   displayProfile: () => call('display_profile'),
   onUpdateStatus: (fn) => onEvent('update:status', fn),
   openUrl: (url) => openUrl(url).catch((err) => console.error('Could not open link', err)),
+  // Opens the file's folder in Explorer with the file selected.
+  reveal: (path) => revealItemInDir(path).catch((err) => console.error('Could not show the file', err)),
   saveTextFile: async (defaultName, text, options = {}) => {
     const path = await save({
       ...(options.title ? { title: options.title } : {}),
@@ -50,6 +52,13 @@ export const bridge = inApp ? {
     listDirs: (dir) => call('cull_list_dirs', { dir }),
     rate: (photo, rating) => call('cull_rate', { args: { id: photo.id, ratingIn: photo.ratingIn, sidecar: photo.sidecar, rating } }),
     saveThumb: (id, bytes) => call('cull_save_thumb', new Uint8Array(bytes), { headers: { 'x-id': encodeURIComponent(id) } }),
+    // Virtual copies (src-tauri photos.rs): a new copy of a photo, answered as a photo; removing one deletes only its own sidecar.
+    virtualCopy: (photo) => call('cull_virtual_copy', { args: { id: photo.id, sidecar: photo.sidecar } }),
+    removeCopy: (photo) => call('cull_remove_copy', { sidecar: photo.sidecar }),
+    // Thumbnails of photos as developed, kept on disk for each photo's sidecar as it is.
+    developedUrl: (photo) => fileUrl('photo/developed', { p: photo.id, s: photo.sidecar }),
+    saveDeveloped: (photo, bytes) => call('cull_save_developed', new Uint8Array(bytes), { headers: { 'x-id': encodeURIComponent(photo.id), 'x-sidecar': encodeURIComponent(photo.sidecar) } }),
+    developedMissing: (list) => call('cull_developed_missing', { items: list.map((p) => [p.id, p.sidecar]) }),
     cacheSize: () => call('cull_cache_size'),
     clearCache: () => call('cull_clear_cache'),
   },
@@ -58,6 +67,14 @@ export const bridge = inApp ? {
     open: (photo) => call('develop_open', { id: photo.id, sidecar: photo.sidecar }).then(withAdobe),
     read: (photo) => call('develop_read', { sidecar: photo.sidecar }),
     close: () => call('develop_close'),
+    // A photo not on screen, for its filmstrip thumbnail: { info, frame } (its RAW data isn't kept).
+    peek: async (photo, edge) => {
+      const r = await call('develop_peek', { id: photo.id, sidecar: photo.sidecar, edge });
+      if (r?.error) return r;
+      const buf = r instanceof ArrayBuffer ? r : new Uint8Array(r).buffer;
+      const n = new DataView(buf).getUint32(0, true);
+      return { info: withAdobe(JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)))), frame: buf.slice(4 + n) };
+    },
     save: (sidecar, { set, remove, seqs, xml = {}, own = {} }) => call('develop_save', { args: { sidecar, set, remove, seqs, xml, own } }),
     // dn: how much AI Denoise to blend in (0-100), once worked out with denoise().
     imageUrl: (photo, edge, ahead, dn = 0) => fileUrl('develop/image', { p: photo.id, edge, ...(ahead ? { ahead: 1 } : {}), ...(dn ? { dn } : {}) }),

@@ -187,7 +187,6 @@ const PROFILE_KEY = 'flightroom-last-profile';
 let startProfile = (() => {
   try { const v = globalThis.localStorage?.getItem(PROFILE_KEY); return PROFILES.some(([k]) => k === v) ? v : 'adobe'; } catch { return 'adobe'; }
 })();
-export const lastProfile = () => startProfile;
 /** Remembers `p` as the profile new photos start with. */
 export function rememberProfile(p) {
   if (p === startProfile || !PROFILES.some(([k]) => k === p)) return;
