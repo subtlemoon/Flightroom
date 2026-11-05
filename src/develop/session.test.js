@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { SETTINGS_PHOTOS, keepSettings, session } from './session.js';
+import { isExported, setExported } from './exported.js';
 
 describe('Develop session memory', () => {
   beforeEach(() => { session.settings.clear(); session.edited.clear(); session.unsaved.clear(); });
@@ -30,5 +31,15 @@ describe('Develop session memory', () => {
     keepSettings('p20', { layers: [] }, false);
     keepSettings('new', { layers: [] }, false);
     expect(session.settings.has('p20')).toBe(true);
+  });
+
+  it('takes the Exported label off when the edits change, not when a photo is just opened', () => {
+    const s0 = { exposure: 0 };
+    keepSettings('x.nef', s0, false);
+    setExported(['x.nef'], true);
+    keepSettings('x.nef', s0, true); // the same settings again (reopened with unsaved edits)
+    expect(isExported('x.nef')).toBe(true);
+    keepSettings('x.nef', { exposure: 0.5 }, true);
+    expect(isExported('x.nef')).toBe(false);
   });
 });

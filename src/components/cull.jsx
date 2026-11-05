@@ -8,6 +8,7 @@ import { Cancelled, measurePool } from '../cull/measure-pool.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
 import { cachedFolder, setWithSubfolders, startAt, useFolder, usePosition, useStripPick, withSubfolders } from '../cull/folder.js';
 import { useDevelopedThumb } from '../develop/thumbs.js';
+import { useExported } from '../develop/exported.js';
 import { fileItems, openMenu, photoLabel, ratingMenu } from './menu.jsx';
 import { copyActions } from '../cull/copies.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zoomLevel } from '../cull/keys.js';
@@ -387,7 +388,7 @@ export function CullView({ store, onDevelop }) {
           <Stage photo={photo} meta={curMeta} photos={photos} index={index} metaById={meta} zoom={zoom} setZoom={setZoom} scale={zoomPct / 100} onMenu={(e) => photoMenu(e, photo, index)}
             subject={showSubject ? auto.measured[photo.id]?.subject?.box : null}>
             <div className="stage-top">
-              <span className="stage-name">{photoLabel(photo)}{photo.raw && photo.jpeg && <span className="pill-mini">RAW+JPEG</span>}</span>
+              <span className="stage-name">{photoLabel(photo)}{photo.raw && photo.jpeg && <span className="pill-mini">RAW+JPEG</span>}<ExportedTag id={photo.id} /></span>
               <ShotInfo meta={curMeta} />
               {zoom && <span className="pill-mini zoom">{zoomPct}%</span>}
             </div>
@@ -853,6 +854,7 @@ function Thumb({ photo, meta, suggested, active, picked, left, onClick, onMenu }
   const stored = !session && photo.developed && !noStored ? app.cull.developedUrl(photo) : null;
   const developed = session || stored;
   const rating = photoRating(photo, meta);
+  const exported = useExported(photo.id);
   const rot = developed ? 0 : ROTATION[meta?.orientation] || 0;
   const onError = () => {
     if (stored) setNoStored(true);
@@ -861,11 +863,17 @@ function Thumb({ photo, meta, suggested, active, picked, left, onClick, onMenu }
   const onLoad = () => { if (!developed && !src.startsWith(FILES)) fallbackShown(photo); };
   return (
     <button className={`thumb${active ? ' active' : ''}${picked ? ' picked' : ''}`} style={{ left }} onClick={onClick} onContextMenu={onMenu} onMouseDown={(e) => e.preventDefault()}
-      title={photo.copy ? `${photo.name}, virtual copy ${photo.copy}` : photo.name}>
+      title={`${photo.copy ? `${photo.name}, virtual copy ${photo.copy}` : photo.name}${exported ? ' (exported)' : ''}`}>
       <img src={developed || src} alt="" decoding="async" draggable={false} onError={session ? undefined : onError} onLoad={onLoad} style={rot ? { transform: `rotate(${rot}deg)` } : undefined} />
       {photo.copy && <span className="thumb-copy" title="Virtual copy">Copy {photo.copy}</span>}
+      {exported && <span className="thumb-exported"><Icon name="check" size={10} /></span>}
       {rating > 0 ? <span className="thumb-stars">{'★'.repeat(rating)}</span>
         : suggested > 0 && <span className="thumb-stars ghost" title="Suggested by auto-rate">{'☆'.repeat(suggested)}</span>}
     </button>
   );
+}
+
+/** "Exported" while a photo is as it was exported (no edits since). */
+export function ExportedTag({ id }) {
+  return useExported(id) ? <span className="pill-mini exported" title="Exported, not edited since">Exported</span> : null;
 }

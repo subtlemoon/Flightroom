@@ -940,7 +940,7 @@ export class Renderer {
    * once the view or settings change (the work stops, nothing is shown).
    * Returns whether it was shown.
    */
-  async refine({ info, s, geo, frame, out2frame, regionFor, fetchRegion, current, onTile, opts = {} }) {
+  async refine({ info, s, geo, frame, out2frame, regionFor, fetchRegion, current, opts = {} }) {
     const gl = this.gl, W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
     const o2o = mm(geo.frameToOriented(frame), out2frame);
     const k = 1 / Math.hypot(o2o[0], o2o[3]); // output px per sensor px
@@ -976,9 +976,7 @@ export class Renderer {
           gl.generateMipmap(gl.TEXTURE_2D);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
           this.drawRect(this.resample, this.acc, [tx, ty, ow, oh], { uTex: t.tex, uRect: [tx, ty, ow, oh], uScale: tw / ow });
-          const t0 = performance.now();
           const done = await this.waitFrame();
-          onTile?.({ durationMs: performance.now() - t0, completed: done, width: tw, height: th });
           this.free(t);
           if (!done || !current()) return false;
           await new Promise((res) => setTimeout(res, 0)); // let the page breathe between tiles

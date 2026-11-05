@@ -4,6 +4,8 @@
 // changed this session (Export's "Photos edited this session"): opening a photo
 // only puts its settings in `settings`. `unsaved` holds photos whose latest
 // settings aren't in their sidecar yet; they are never dropped from `settings`.
+import { setExported } from './exported.js';
+
 export const session = { settings: new Map(), history: new Map(), edited: new Set(), unsaved: new Set() };
 
 // Settings are kept for this many photos (most recently used); the others are read
@@ -12,11 +14,17 @@ export const SETTINGS_PHOTOS = 60;
 
 /** Remembers a photo's current settings; `changed` when they came from an edit, not just opening it. */
 export function keepSettings(id, s, changed) {
+  if (changed && session.settings.get(id) !== s) edited(id);
   session.settings.delete(id);
   session.settings.set(id, s);
-  if (changed) session.edited.add(id);
   for (const old of session.settings.keys()) {
     if (session.settings.size <= SETTINGS_PHOTOS) break;
     if (old !== id && !session.unsaved.has(old)) session.settings.delete(old);
   }
+}
+
+/** A photo's edits changed (in Develop or pasted onto it): it isn't as exported any more. */
+export function edited(id) {
+  session.edited.add(id);
+  setExported([id], false);
 }
