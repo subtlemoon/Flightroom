@@ -1208,13 +1208,14 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
   };
   // Average camera colour of the parts that are neither clipped nor near black (grey world).
   // The photo upright and uncropped, without Transform or masks, at mask size:
-  // what AI masks are worked out from (RGBA, bottom row first).
+  // what AI masks are worked out from (RGBA, bottom row first). The lens
+  // correction stays as shown, since masks sit on the corrected photo.
   apiRef.current.aiPicture = () => {
     const r = rendererRef.current;
     if (!r || !ready || !s || !info) return null;
     const k = MASK_EDGE / Math.max(geo.ow, geo.oh);
     const w = Math.round(geo.ow * k), h = Math.round(geo.oh * k);
-    const flat = { ...s, crop: null, masks: [], layers: [], ...Object.fromEntries(TRANSFORM_KEYS.map((key) => [key, SLIDER[key].def])) };
+    const flat = { ...s, crop: null, masks: [], layers: [], ...Object.fromEntries(TRANSFORM_KEYS.filter((key) => SLIDER[key]).map((key) => [key, SLIDER[key].def])) };
     return { w, h, rgba: r.preview(info, flat, geo, geo.frame(null), w, h, null) };
   };
   apiRef.current.average = () => {
