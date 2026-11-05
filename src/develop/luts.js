@@ -1,6 +1,5 @@
 // Look-up tables the shader samples: the tone curve (region sliders plus the
 // point curve) and the colour mixer (per-hue shifts).
-import { COLOR_HUES } from './params.js';
 import { splineCurve } from './adobe.js';
 
 export const CURVE_SIZE = 1024;
@@ -78,20 +77,25 @@ export function curveTable(s, look = null) {
 
 export const HUE_SIZE = 360;
 
-// For every hue: shift (degrees), saturation change, luminance change and the
-// black & white mix, blended between the two nearest colour bands.
+// Where each Color Mixer band sits on the hue circle of linear ProPhoto RGB
+// (red, orange, yellow, green, aqua, blue, purple, magenta), fitted on
+// Lightroom exports of test charts (tools/lr-tone.md).
+export const MIXER_HUES = [356, 33.3, 52.1, 86, 162.3, 229.3, 277.9, 336.3];
+
+// For every hue: hue, saturation and luminance slider (-1..1) and the black &
+// white mix, blended between the two nearest bands.
 export function hueTable(s) {
   const out = new Float32Array(HUE_SIZE * 4);
-  const n = COLOR_HUES.length;
+  const order = MIXER_HUES.map((h, i) => [h, i]).sort((a, b) => a[0] - b[0]);
+  const n = order.length;
   for (let h = 0; h < HUE_SIZE; h++) {
-    let i = n - 1;
-    for (let k = 0; k < n; k++) if (COLOR_HUES[k] <= h) i = k;
-    const j = (i + 1) % n;
-    const a = COLOR_HUES[i], b = j === 0 ? 360 : COLOR_HUES[j];
-    const t = (h - a) / (b - a);
-    const w = 0.5 - 0.5 * Math.cos(Math.PI * t);
+    let k = n - 1;
+    for (let t = 0; t < n; t++) if (order[t][0] <= h) k = t;
+    const [a, i] = order[k], [b0, j] = order[(k + 1) % n];
+    const x = (h - a + 360) % 360, span = (b0 - a + 360) % 360;
+    const w = 0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, x / span));
     const mix = (kind) => ((s[`${kind}${i}`] || 0) * (1 - w) + (s[`${kind}${j}`] || 0) * w) / 100;
-    out[h * 4] = mix('hue') * 30;
+    out[h * 4] = mix('hue');
     out[h * 4 + 1] = mix('sat');
     out[h * 4 + 2] = mix('lum');
     out[h * 4 + 3] = mix('gray');

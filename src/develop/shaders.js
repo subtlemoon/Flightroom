@@ -296,7 +296,7 @@ vec3 gamutIn(vec3 d) {
 }
 // Display colour <-> OKLab (sRGB curve, signed so colours past the gamut edge
 // keep going), for colour grading.
-const float HSL_SAT_P = 1.56;
+const float MIX_HUE = 37.97, MIX_SAT_UP = 0.211, MIX_SAT_DOWN = 0.692, MIX_LUM_UP = 0.929, MIX_LUM_DOWN = 0.834, MIX_LUM_SAT = 0.127, MIX_S = 0.0615;
 const float GRADE_OFF = 0.165, GRADE_K = 0.0787, GRADE_D = 0.248, GRADE_Q = 0.18;
 vec3 srgbToLin(vec3 c) {
   vec3 a = abs(c);
@@ -717,19 +717,30 @@ void main() {
 
   // Colour: mixer (per hue), then vibrance and saturation.
   vec3 h = hsv(d);
-  vec4 adj = texture(uHue, vec2((h.x + 0.5) / 360.0, 0.5));
   float chroma = smoothstep(0.02, 0.25, h.y);
-  if (adj.x != 0.0) d = rotateHue(d, adj.x * chroma);
+  // The Color Mixer, fitted on Lightroom exports of test charts (tools/lr-tone.md):
+  // hue, saturation and value of linear ProPhoto RGB (Adobe's hue/sat map
+  // space), with the bands' weights picked by that hue.
+  vec3 pp = SRGB_TO_PP * srgbToLin(d);
+  vec3 q = rgbToHsv6(max(pp, vec3(0.0)));
+  vec4 adj = texture(uHue, vec2((q.x * 60.0 + 0.5) / 360.0, 0.5)) * smoothstep(0.0, MIX_S, q.y);
+  if (adj.x != 0.0 || adj.y != 0.0 || adj.z != 0.0) {
+    q.x += adj.x * MIX_HUE / 60.0;
+    q.y *= max(1.0 + adj.y * (adj.y > 0.0 ? MIX_SAT_UP : MIX_SAT_DOWN) - adj.z * MIX_LUM_SAT, 0.0);
+    q.y = min(q.y, 1.0);
+    q.z *= max(1.0 + adj.z * (adj.z > 0.0 ? MIX_LUM_UP : MIX_LUM_DOWN), 0.0);
+    d = linToSrgb(PP_TO_SRGB * hsv6ToRgb(q));
+  }
   if (LD.x != 0.0) d = rotateHue(d, LD.x * 60.0 * chroma);
-  // The mixer's saturation scales colour in OKLab, keeping brightness, and
-  // starts gently: Lightroom's Red -24 takes ~11% of the reds' colour and
-  // leaves their brightness (JWL_7345); -100 still turns them grey.
-  if (adj.y != 0.0) { vec3 o = toOklab(d); o.yz *= max(1.0 + sign(adj.y) * pow(abs(adj.y), HSL_SAT_P) * chroma, 0.0); d = fromOklab(o); }
-  float yd = dot(d, W709);
-  float skin = 1.0 - 0.5 * exp(-pow((h.x > 180.0 ? h.x - 360.0 : h.x) - 25.0, 2.0) / 450.0);
-  float sat = (1.0 + uSaturation + LC.y) * (1.0 + uVibrance * pow(1.0 - h.y, 2.0) * skin);
-  d = yd + (d - yd) * max(sat, 0.0);
-  d *= 1.0 + adj.z * 0.6 * chroma;
+  // Saturation and Vibrance scale OKLab colour, keeping brightness and hue.
+  // Fitted on the charts: Saturation +100 adds 80% and -100 takes 92%;
+  // Vibrance lifts muted colours most (by ProPhoto saturation) and lowers all alike.
+  float sv = uSaturation + LC.y;
+  if (sv != 0.0 || uVibrance != 0.0) {
+    float ps = rgbToHsv6(max(SRGB_TO_PP * srgbToLin(d), vec3(0.0))).y;
+    float f = (1.0 + sv * (sv > 0.0 ? 0.80 : 0.92)) * (1.0 + uVibrance * (uVibrance > 0.0 ? 1.29 * pow(clamp(1.0 - ps / 0.96, 0.0, 1.0), 0.77) : 0.77));
+    vec3 o = toOklab(d); o.yz *= max(f, 0.0); d = fromOklab(o);
+  }
   // A mask's colour swatch: tints its area, keeping the brightness.
   if (LF.y != 0.0 || LF.z != 0.0 || LF.w != 0.0) {
     float yt = dot(d, W709);
