@@ -235,3 +235,18 @@ reds ~4 L* darker, and the orange kart renders red.
   A superlinear saturation response (sat^2, matched at 45) fixes the darks
   but costs JWL_7345 (4.8 -> 5.9) through its weaker midtone 20, so it needs
   more photos with high wheel saturation before changing.
+
+## Colour Mixer saturation and hue-keeping curve (2.11.3)
+- Scored per hue band (Lab, 1/4 scale, so detail doesn't count) on JWL_7345
+  ungraded vs the ungraded Lightroom copy. Our Red -24 took 8.4 chroma and
+  4.9 L* off reds; Lightroom's takes ~3 chroma and <1 L*. The mixer's
+  saturation now scales OKLab chroma (brightness kept) by
+  1 + sign(a)|a|^1.56: -24 -> -11%, -100 still grey. Positive values are
+  untested against Lightroom.
+- The point curve now acts on the brightest and darkest channel with the
+  middle one keeping its place (RGBTone), not per channel: 7345 3.69 -> 3.62,
+  7530 5.02 -> 4.70 (median dE at 1/4 scale).
+- Tried and dropped: weaker grade tint on colourful pixels (worse on both).
+- Left on 7345 (Lab error per hue band, after grading): reds b +5 (yellow),
+  oranges a +3.5..+7.6 (red; ungraded only +2.7, so the grade adds it),
+  greens b +5, purples chroma -6.
