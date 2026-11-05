@@ -19,7 +19,7 @@ import { createSaver } from '../develop/saver.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey } from '../cull/keys.js';
 import {
   COLORS, COLOR_HUES, CURVE_PRESETS, PROFILES, SECTIONS, SLIDER, SLIDERS, TONE_MAPPERS, VIGNETTE_STYLES, WB_PRESETS,
-  curveName, defaults, fromXmp, isEdited, resetSection, sectionEdited, toXmp,
+  curveName, defaults, fromXmp, isEdited, rememberProfile, resetSection, sectionEdited, toXmp,
 } from '../develop/params.js';
 import { asShotTempTint, inv3, neutralToXy, xyToTempTint } from '../develop/color.js';
 import { adobeRendering } from '../develop/adobe.js';
@@ -1524,7 +1524,7 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
           </div>
         </div>
         <div className="dev-line dev-wb"><span className="muted">Profile</span>
-          <Dropdown value={s.profile || 'adobe'} options={PROFILES.map(([value, label]) => ({ value, label }))} onChange={(v) => update({ profile: v })}
+          <Dropdown value={s.profile || 'adobe'} options={PROFILES.map(([value, label]) => ({ value, label }))} onChange={(v) => { rememberProfile(v); update({ profile: v }); }}
             title={profileNote(info, s.profile)} />
         </div>
         <div className="dev-line dev-wb"><span className="muted">WB</span>

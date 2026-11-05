@@ -181,15 +181,30 @@ export const WB_PRESETS = [['As Shot'], ['Auto'], ['Daylight', 5500, 10], ['Clou
 
 export const VIGNETTE_STYLES = [[1, 'Highlight Priority'], [2, 'Color Priority'], [3, 'Paint Overlay']];
 
+// The profile a photo starts with: the one last picked (Jaewon asked), so a
+// switch to Adobe Standard sticks for every photo without one of its own.
+const PROFILE_KEY = 'flightroom-last-profile';
+let startProfile = (() => {
+  try { const v = globalThis.localStorage?.getItem(PROFILE_KEY); return PROFILES.some(([k]) => k === v) ? v : 'adobe'; } catch { return 'adobe'; }
+})();
+export const lastProfile = () => startProfile;
+/** Remembers `p` as the profile new photos start with. */
+export function rememberProfile(p) {
+  if (p === startProfile || !PROFILES.some(([k]) => k === p)) return;
+  startProfile = p;
+  defaultsCache = new WeakMap();
+  try { globalThis.localStorage?.setItem(PROFILE_KEY, p); } catch {}
+}
+
 // Defaults are asked for often (every redraw of the panel), so they're kept per photo.
-const defaultsCache = new WeakMap();
+let defaultsCache = new WeakMap();
 export function defaults(asShot) {
   let d = defaultsCache.get(asShot);
   if (!d) { d = makeDefaults(asShot); defaultsCache.set(asShot, d); }
   return { ...d };
 }
 function makeDefaults(asShot) {
-  const s = { wb: 'As Shot', profile: 'adobe', toneMap: 'none', bw: false, removeCA: false, lensProfile: false, vignetteStyle: 1, constrainCrop: false, crop: null, masks: [], layers: [], aiDenoise: 0 };
+  const s = { wb: 'As Shot', profile: startProfile, toneMap: 'none', bw: false, removeCA: false, lensProfile: false, vignetteStyle: 1, constrainCrop: false, crop: null, masks: [], layers: [], aiDenoise: 0 };
   for (const [k] of CURVE_CHANNELS) s[k] = LINEAR_CURVE;
   for (const sl of SLIDERS) s[sl.key] = sl.def;
   s.temp = asShot.temp;
@@ -232,9 +247,10 @@ export function fromXmp(crs, curves, asShot, own = {}, look = null) {
   // Lightroom writes Adobe Color as Adobe Standard with the Adobe Color look.
   const cp = crs.CameraProfile || '';
   if (/^Camera /i.test(cp)) s.profile = 'camera';
-  else if (/^Adobe Standard/i.test(cp) && look !== 'Adobe Color') s.profile = 'standard';
+  else if (/^Adobe Standard/i.test(cp)) s.profile = look === 'Adobe Color' ? 'adobe' : 'standard';
+  else if (look === 'Adobe Color') s.profile = 'adobe';
   // AgX is Flightroom's own; Lightroom sees Adobe Color.
-  if (own.Profile === 'agx') s.profile = 'agx';
+  if (own.Profile === 'agx' || own.Profile === 'adobe') s.profile = own.Profile;
   const tm = own.ToneMap;
   if (TONE_MAPPERS.some(([k]) => k === tm)) s.toneMap = tm;
   else if (s.profile === 'agx') s.toneMap = 'agx';
@@ -291,8 +307,8 @@ export function toXmp(s) {
     else set[sl.crs] = sl.min >= 0 ? String(Math.round(v)) : signed(v, sl.decimals || 0);
   }
   const remove = [];
-  // No CameraProfile means Lightroom's default, Adobe Color (and a look
-  // Lightroom wrote stays). Adobe Standard is without its look.
+  // No CameraProfile: Lightroom keeps a look it wrote (Adobe Color), else it
+  // shows Adobe Standard. Adobe Standard is without its look.
   if (s.profile === 'camera') set.CameraProfile = 'Camera Standard';
   else if (s.profile === 'standard') set.CameraProfile = 'Adobe Standard';
   else remove.push('CameraProfile');
@@ -324,7 +340,8 @@ export function toXmp(s) {
       Masks: masksToJson(s.masks),
       Layers: layersToText(s.layers),
       Denoise: s.aiDenoise ? String(s.aiDenoise) : '',
-      Profile: s.profile === 'agx' ? 'agx' : '',
+      // Adobe Color is marked too, so it comes back as Adobe Color whatever new photos start with.
+      Profile: s.profile === 'agx' || s.profile === 'adobe' ? s.profile : '',
       ToneMap: s.toneMap && s.toneMap !== 'none' ? s.toneMap : '',
       ...ownTm,
     },

@@ -96,6 +96,25 @@ def variants():
     return v
 
 
+C7345, C7530 = [[0, 0], [121, 51], [175, 183], [255, 255]], [[0, 0], [113, 25], [162, 174], [255, 255]]
+G7345 = {'ColorGradeMidtoneHue': '11', 'ColorGradeMidtoneSat': '20', 'SplitToningShadowHue': '217', 'SplitToningShadowSaturation': '45'}
+G7530 = {'ColorGradeMidtoneHue': '110', 'ColorGradeMidtoneSat': '18', 'SplitToningShadowHue': '221', 'SplitToningShadowSaturation': '92',
+         'SplitToningHighlightHue': '350', 'SplitToningHighlightSaturation': '32'}
+
+
+def variants_curvegrade():
+    """Grading with and without a steep point curve, to find where Lightroom grades relative to the curve."""
+    v = [('mid', 'reset', {}), ('night', 'reset', {})]
+    for sc in ('mid', 'night'):
+        v += [(sc, 'Curve7345', {'_curve': C7345}), (sc, 'Curve7530', {'_curve': C7530}),
+              (sc, 'Grade7345', G7345), (sc, 'Grade7345_Curve7345', {**G7345, '_curve': C7345}),
+              (sc, 'Grade7530', G7530), (sc, 'Grade7530_Curve7530', {**G7530, '_curve': C7530})]
+    v += [('mid', 'GradeShadow_h220_s100_Curve7345', {'SplitToningShadowHue': '220', 'SplitToningShadowSaturation': '100', '_curve': C7345}),
+          ('mid', 'GradeMid_h30_s100_Curve7345', {'ColorGradeMidtoneHue': '30', 'ColorGradeMidtoneSat': '100', '_curve': C7345}),
+          ('mid', 'Contrast-95', {'Contrast2012': '-95'}), ('mid', 'Grade7345_Contrast-95', {**G7345, 'Contrast2012': '-95'})]
+    return v
+
+
 BASE = {'ProcessVersion': '11.0', 'Version': '15.0', 'CameraProfile': 'Adobe Standard', 'WhiteBalance': 'As Shot', 'HasSettings': 'True',
         'AlreadyApplied': 'False', 'Exposure2012': '0.00', 'Contrast2012': '0', 'Highlights2012': '0', 'Shadows2012': '0', 'Whites2012': '0',
         'Blacks2012': '0', 'Texture': '0', 'Clarity2012': '0', 'Dehaze': '0', 'Vibrance': '0', 'Saturation': '0', 'Sharpness': '0',
@@ -195,7 +214,7 @@ def main_grad(ref_json, out):
     print(len(v), 'gradient charts')
 
 
-def main(ref_json, out):
+def main(ref_json, out, variants=variants):
     os.makedirs(out, exist_ok=True); os.makedirs(os.path.join(out, 'rig'), exist_ok=True)
     ref = json.load(open(ref_json))
     ill = ref['adobe']['profiles']['Adobe Standard']['illuminants']
@@ -235,4 +254,6 @@ def main(ref_json, out):
 
 
 if __name__ == '__main__':
-    (main_grad if '--grad' in sys.argv else main)(*[a for a in sys.argv[1:] if not a.startswith('--')])
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    if '--grad' in sys.argv: main_grad(*args)
+    else: main(*args, variants=variants_curvegrade if '--curvegrade' in sys.argv else variants)

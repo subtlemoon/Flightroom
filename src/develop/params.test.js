@@ -67,3 +67,21 @@ describe('cleanCurve', () => {
     expect(cleanCurve([[255, 255], [0, 0], [128, 90], [128, 200], [-3, 300]])).toEqual([[0, 0], [128, 90], [255, 255]]);
   });
 });
+
+describe('the profile new photos start with', () => {
+  it('is the one last picked, and a photo set to Adobe Color keeps it', async () => {
+    const { rememberProfile } = await import('./params.js');
+    const shot = { temp: 5000, tint: 0 };
+    try {
+      rememberProfile('standard');
+      expect(defaults(shot).profile).toBe('standard');
+      expect(fromXmp({ Exposure2012: '0.00' }, {}, shot).profile).toBe('standard');
+      expect(fromXmp({ CameraProfile: 'Adobe Standard' }, {}, shot, {}, 'Adobe Color').profile).toBe('adobe');
+      const { set, seqs, own } = toXmp({ ...defaults(shot), profile: 'adobe' });
+      expect(fromXmp(set, seqs, shot, own).profile).toBe('adobe');
+    } finally {
+      rememberProfile('adobe');
+    }
+    expect(defaults({ temp: 4000, tint: 0 }).profile).toBe('adobe');
+  });
+});
