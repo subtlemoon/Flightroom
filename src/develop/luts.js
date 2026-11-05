@@ -103,26 +103,23 @@ export function hueTable(s) {
   return out;
 }
 
-// Colour grading as Lightroom does it, fitted on Lightroom exports of JWL_7345
-// with and without its grade (tools/lr-tone.md). The grade works in OKLab: each
-// region adds its colour (the wheel hue's OKLab direction, turned 45 degrees),
-// pulls existing colour in a little and darkens, less so for colours that
-// already lean the tint's way.
-const GRADE_TURN = (-45.5 * Math.PI) / 180;
-const srgbLin = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
-const okHue = (deg) => {
-  const h = ((((deg % 360) + 360) % 360) / 60), x = 1 - Math.abs((h % 2) - 1);
-  const [r, g, b] = [[1, x, 0], [x, 1, 0], [0, 1, x], [0, x, 1], [x, 0, 1], [1, 0, x]][Math.min(5, Math.floor(h))].map(srgbLin);
-  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
-  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
-  const q = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
-  return Math.atan2(0.0259040371 * l + 0.7827717662 * m - 0.808675766 * q, 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * q) + GRADE_TURN;
-};
-/** Colour grading per region (shadows, midtones, highlights, global): the tint's OKLab direction and the amount. */
+// Colour grading, fitted on Lightroom exports of test charts and of JWL_7345/7530
+// with and without their grade (tools/lr-tone.md). Lightroom grades after the
+// tone curve, pointwise, and the grade barely changes brightness:
+// each region adds the wheel's hue (turned 12.5 degrees) as a display-RGB tint
+// around zero, leaning so warm tints brighten and blue ones darken as
+// Lightroom's do, scaled by the region's strength and the wheel's amount.
+const GRADE_HUE = -12.81, GRADE_LUMA = -0.778;
+const GRADE_K = [0.3014, 0.792, 0.5005, 0.3057]; // shadows, midtones, highlights, global
+/** Colour grading per region (shadows, midtones, highlights, global): the RGB tint the shader adds. */
 export function gradeTints(s) {
-  return ['gShadow', 'gMid', 'gHigh', 'gGlobal'].map((k) => {
-    const a = okHue(s[`${k}Hue`] || 0), amt = Math.min(1, (s[`${k}Sat`] || 0) / 100);
-    return [+Math.cos(a).toFixed(5), +Math.sin(a).toFixed(5), amt];
+  return ['gShadow', 'gMid', 'gHigh', 'gGlobal'].map((k, r) => {
+    const h = (((((s[`${k}Hue`] || 0) + GRADE_HUE) % 360) + 360) % 360) / 60, x = 1 - Math.abs((h % 2) - 1);
+    const t = [[1, x, 0], [x, 1, 0], [0, 1, x], [0, x, 1], [x, 0, 1], [1, 0, x]][Math.min(5, Math.floor(h))];
+    const mean = (t[0] + t[1] + t[2]) / 3, luma = 0.2126 * t[0] + 0.7152 * t[1] + 0.0722 * t[2];
+    const off = (1 - GRADE_LUMA) * mean + GRADE_LUMA * luma;
+    const amt = Math.min(1, (s[`${k}Sat`] || 0) / 100) * GRADE_K[r];
+    return t.map((v) => +((v - off) * amt).toFixed(5));
   });
 }
 

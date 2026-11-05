@@ -120,7 +120,7 @@ uniform float uNrLum, uNrColor, uNrLumDetail, uNrLumContrast, uNrColorDetail, uN
 uniform float uVignette, uVigMid, uVigRound, uVigFeather, uVigStyle, uVigHighlights;
 uniform float uRefineSat;
 uniform float uBW;
-uniform vec3 uGradeS, uGradeM, uGradeH, uGradeG; // OKLab hue direction (xy) and amount (luts.js gradeTints)
+uniform vec3 uGradeS, uGradeM, uGradeH, uGradeG; // each region's tint, scaled by its amount (luts.js gradeTints)
 uniform vec4 uGradeLum;   // shadows, midtones, highlights, global
 uniform vec2 uGradeShape; // blending, balance
 uniform float uGradeOn;
@@ -297,7 +297,7 @@ vec3 gamutIn(vec3 d) {
 // Display colour <-> OKLab (sRGB curve, signed so colours past the gamut edge
 // keep going), for colour grading.
 const float MIX_HUE = 37.97, MIX_SAT_UP = 0.211, MIX_SAT_DOWN = 0.692, MIX_LUM_UP = 0.929, MIX_LUM_DOWN = 0.834, MIX_LUM_SAT = 0.127, MIX_S = 0.0615;
-const float GRADE_OFF = 0.165, GRADE_K = 0.0787, GRADE_D = 0.248, GRADE_Q = 0.18;
+const float GRADE_C = 0.6302, GRADE_OFF = 0.1036, GRADE_W = 0.1369, GRADE_P = 0.4672;
 vec3 srgbToLin(vec3 c) {
   vec3 a = abs(c);
   return sign(c) * mix(pow((a + 0.055) / 1.055, vec3(2.4)), a / 12.92, step(a, vec3(0.04045)));
@@ -787,28 +787,21 @@ void main() {
     d = vec3(max(yb, 0.0));
   }
 
-  // Colour grading, fitted to Lightroom's (exports of JWL_7345 with and without
-  // its grade, tools/lr-tone.md), in OKLab: soft regions on lightness around the
-  // balance point; each adds its colour, pulls existing colour in a little and
-  // darkens (Lightroom's grade does: 3-5 L*), less for colours already leaning
-  // its way, so a red suit keeps its brightness under a red midtone grade.
+  // Colour grading, fitted on Lightroom exports of test charts and
+  // of JWL_7345/7530 with and without their grade (tools/lr-tone.md):
+  // soft regions on OKLab lightness around the balance point; each adds its
+  // tint (luts.js gradeTints) to the display colour, most in the middle of each
+  // channel's range and fading toward black and white, as a soft-light blend does.
   if (uGradeOn > 0.0) {
-    vec3 o = toOklab(d);
-    float c = 0.639 - uGradeShape.y * 0.3, w = 0.0943 * (0.1 + uGradeShape.x * 0.4) / 0.3;
-    float sh = 1.0 / (1.0 + exp((o.x - c + GRADE_OFF) / w));
-    float hi = 1.0 / (1.0 + exp((c + GRADE_OFF - o.x) / w));
-    float mi = clamp(1.0 - sh - hi, 0.0, 1.0) / (1.0 - 2.0 / (1.0 + exp(GRADE_OFF / w)));
-    vec4 wr = vec4(sh, mi, hi, 1.0) * vec4(uGradeS.z, uGradeM.z, uGradeH.z, uGradeG.z);
-    vec2 ab = o.yz;
-    float dk = 0.0;
-    o.yz *= 1.0 - GRADE_Q * (wr.x + wr.y + wr.z + wr.w);
-    vec2 dirs[4] = vec2[4](uGradeS.xy, uGradeM.xy, uGradeH.xy, uGradeG.xy);
-    for (int i = 0; i < 4; i++) {
-      o.yz += GRADE_K * pow(max(o.x, 0.0), 0.361) * wr[i] * dirs[i];
-      dk += wr[i] * clamp(1.0 - 7.0 * dot(ab, dirs[i]), 0.0, 1.0);
-    }
-    o.x *= 1.0 - GRADE_D * dk;
-    d = fromOklab(o);
+    float lk = toOklab(d).x;
+    // Blending past 50 widens the regions and strengthens them (chart at 100).
+    float bl = uGradeShape.x, up = max(bl - 0.5, 0.0);
+    float c = GRADE_C - uGradeShape.y * 0.3, w = GRADE_W * (bl >= 0.5 ? 1.0 + up * 4.0 : (0.1 + bl * 0.4) / 0.3);
+    float sh = 1.0 / (1.0 + exp((lk - c + GRADE_OFF) / w));
+    float hi = 1.0 / (1.0 + exp((c + GRADE_OFF - lk) / w));
+    float mi = clamp(1.0 - sh - hi, 0.0, 1.0);
+    vec3 dd = clamp(d, 0.0, 1.0);
+    d += ((sh * uGradeS + mi * uGradeM + hi * uGradeH) * (1.0 + up * 2.0) + uGradeG) * pow(4.0 * dd * (1.0 - dd), vec3(GRADE_P));
     float lum = uGradeLum.x * sh + uGradeLum.y * mi + uGradeLum.z * hi + uGradeLum.w;
     d = lum >= 0.0 ? 1.0 - (1.0 - d) * (1.0 - lum * 0.5) : d * (1.0 + lum * 0.5);
   }
