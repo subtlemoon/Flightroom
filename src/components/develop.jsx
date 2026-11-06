@@ -1111,16 +1111,34 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
     return () => { live = false; clearTimeout(t); };
   }, [ready, view, W, H, cropMode, frame, toSource, dn, layersNow]);
 
-  // Histogram, a little behind the sliders.
-  // Read back without waiting for the graphics card, so dragging never stalls on it.
+  // Histogram: follows the sliders live while they move (one at a time, at
+  // most every 40 ms, always ending on the latest settings). Read back
+  // without waiting for the graphics card, so dragging never stalls on it.
+  const histJob = useRef({ busy: false, at: 0, timer: 0, args: null, gen: 0 });
+  const runHist = () => {
+    const j = histJob.current;
+    if (j.busy || !j.args) return;
+    // Slower graphics cards (frames over 25 ms) keep more room for the photo itself.
+    const wait = j.at + (renderMs.current > 25 ? 120 : 40) - performance.now();
+    if (wait > 0) { if (!j.timer) j.timer = setTimeout(() => { j.timer = 0; runHist(); }, wait); return; }
+    const r = rendererRef.current;
+    if (!r) return;
+    const { info: i, s: st, geo: g, gen } = j.args;
+    j.args = null; j.busy = true; j.at = performance.now();
+    const done = (h) => {
+      j.busy = false;
+      if (h && gen === j.gen) setHist(h);
+      runHist();
+    };
+    try { r.histogram(i, st, g, g.frame(st.crop), true).then(done, () => done(null)); } catch { done(null); }
+  };
+  useEffect(() => { histJob.current.gen++; }, [info]);
   useEffect(() => {
     if (!ready || !s || !info || !geo) return;
-    let live = true;
-    const t = setTimeout(() => {
-      rendererRef.current?.histogram(info, s, geo, geo.frame(s.crop), true).then((h) => { if (live && h) setHist(h); });
-    }, 80);
-    return () => { live = false; clearTimeout(t); };
+    histJob.current.args = { info, s, geo, gen: histJob.current.gen };
+    runHist();
   }, [ready, s, info]);
+  useEffect(() => () => clearTimeout(histJob.current.timer), []);
   // The mask preview on the left: the whole photo with the selected mask.
   const previewKey = previewView && JSON.stringify(previewView);
   useEffect(() => {
@@ -1661,17 +1679,48 @@ function smoothBins(bins) {
   });
 }
 
-function Histogram() {
+let lastHistogram = null;
+if (typeof window !== 'undefined') window.addEventListener('develop:hist', (e) => { lastHistogram = e.detail; });
+
+export function Histogram() {
   const ref = useRef();
-  const [bins, setBins] = useState(null);
+  // Each new histogram is eased into over a few frames, so it glides rather
+  // than jumps while a slider moves.
+  const anim = useRef({ shown: null, target: null, bins: null, raf: 0 });
+  const [, tick] = useState(0);
   useEffect(() => {
-    const on = (e) => setBins(e.detail);
+    const a = anim.current;
+    const step = () => {
+      a.raf = 0;
+      if (!a.target) return;
+      if (!a.shown) a.shown = a.target.map((b) => Float32Array.from(b));
+      let moving = false;
+      for (let ch = 0; ch < 3; ch++) {
+        const sh = a.shown[ch], tg = a.target[ch];
+        for (let i = 0; i < 256; i++) {
+          const d = tg[i] - sh[i];
+          if (Math.abs(d) > Math.max(0.5, tg[i] * 0.004)) { sh[i] += d * 0.45; moving = true; } else sh[i] = tg[i];
+        }
+      }
+      tick((n) => n + 1);
+      if (moving) a.raf = requestAnimationFrame(step);
+    };
+    const on = (e) => {
+      a.bins = e.detail;
+      if (!e.detail) { a.target = a.shown = null; tick((n) => n + 1); return; }
+      // Counts as fractions of the pixels, so photos of any size blend.
+      const total = e.detail[0].reduce((x, y) => x + y, 0) || 1;
+      a.target = smoothBins(e.detail).map((b) => b.map((v) => (v / total) * 1e5));
+      if (!a.raf) a.raf = requestAnimationFrame(step);
+    };
+    if (lastHistogram) on({ detail: lastHistogram });
     window.addEventListener('develop:hist', on);
-    return () => window.removeEventListener('develop:hist', on);
+    return () => { window.removeEventListener('develop:hist', on); cancelAnimationFrame(a.raf); };
   }, []);
   useEffect(() => {
     const c = ref.current;
     if (!c) return;
+    const { shown: smooth, bins } = anim.current;
     const dpr = window.devicePixelRatio || 1;
     const w = c.clientWidth * dpr, h = c.clientHeight * dpr;
     c.width = w; c.height = h;
@@ -1682,8 +1731,8 @@ function Histogram() {
     // stretched the low parts of the histogram up), lightly smoothed, and the
     // channels added so that where all three overlap the histogram is grey,
     // two make yellow, cyan or magenta, and one shows its own colour.
-    const smooth = smoothBins(bins);
-    let max = 1;
+    if (!smooth) return;
+    let max = 1e-6;
     for (const b of smooth) for (let i = 2; i < 254; i++) max = Math.max(max, b[i]);
     ctx.globalCompositeOperation = 'lighter';
     [[0.55, 0.08, 0.08], [0.08, 0.55, 0.08], [0.08, 0.08, 0.55]].forEach((col, ch) => {
@@ -1701,7 +1750,7 @@ function Histogram() {
     ctx.fillRect(3 * dpr, 3 * dpr, 7 * dpr, 7 * dpr);
     ctx.fillStyle = hi > 0.002 ? '#ff5c6c' : 'rgba(255,255,255,0.15)';
     ctx.fillRect(w - 10 * dpr, 3 * dpr, 7 * dpr, 7 * dpr);
-  }, [bins]);
+  });
   return <canvas className="dev-hist" ref={ref} title="Histogram. Corner boxes light up when shadows (left) or highlights (right) clip; press J to see where." />;
 }
 
