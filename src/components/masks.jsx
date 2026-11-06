@@ -215,27 +215,36 @@ function MaskRow({ m, size, active, selPart, setSel, acts, menu, setMenu, full, 
 // The mask's shape in miniature, white on black.
 function MaskThumb({ m, size }) {
   const ref = useRef();
+  const lastAt = useRef(0);
   useEffect(() => {
+    if (!size) return;
+    // While a brush paints, redrawn a few times a second rather than every move.
+    const t = setTimeout(() => { lastAt.current = performance.now(); draw(); }, Math.max(0, lastAt.current + 250 - performance.now()));
+    return () => clearTimeout(t);
+  }, [m.parts, m.invert, size?.ow, size?.oh]);
+  const draw = () => {
     const c = ref.current;
-    if (!c || !size) return;
+    if (!c) return;
     const r = maskRaster(m, size.ow, size.oh);
-    const tmp = document.createElement('canvas');
-    tmp.width = r.W; tmp.height = r.H;
-    const img = tmp.getContext('2d').createImageData(r.W, r.H);
-    for (let i = 0; i < r.data.length; i++) {
-      const v = m.invert ? 255 - r.data[i] : r.data[i];
-      img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = v;
-      img.data[i * 4 + 3] = 255;
-    }
-    tmp.getContext('2d').putImageData(img, 0, 0);
     const dpr = window.devicePixelRatio || 1;
     c.width = Math.round(c.clientWidth * dpr); c.height = Math.round(c.clientHeight * dpr);
     const ctx = c.getContext('2d');
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, c.width, c.height);
+    // Sampled straight down to the thumbnail's size.
     const k = Math.min(c.width / r.W, c.height / r.H);
-    ctx.drawImage(tmp, (c.width - r.W * k) / 2, (c.height - r.H * k) / 2, r.W * k, r.H * k);
-  }, [m.parts, m.invert, size?.ow, size?.oh]);
+    const w = Math.max(1, Math.round(r.W * k)), h = Math.max(1, Math.round(r.H * k));
+    const img = ctx.createImageData(w, h);
+    for (let y = 0, o = 0; y < h; y++) {
+      const row = Math.min(r.H - 1, Math.floor((y + 0.5) / k)) * r.W;
+      for (let x = 0; x < w; x++, o += 4) {
+        const d = r.data[row + Math.min(r.W - 1, Math.floor((x + 0.5) / k))];
+        img.data[o] = img.data[o + 1] = img.data[o + 2] = m.invert ? 255 - d : d;
+        img.data[o + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, Math.round((c.width - w) / 2), Math.round((c.height - h) / 2));
+  };
   return <canvas className="mask-thumb" ref={ref} />;
 }
 

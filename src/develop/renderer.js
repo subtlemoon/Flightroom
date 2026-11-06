@@ -6,7 +6,7 @@ import { LUT_SIZE } from './icc.js';
 import { colorTransform, inv3, mul3, neutralToXy, tempTintToXy } from './color.js';
 import { BASELINE_EXPOSURE, PP_TO_SRGB, SRGB_TO_PP, TONE_SIZE, adobeRendering, dcpTransform, hueSatFor, hueSatPixels, toneTable } from './adobe.js';
 import { CURVE_SIZE, HUE_SIZE, calibrationMatrix, curveTable, gradeTints, hueTable } from './luts.js';
-import { MAX_MASKS, POINT_DEFAULT, adjOf, lumRange, maskRaster } from './masks.js';
+import { MAX_MASKS, POINT_DEFAULT, adjOf, lumRange, maskRaster, rasterChange } from './masks.js';
 import { tonemapUniforms } from './tonemap.js';
 import { Composer } from './compose.js';
 import { renderLayers } from './retouch.js';
@@ -280,6 +280,20 @@ export const MASK_STYLES = ['color', 'both', 'outline', 'matte', 'image'];
 
 export const fitScale = (W, H, f, margin = 0) => Math.min((W - margin * 2) / (2 * f.hw), (H - margin * 2) / (2 * f.hh));
 
+// Where a group of mask images differs from the group on the graphics card:
+// [x, y, w, h], or null when a mask changed some other way than by painting.
+function changedRect(group, was) {
+  let box = null;
+  for (let i = 0; i < group.length; i++) {
+    if (group[i] === was[i]) continue;
+    const r = rasterChange(group[i], was[i]);
+    if (!r) return null;
+    if (!r[2] || !r[3]) continue;
+    box = box ? [Math.min(box[0], r[0]), Math.min(box[1], r[1]), Math.max(box[0] + box[2], r[0] + r[2]), Math.max(box[1] + box[3], r[1] + r[3])] : [r[0], r[1], r[0] + r[2], r[1] + r[3]];
+  }
+  return box ? [box[0], box[1], box[2] - box[0], box[3] - box[1]] : [0, 0, 0, 0];
+}
+
 export class Renderer {
   /**
    * `onScreen`: the canvas is shown on the page. Its picture is then kept
@@ -551,6 +565,22 @@ export class Renderer {
       const cur = this.maskTex[t];
       if (cur && cur.rasters.length === group.length && cur.rasters.every((r, i) => r === group[i])) continue;
       const { W, H } = group[0];
+      // A brush stroke changes a small patch: only that goes to the graphics card.
+      const rect = cur && cur.W === W && cur.H === H && cur.rasters.length === group.length && changedRect(group, cur.rasters);
+      if (rect) {
+        const [x, y, w, h] = rect;
+        cur.rasters = group;
+        if (!w || !h) continue;
+        const px = new Uint8Array(w * h * 4);
+        group.forEach((r, c) => {
+          const d = r.data;
+          for (let j = 0; j < h; j++) for (let i = 0, s = (y + j) * W + x, o = j * w * 4 + c; i < w; i++, o += 4) px[o] = d[s + i];
+        });
+        gl.bindTexture(gl.TEXTURE_2D, cur.tex);
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        continue;
+      }
       const px = new Uint8Array(W * H * 4);
       group.forEach((r, c) => { const d = r.data; for (let i = 0; i < d.length; i++) px[i * 4 + c] = d[i]; });
       if (cur && cur.W === W && cur.H === H) {

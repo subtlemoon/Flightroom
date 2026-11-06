@@ -129,7 +129,7 @@ function aiLayer(p) {
   if (!c) {
     const px = inflateSync(fromB64(p.data));
     c = canvas(p.w, p.h);
-    const ctx = c.getContext('2d');
+    const ctx = ctx2d(c);
     const img = ctx.createImageData(p.w, p.h);
     for (let i = 0; i < px.length; i++) { img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = px[i]; img.data[i * 4 + 3] = 255; }
     ctx.putImageData(img, 0, 0);
@@ -172,8 +172,9 @@ function drawRadial(ctx, p, W, H) {
   ctx.restore();
 }
 
-// Brush dabs along a stroke, spaced by a quarter of the brush size.
-function drawStroke(ctx, st, W, H, from = 0) {
+// Brush dabs along a stroke, spaced by a quarter of the brush size. `box`
+// ([x0, y0, x1, y1], mask px) grows to take in every dab drawn.
+function drawStroke(ctx, st, W, H, from, box) {
   const r = Math.max(0.5, st.size * Math.max(W, H));
   const hard = Math.min(0.99, 1 - st.feather / 100);
   const a = st.flow / 100;
@@ -185,6 +186,8 @@ function drawStroke(ctx, st, W, H, from = 0) {
     g.addColorStop(1, `rgba(${color},0)`);
     ctx.fillStyle = g;
     ctx.fillRect(x - r, y - r, 2 * r, 2 * r);
+    box[0] = Math.min(box[0], x - r); box[1] = Math.min(box[1], y - r);
+    box[2] = Math.max(box[2], x + r); box[3] = Math.max(box[3], y + r);
   };
   const pts = st.pts;
   const step = Math.max(1, r * 0.25);
@@ -197,16 +200,21 @@ function drawStroke(ctx, st, W, H, from = 0) {
   }
 }
 
+// Every canvas here is read back, so all of them live in main memory (no
+// round trips through the graphics card).
+const ctx2d = (c) => c.getContext('2d', { willReadFrequently: true });
+
 // Brush layers are kept per part, so a stroke being painted only adds its new dabs.
-const brushCache = new Map(); // part id -> { W, H, c, strokes, done }
-function brushLayer(p, W, H) {
+const brushCache = new Map(); // part id -> { W, H, c, strokes, done, tip }
+function brushLayer(p, W, H, box) {
   let b = brushCache.get(p.id);
+  const last = b ? b.strokes.length - 1 : -1;
   const fresh = !b || b.W !== W || b.H !== H || b.strokes.length > p.strokes.length
-    || b.strokes.some((st, i) => i < b.strokes.length - 1 && st !== p.strokes[i])
-    || (b.strokes.length && p.strokes[b.strokes.length - 1].pts.length < b.done);
+    || b.strokes.some((st, i) => i < last && st !== p.strokes[i])
+    || (last >= 0 && (p.strokes[last].pts.length < b.done || p.strokes[last].pts[b.done - 1] !== b.tip));
   if (fresh) {
-    b = { W, H, c: canvas(W, H), strokes: [], done: 0 };
-    const ctx = b.c.getContext('2d');
+    b = { W, H, c: canvas(W, H), strokes: [], done: 0, tip: null };
+    const ctx = ctx2d(b.c);
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, W, H);
   }
@@ -214,58 +222,133 @@ function brushLayer(p, W, H) {
   brushCache.delete(p.id);
   brushCache.set(p.id, b);
   if (brushCache.size > 12) brushCache.delete(brushCache.keys().next().value);
-  const ctx = b.c.getContext('2d');
-  const last = b.strokes.length - 1;
-  for (let i = Math.max(0, last); i < p.strokes.length; i++) drawStroke(ctx, p.strokes[i], W, H, i === last ? b.done : 0);
+  const ctx = ctx2d(b.c);
+  const from = b.strokes.length - 1;
+  for (let i = Math.max(0, from); i < p.strokes.length; i++) drawStroke(ctx, p.strokes[i], W, H, i === from ? b.done : 0, box);
   b.strokes = p.strokes.slice();
-  b.done = p.strokes.length ? p.strokes[p.strokes.length - 1].pts.length : 0;
-  return b.c;
+  const end = p.strokes.at(-1);
+  b.done = end ? end.pts.length : 0;
+  b.tip = end ? end.pts[b.done - 1] : null;
+  return { c: b.c, fresh };
 }
 
-const rasterCache = new WeakMap(); // parts array -> { W, H, data }
+// Small canvases reused for redrawing part of a mask.
+const scratch = [null, null];
+function scratchCanvas(i, w, h) {
+  const c = scratch[i];
+  if (c && c.width >= w && c.height >= h) return c;
+  const n = canvas(Math.max(w, c?.width || 0, 256), Math.max(h, c?.height || 0, 256));
+  if (n.width * n.height <= 1024 * 1024) scratch[i] = n; // full-size ones aren't kept
+  return n;
+}
+
+// Draws the mask's parts into data over the rectangle x, y, w, h.
+function composite(parts, W, H, layers, data, x, y, w, h) {
+  const main = scratchCanvas(0, w, h), layer = scratchCanvas(1, w, h);
+  const ctx = ctx2d(main), lctx = ctx2d(layer);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.filter = 'none';
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, w, h);
+  let any = false;
+  for (const p of parts) {
+    if (p.type === 'luminance' || p.placed === false) continue;
+    let src = layer;
+    if (p.type === 'brush') src = layers.get(p.id);
+    else {
+      lctx.setTransform(1, 0, 0, 1, -x, -y);
+      if (p.type === 'ai') {
+        lctx.globalCompositeOperation = 'copy';
+        lctx.drawImage(aiLayer(p), 0, 0, W, H);
+      } else {
+        lctx.globalCompositeOperation = 'source-over';
+        lctx.fillStyle = '#000';
+        lctx.fillRect(x, y, w, h);
+        if (p.type === 'linear') drawLinear(lctx, p, W, H);
+        else drawRadial(lctx, p, W, H);
+      }
+      lctx.setTransform(1, 0, 0, 1, 0, 0);
+    }
+    if (p.mode === 'subtract') { ctx.globalCompositeOperation = 'multiply'; ctx.filter = 'invert(1)'; }
+    else if (p.mode === 'intersect' && any) { ctx.globalCompositeOperation = 'multiply'; ctx.filter = 'none'; }
+    else { ctx.globalCompositeOperation = 'lighten'; ctx.filter = 'none'; }
+    if (src === layer) ctx.drawImage(src, 0, 0, w, h, 0, 0, w, h);
+    else ctx.drawImage(src, x, y, w, h, 0, 0, w, h);
+    ctx.filter = 'none';
+    any = true;
+  }
+  // Only a luminance range: the whole photo, narrowed by the range.
+  if (!any && parts.some((p) => p.type === 'luminance')) {
+    for (let j = 0; j < h; j++) data.fill(255, (y + j) * W + x, (y + j) * W + x + w);
+    return;
+  }
+  const px = ctx.getImageData(0, 0, w, h).data;
+  for (let j = 0; j < h; j++) {
+    const row = (y + j) * W + x;
+    for (let i = 0, k = j * w * 4; i < w; i++, k += 4) data[row + i] = px[k];
+  }
+}
+
+// The latest image of each mask, by mask id. Painting changes it in place and
+// notes the rectangle that changed, so only that part is drawn again and sent
+// to the graphics card (the whole 2048 px mask each move was what made the
+// brush lag).
+const maskState = new Map(); // mask id -> { parts, W, H, data, ver, log, out }
+const LOG = 64;
+// Only the brush's strokes differ between these two versions of a part.
+const strokesOnly = (p, q) => {
+  if (p.type !== 'brush' || q.type !== 'brush' || p.id !== q.id) return false;
+  const ka = Object.keys(p), kb = Object.keys(q);
+  return ka.length === kb.length && ka.every((k) => k === 'strokes' || p[k] === q[k]);
+};
 
 /** A mask's shape as a W x H greyscale image (luminance ranges and invert are applied when drawing). */
 export function maskRaster(mask, ow, oh) {
   const s = MASK_EDGE / Math.max(ow, oh);
   const W = Math.max(8, Math.round(ow * s)), H = Math.max(8, Math.round(oh * s));
-  const hit = rasterCache.get(mask.parts);
-  if (hit && hit.W === W && hit.H === H) return hit;
-  const main = canvas(W, H);
-  const ctx = main.getContext('2d', { willReadFrequently: true });
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, W, H);
-  const layer = canvas(W, H);
-  const lctx = layer.getContext('2d');
-  let any = false;
+  let st = maskState.get(mask.id);
+  const same = st && st.W === W && st.H === H;
+  if (same && st.parts === mask.parts) return st.out;
+  let partial = same && st.parts.length === mask.parts.length
+    && mask.parts.every((p, i) => p === st.parts[i] || strokesOnly(p, st.parts[i]));
+  const box = [Infinity, Infinity, -Infinity, -Infinity];
+  const layers = new Map();
   for (const p of mask.parts) {
-    if (p.type === 'luminance' || p.placed === false) continue;
-    let src = layer;
-    if (p.type === 'brush') src = brushLayer(p, W, H);
-    else if (p.type === 'ai') {
-      lctx.globalCompositeOperation = 'copy';
-      lctx.drawImage(aiLayer(p), 0, 0, W, H);
-    } else {
-      lctx.globalCompositeOperation = 'source-over';
-      lctx.fillStyle = '#000';
-      lctx.fillRect(0, 0, W, H);
-      if (p.type === 'linear') drawLinear(lctx, p, W, H);
-      else drawRadial(lctx, p, W, H);
-    }
-    if (p.mode === 'subtract') { ctx.globalCompositeOperation = 'multiply'; ctx.filter = 'invert(1)'; }
-    else if (p.mode === 'intersect' && any) { ctx.globalCompositeOperation = 'multiply'; ctx.filter = 'none'; }
-    else { ctx.globalCompositeOperation = 'lighten'; ctx.filter = 'none'; }
-    ctx.drawImage(src, 0, 0);
-    ctx.filter = 'none';
-    any = true;
+    if (p.type !== 'brush' || p.placed === false) continue;
+    const { c, fresh } = brushLayer(p, W, H, box);
+    layers.set(p.id, c);
+    if (fresh) partial = false;
   }
-  // Only a luminance range: the whole photo, narrowed by the range.
-  if (!any && mask.parts.some((p) => p.type === 'luminance')) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H); }
-  const px = ctx.getImageData(0, 0, W, H).data;
-  const data = new Uint8Array(W * H);
-  for (let i = 0; i < data.length; i++) data[i] = px[i * 4];
-  const out = { W, H, data };
-  rasterCache.set(mask.parts, out);
-  return out;
+  if (partial) {
+    const x = Math.max(0, Math.floor(box[0]) - 1), y = Math.max(0, Math.floor(box[1]) - 1);
+    const w = Math.min(W, Math.ceil(box[2]) + 1) - x, h = Math.min(H, Math.ceil(box[3]) + 1) - y;
+    st.parts = mask.parts;
+    if (w <= 0 || h <= 0) return st.out;
+    composite(mask.parts, W, H, layers, st.data, x, y, w, h);
+    st.log.push({ ver: ++st.ver, rect: [x, y, w, h] });
+    if (st.log.length > LOG) st.log.shift();
+  } else {
+    st = { parts: mask.parts, W, H, data: new Uint8Array(W * H), ver: 0, log: [] };
+    composite(mask.parts, W, H, layers, st.data, 0, 0, W, H);
+  }
+  st.out = { W, H, data: st.data, st, ver: st.ver };
+  maskState.delete(mask.id);
+  maskState.set(mask.id, st);
+  if (maskState.size > 24) maskState.delete(maskState.keys().next().value);
+  return st.out;
+}
+
+/**
+ * The rectangle [x, y, w, h] where raster `r` differs from `old`, an earlier
+ * image of the same mask (w = 0: no change), or null when that isn't known.
+ */
+export function rasterChange(r, old) {
+  if (!old || r.st !== old.st || old.ver > r.ver) return null;
+  const log = r.st.log.filter((e) => e.ver > old.ver && e.ver <= r.ver);
+  if (log.length !== r.ver - old.ver) return null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const { rect: [x, y, w, h] } of log) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + h); }
+  return log.length ? [x0, y0, x1 - x0, y1 - y0] : [0, 0, 0, 0];
 }
 
 export const lumRange = (mask) => mask.parts.find((p) => p.type === 'luminance');
