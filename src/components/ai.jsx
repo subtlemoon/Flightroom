@@ -46,7 +46,7 @@ function AiDownload({ feature, size, onDone }) {
       <p>{FEATURE_LABEL[feature]} uses AI that runs on this computer, on the graphics card when it can. Flightroom downloads it once ({mb(size)}); after that it works offline.</p>
       <p className="muted small">Your photos never leave this computer.</p>
       {busy && (
-        <div className="ai-progress"><span style={{ width: `${(100 * run.done) / Math.max(1, run.total)}%` }} /><em>{mb(run.done)} of {mb(run.total)}</em></div>
+        <div className="ai-progress ai-glow busy"><span style={{ width: `${(100 * run.done) / Math.max(1, run.total)}%` }} /><em>{mb(run.done)} of {mb(run.total)}</em></div>
       )}
       {run?.error && <p className="ai-error small">{run.error}</p>}
     </Modal>
@@ -184,7 +184,7 @@ function AiPicker({ type, results, target, onClose, onCreate }) {
   );
   const chosen = results.filter((r) => on.has(r.name)).map((r) => [r.name, r]);
   return (
-    <div className="ai-picker">
+    <div className="ai-picker ai-glow">
       <div className="mask-head"><Icon name={type} size={14} /><span className="grow">{type === 'people' ? `${people.length} ${people.length === 1 ? 'person' : 'people'} found` : 'Found in this photo'}</span>
         <button className="icon-btn tiny" onClick={onClose} title="Cancel"><Icon name="x" size={12} /></button>
       </div>
@@ -243,12 +243,12 @@ export function AiDenoise({ photo, info, s, set, ensure, onDenoised }) {
       <div className="dev-group-title">AI Denoise</div>
       {busy ? (
         <div className="dev-line">
-          <div className="ai-progress grow"><span style={{ width: `${(100 * run.done) / Math.max(1, run.total)}%` }} /><em>{run.total > 1 ? `${Math.round((100 * run.done) / run.total)}%` : 'Starting…'}</em></div>
+          <div className="ai-progress grow ai-glow busy"><span style={{ width: `${(100 * run.done) / Math.max(1, run.total)}%` }} /><em>{run.total > 1 ? `${Math.round((100 * run.done) / run.total)}%` : 'Starting…'}</em></div>
           <button className="btn btn-sm btn-ghost" onClick={() => bridge.develop.cancelDenoise()}>Cancel</button>
         </div>
       ) : (
         <>
-          <button className="btn btn-sm full" onClick={start}><Icon name="ai" size={14} />Denoise…</button>
+          <button className="btn btn-sm full ai-glow" onClick={start}><Icon name="ai" size={14} />Denoise…</button>
           <p className="muted small">Removes noise with AI on this computer, keeping detail. Quick with a graphics card, slow without one; the result is kept.</p>
           {run?.error && <p className="ai-error small">{run.error}</p>}
         </>

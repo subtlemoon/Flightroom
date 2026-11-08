@@ -41,7 +41,7 @@ function MenuList({ items, done, sub }) {
         const has = !!it.items;
         return (
           <div key={i} className="rt-menu-wrap" onPointerEnter={() => setHover(i)}>
-            <button className={`rt-menu-item${hover === i && has ? ' on' : ''}`} disabled={it.disabled}
+            <button className={`rt-menu-item${hover === i && has ? ' on' : ''}${it.ai ? ' ai-glow' : ''}`} disabled={it.disabled}
               onClick={() => { if (has) { setHover(i); return; } done(); it.run?.(); }}>
               <span className="rt-check-mark">{it.check ? '✓' : ''}</span>
               <span className="grow">{it.label}</span>

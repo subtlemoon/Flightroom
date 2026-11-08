@@ -170,8 +170,8 @@ export function OptionsBar({ rx }) {
       {(tool === 'row' || tool === 'column') && hint(`Click to select a one-pixel ${tool}, then Ctrl+T and drag a side handle out to stretch it`)}
       {SELECTORS.has(tool) && (
         <div className="rt-sel-btns">
-          <button className="btn btn-sm" onClick={() => rx.sel.ai('subject')} title="Select > Subject (AI)"><Icon name="subject" size={13} />Select Subject</button>
-          <button className="btn btn-sm" onClick={() => rx.sel.ai('sky')} title="Select > Sky (AI)"><Icon name="sky" size={13} />Sky</button>
+          <button className="btn btn-sm ai-glow" onClick={() => rx.sel.ai('subject')} title="Select > Subject (AI)"><Icon name="subject" size={13} />Select Subject</button>
+          <button className="btn btn-sm ai-glow" onClick={() => rx.sel.ai('sky')} title="Select > Sky (AI)"><Icon name="sky" size={13} />Sky</button>
         </div>
       )}
       {tool === 'move' && (
