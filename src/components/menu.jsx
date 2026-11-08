@@ -1,5 +1,6 @@
 // Right-click menus, Lightroom style, in Flightroom's look. Anything can open
-// one: onContextMenu={(e) => openMenu(e, items)}. One host (in App) shows it.
+// one: onContextMenu={(e) => openMenu(e, items)}, or onClick on a ⋯ button (it
+// then drops down under the button). One host (in App) shows it.
 //
 // items: an array of
 //   { label, onClick, hint (its key, shown on the right), icon, checked (true/false
@@ -20,7 +21,9 @@ export function openMenu(e, items) {
   e.stopPropagation();
   const list = tidy(items);
   if (!list.length) return;
-  const m = { x: e.clientX, y: e.clientY, items: list };
+  // From a button (a click, not a right-click): dropped down under it, right edges lined up.
+  const r = e.type === 'contextmenu' ? null : e.currentTarget?.getBoundingClientRect?.();
+  const m = r ? { x: r.right, y: r.bottom + 4, items: list, flipX: true } : { x: e.clientX, y: e.clientY, items: list };
   if (show) show(m); else pending = m;
 }
 
@@ -60,7 +63,7 @@ export function ContextMenuHost() {
   const done = () => setConfirm(null);
   return (
     <>
-      {menu && createPortal(<Menu key={`${menu.x},${menu.y},${menu.items.length}`} x={menu.x} y={menu.y} items={menu.items} root onClose={() => setMenu(null)} />, document.body)}
+      {menu && createPortal(<Menu key={`${menu.x},${menu.y},${menu.items.length}`} x={menu.x} y={menu.y} flipX={menu.flipX} items={menu.items} root onClose={() => setMenu(null)} />, document.body)}
       {confirm && (
         <Modal title={confirm.title} onClose={done} footer={(
           <>

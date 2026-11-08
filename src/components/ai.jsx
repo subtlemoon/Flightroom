@@ -248,8 +248,7 @@ export function AiDenoise({ photo, info, s, set, ensure, onDenoised }) {
         </div>
       ) : (
         <>
-          <button className="btn btn-sm full ai-glow" onClick={start}><Icon name="ai" size={14} />Denoise…</button>
-          <p className="muted small">Removes noise with AI on this computer, keeping detail. Quick with a graphics card, slow without one; the result is kept.</p>
+          <button className="btn btn-sm full ai-glow" onClick={start} title="Removes noise with AI on this computer, keeping detail. Quick with a graphics card, slow without one; the result is kept for this photo."><Icon name="ai" size={14} />Denoise…</button>
           {run?.error && <p className="ai-error small">{run.error}</p>}
         </>
       )}

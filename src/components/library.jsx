@@ -60,8 +60,8 @@ export function CatalogView({ store, onOpenGear, onCustom }) {
           const owned = state.owned.includes(g.id);
           return (
             <GearCard key={g.id} item={g} owned={owned} onOpen={onOpenGear} onToggleOwned={actions.toggleOwned}
-              action={<button className="btn btn-sm" onClick={() => actions.toggleOwned(g.id)}>
-                <Icon name={owned ? 'check' : 'plus'} size={14} />{owned ? 'Owned' : 'Add'}</button>} />
+              action={<button className={`icon-btn gear-own${owned ? ' on' : ''}`} onClick={() => actions.toggleOwned(g.id)} title={owned ? 'In My Gear (click to remove)' : 'Add to My Gear'}>
+                <Icon name={owned ? 'check' : 'plus'} size={16} /></button>} />
           );
         })}
       </div>

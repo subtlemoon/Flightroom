@@ -113,7 +113,7 @@ export function MaskPanel({ s, size, sel, setSel, acts, overlay, setOverlay, ai,
           <MaskRow key={m.id} m={m} size={size} active={sel?.mask === m.id} selPart={sel?.part} setSel={setSel} acts={acts}
             menu={menu?.mask === m.id ? menu : null} setMenu={setMenu} full={masks.length >= MAX_MASKS} onAi={pickAi} />
         ))}
-        {s && !masks.length && <p className="muted small mask-empty">Masks change part of the photo: let AI select the subject, sky, people or background, paint with a brush (K), or drag a linear (M) or radial (Shift+M) gradient.</p>}
+        {s && !masks.length && <p className="muted small mask-empty">Change one part of the photo: AI subject or sky, brush <kbd>K</kbd>, linear <kbd>M</kbd>, radial <kbd>Shift+M</kbd>.</p>}
       </div>
       <OverlaySettings overlay={overlay} setOverlay={setOverlay} />
     </div>
@@ -283,14 +283,24 @@ function MaskPreview({ has, selected }) {
 const OPACITY = { key: 'opacity', label: 'Opacity', min: 0, max: 100, step: 1, def: 50 };
 const LINE = { key: 'line', label: 'Outline', min: 1, max: 6, step: 0.5, def: 2, decimals: 1 };
 
+/** The overlay switches, for right-click menus (mask panel, photo). */
+export const overlayMenu = (overlay, setOverlay) => [
+  { label: 'Show mask on photo', hint: 'O', checked: !!overlay.show, onClick: () => setOverlay({ show: !overlay.show }) },
+  { label: 'Outlines and pins', hint: 'H', checked: !overlay.pinsHidden, onClick: () => setOverlay({ pinsHidden: !overlay.pinsHidden }) },
+  { label: 'Overlay style', items: OVERLAY_STYLES.map(([value, label]) => ({ label, checked: overlay.style === value, onClick: () => setOverlay({ style: value }) })) },
+];
+
 function OverlaySettings({ overlay, setOverlay }) {
   const outline = overlay.style === 'both' || overlay.style === 'outline';
   const colored = overlay.style !== 'matte' && overlay.style !== 'image';
   return (
-    <div className="mask-overlay-set">
-      <div className="dev-group-title">Overlay</div>
-      <label className="dev-check"><input type="checkbox" checked={overlay.show} onChange={(e) => setOverlay({ show: e.target.checked })} />Also show on the main photo (O)</label>
-      <label className="dev-check"><input type="checkbox" checked={!overlay.pinsHidden} onChange={(e) => setOverlay({ pinsHidden: !e.target.checked })} />Show outlines and pins on the photo (H)</label>
+    <div className="mask-overlay-set" onContextMenu={(e) => openMenu(e, overlayMenu(overlay, setOverlay))}>
+      <div className="mask-head">
+        <button className="preset-toggle grow" onClick={() => setOverlay({ open: !overlay.open })}><Icon name={overlay.open ? 'chevD' : 'chevR'} size={12} />Overlay</button>
+      </div>
+      {overlay.open && <>
+      <label className="dev-check"><input type="checkbox" checked={overlay.show} onChange={(e) => setOverlay({ show: e.target.checked })} />Show on photo<kbd>O</kbd></label>
+      <label className="dev-check"><input type="checkbox" checked={!overlay.pinsHidden} onChange={(e) => setOverlay({ pinsHidden: !e.target.checked })} />Outlines and pins<kbd>H</kbd></label>
       <div className="dev-line dev-wb"><span className="muted">Style</span>
         <Dropdown value={overlay.style} options={OVERLAY_STYLES.map(([value, label]) => ({ value, label }))} onChange={(v) => setOverlay({ style: v })} />
       </div>
@@ -307,6 +317,7 @@ function OverlaySettings({ overlay, setOverlay }) {
       )}
       {colored && <Slider sl={OPACITY} value={overlay.opacity} def={50} onSet={(_, v) => setOverlay({ opacity: v })} />}
       {outline && <Slider sl={LINE} value={overlay.line} def={2} onSet={(_, v) => setOverlay({ line: v })} />}
+      </>}
     </div>
   );
 }

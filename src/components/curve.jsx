@@ -2,6 +2,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { parametric, pointCurve } from '../develop/luts.js';
 import { LINEAR_CURVE } from '../develop/params.js';
+import { openMenu } from './menu.jsx';
+import { Icon } from './ui.jsx';
 
 const PARAMETRIC_KEYS = ['pShadows', 'pDarks', 'pLights', 'pHighlights', 'pSplitS', 'pSplitM', 'pSplitH'];
 const PARAMETRIC_DEFAULT = { pSplitS: 25, pSplitM: 50, pSplitH: 75 };
@@ -72,7 +74,7 @@ export function CurveEditor({ s, channel, readOnly, set }) {
 
   const near = (x, y) => pts.findIndex(([px, py]) => Math.hypot(px - x, py - y) < 10);
   const down = (e) => {
-    if (readOnly) return;
+    if (readOnly || e.button !== 0) return; // right-click opens the menu
     const [x, y] = fromEvent(e);
     let i = near(x, y);
     let next = pts;
@@ -117,7 +119,8 @@ export function CurveEditor({ s, channel, readOnly, set }) {
     if (i > 0 && i < pts.length - 1) set(channel, pts.filter((_, j) => j !== i));
   };
   return (
-    <div className={`dev-curve${CH_CLASS[channel] || ''}${readOnly ? ' readonly' : ''}`}>
+    <div className={`dev-curve${CH_CLASS[channel] || ''}${readOnly ? ' readonly' : ''}`}
+      onContextMenu={readOnly ? undefined : (e) => openMenu(e, [{ label: 'Reset to linear', icon: 'reset', onClick: () => set(channel, LINEAR_CURVE) }])}>
       {/* The handlers sit on a padded box so the corner points can be grabbed past the rounded edge. */}
       <div className="dev-curve-pad" onPointerDown={down} onPointerMove={move} onPointerUp={end} onLostPointerCapture={end}
         onPointerLeave={() => !drag.current && setRead(null)} onDoubleClick={remove}>
@@ -131,8 +134,8 @@ export function CurveEditor({ s, channel, readOnly, set }) {
       </svg>
       </div>
       <div className="dev-curve-foot">
-        <span className="dev-curve-read">{read ? `Input ${read[0]}  ·  Output ${read[1]}` : readOnly ? 'Shape the curve with the sliders below' : 'Click to add, double-click to delete'}</span>
-        {!readOnly && <button className="btn btn-sm btn-ghost" onClick={() => set(channel, LINEAR_CURVE)}>Linear</button>}
+        <span className="dev-curve-read">{read ? `In ${read[0]}  ·  Out ${read[1]}` : readOnly ? 'Drag the sliders below' : 'Click adds, double-click removes'}</span>
+        {!readOnly && <button className="icon-btn sm" title="Reset to linear" onClick={() => set(channel, LINEAR_CURVE)}><Icon name="reset" size={13} /></button>}
       </div>
     </div>
   );

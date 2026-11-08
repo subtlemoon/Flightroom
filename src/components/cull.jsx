@@ -376,15 +376,23 @@ export function CullView({ store, onDevelop }) {
     if (v !== 'all' && subjectN.unknown && !autoRun) analyze();
   };
   const finding = autoRun?.kind === 'analyze';
+  // The less-used switches: the ⋯ button and a right-click on the bar.
+  const barMenu = (e) => openMenu(e, [
+    { label: 'Auto-advance after rating', checked: advance, onClick: () => actions.setCullSettings({ cullAdvance: !advance }) },
+    { label: 'Include subfolders', checked: subs, onClick: () => { setWithSubfolders(!subs); setSubs(!subs); open(folder, true); } },
+    '-',
+    { label: 'Reload folder', icon: 'refresh', onClick: () => open(folder, true) },
+    { label: 'Back to folders', icon: 'back', onClick: () => actions.setCullFolder(null) },
+  ]);
 
   return (
     <div className="cull">
-      <header className="cull-bar">
+      <header className="cull-bar" onContextMenu={(e) => !e.target.closest('button, .dd') && barMenu(e)}>
+        <button className="icon-btn" onClick={() => actions.setCullFolder(null)} title="Back to your folders"><Icon name="back" size={16} /></button>
         <div className="grow cull-title">
-          <div className="eyebrow">Culling</div>
           <div className="cull-folder" title={list?.folder || folder}>{(list?.folder || folder).split(/[\\/]/).pop()}</div>
+          <div className="cull-sub">{list?.loading ? 'Reading folder…' : `${photos.length ? index + 1 : 0} of ${photos.length}`}</div>
         </div>
-        <button className="btn btn-sm btn-ghost" onClick={() => actions.setCullFolder(null)} title="Back to your folders"><Icon name="back" size={14} />Folders</button>
         <div className="seg small cull-filter">
           {filters.map(([k, label, n]) => (
             <button key={k} className={filter === k ? 'on' : ''} onClick={() => setFilter(k)} onMouseDown={(e) => e.preventDefault()}>
@@ -399,22 +407,14 @@ export function CullView({ store, onDevelop }) {
           label={finding && subjectView !== 'all' ? `Finding subjects ${autoRun.done}/${autoRun.total}` : subjectView === 'all' ? 'Subject…' : undefined}
           onChange={pickSubjectView} title="Sort or show photos by what they're of (people, vehicles, animals…), found by AI on this computer"
           options={subjectOptions} />
-        <div className="cull-stats muted">
-          {list?.loading ? 'Reading folder…' : `${photos.length ? index + 1 : 0} of ${photos.length}`}
-        </div>
-        <label className="toggle-row cull-advance" title="Go to the next photo after rating">
-          <input type="checkbox" checked={advance} onChange={() => actions.setCullSettings({ cullAdvance: !advance })} />Auto-advance
-        </label>
-        <label className="toggle-row cull-advance" title="Also show the photos in folders inside this one (not the Exported folder)">
-          <input type="checkbox" checked={subs} onChange={() => { setWithSubfolders(!subs); setSubs(!subs); open(folder, true); }} />Subfolders
-        </label>
-        <button className="btn btn-sm" onClick={() => open(folder, true)} title="Look for new files"><Icon name="refresh" size={14} />Reload</button>
+        <span className="bar-gap" />
         {onDevelop && <button className="btn btn-sm" onClick={onDevelop} disabled={!photo} title="Edit this photo (D)"><Icon name="develop" size={14} />Develop</button>}
         <button className="btn btn-sm" onClick={() => setExporting(true)} disabled={!allPhotos.length} title="Export JPEGs of this photo, the rated ones or the ones shown (Ctrl+Shift+E)"><Icon name="export" size={14} />Export</button>
         <button className={`btn btn-sm ai-glow${measuredCount ? '' : ' btn-primary'}${autoRun ? ' busy' : ''}`} onClick={() => setAutoOpen(true)} disabled={!allPhotos.length}>
           <Icon name="spark" size={14} />
           {autoRun ? `${autoRun.kind === 'apply' ? 'Rating' : 'Analyzing'} ${autoRun.done}/${autoRun.total}` : 'Auto-rate'}
         </button>
+        <button className="icon-btn" title="More options" onClick={barMenu}><Icon name="more" size={16} /></button>
       </header>
 
       {photo ? (

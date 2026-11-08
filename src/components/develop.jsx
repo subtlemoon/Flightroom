@@ -3,7 +3,7 @@ import { bridge as app } from '../bridge.js';
 import { Dropdown, Icon, Modal, PanelHandle } from './ui.jsx';
 import { Slider } from './slider.jsx';
 import { CurveEditor } from './curve.jsx';
-import { BRUSH_DEFAULT, MASK_OPTIONS_DEFAULT, MaskAdjust, MaskOverlay, MaskPanel, OVERLAY_DEFAULT, maskActions, maskView, useStored } from './masks.jsx';
+import { BRUSH_DEFAULT, MASK_OPTIONS_DEFAULT, MaskAdjust, MaskOverlay, MaskPanel, OVERLAY_DEFAULT, maskActions, overlayMenu, maskView, useStored } from './masks.jsx';
 import { AiDenoise, useAiInstall, useAiMasks } from './ai.jsx';
 import { BUILT_IN, CopyDialog, PresetPanel } from './copy.jsx';
 import { fileItems, fromMenuBar, openMenu, photoLabel, ratingMenu } from './menu.jsx';
@@ -380,7 +380,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
         { label: 'Before / after', hint: '\\', checked: before, disabled: !s, onClick: () => setBefore((b) => !b) },
         { label: 'Show clipping', hint: 'J', checked: clip, onClick: () => setClip((c) => !c) },
         { label: 'Crop and straighten', hint: 'R', checked: crop, disabled: !s, onClick: () => setCrop((c) => !c) },
-        selMask && { label: 'Show mask overlay', hint: 'O', checked: overlay.show, onClick: () => setOverlay({ show: !overlay.show }) },
+        { label: 'Mask overlay', icon: 'mask', items: overlayMenu(overlay, setOverlay) },
         { label: 'Zoom in / fit', hint: keyLabel(zKey), onClick: () => stageApi.current.toggleZoom?.() },
         '-',
       ] : []),
@@ -562,24 +562,23 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
     <div className="develop">
       <header className="cull-bar">
         <div className="grow cull-title">
-          <div className="eyebrow">{retouch ? 'Retouch' : 'Develop'}</div>
           <div className="cull-folder" title={list?.folder || folder}>{photo ? <>{photoLabel(photo)}<ExportedTag id={photo.id} /></> : (list?.folder || folder).split(/[\\/]/).pop()}</div>
+          <div className="cull-sub">{list?.loading ? 'Reading folder…' : `${photos.length ? index + 1 : 0} of ${photos.length}`}</div>
         </div>
         <Dropdown className={`cull-stars${filter !== 'all' ? ' on' : ''}`} value={filter} label={filter === 'all' ? 'Stars…' : undefined} onChange={setFilter} title="Show photos by star rating"
           options={starOptions} />
-        <div className="cull-stats muted">{list?.loading ? 'Reading folder…' : `${photos.length ? index + 1 : 0} of ${photos.length}`}</div>
+        {onMode && (
+          <div className="seg small dev-mode">
+            <button className={retouch ? '' : 'on'} onClick={() => onMode('develop')} title="Develop: Lightroom-style adjustments (Ctrl+E)">Develop</button>
+            <button className={retouch ? 'on' : ''} onClick={() => onMode('retouch')} title="Retouch: layers, brushes, clone and heal on the live photo (Ctrl+E)">Retouch</button>
+          </div>
+        )}
         <div className="dev-tools">
-          {onMode && (
-            <div className="seg small dev-mode">
-              <button className={retouch ? '' : 'on'} onClick={() => onMode('develop')} title="Develop: Lightroom-style adjustments (Ctrl+E)">Develop</button>
-              <button className={retouch ? 'on' : ''} onClick={() => onMode('retouch')} title="Retouch: layers, brushes, clone and heal on the live photo (Ctrl+E)">Retouch</button>
-            </div>
-          )}
-          {onCull && <button className="btn btn-sm btn-ghost" onClick={onCull} title="Back to Culling (G)"><Icon name="photo" size={14} />Culling</button>}
+          {onCull && <button className="icon-btn" onClick={onCull} title="Back to Culling (G)"><Icon name="photo" size={16} /></button>}
+          {onCull && <span className="bar-gap" />}
           <button className="icon-btn" title="Undo (Ctrl+Z)" onClick={() => undo()} disabled={!s}><Icon name="undo" size={16} /></button>
           <button className="icon-btn" title="Redo (Ctrl+Y)" onClick={() => undo(true)} disabled={!s}><Icon name="redo" size={16} /></button>
-          <button className={`btn btn-sm${before ? ' on' : ''}`} title="Before / after (\)" onClick={() => setBefore((b) => !b)} disabled={!s}><Icon name="compare" size={14} />{before ? 'Before' : 'After'}</button>
-          {!retouch && <button className={`btn btn-sm${overlay.show ? ' on' : ''}`} title="Show the selected mask on the main photo (O)" onClick={() => setOverlay({ show: !overlay.show })} disabled={!s}><Icon name="mask" size={14} />Overlay</button>}
+          <button className={`icon-btn${before ? ' on' : ''}`} title={`${before ? 'Showing before' : 'Before / after'} (\\)`} onClick={() => setBefore((b) => !b)} disabled={!s}><Icon name="compare" size={16} /></button>
           {!retouch && <button className={`btn btn-sm${crop ? ' btn-primary' : ''}`} title="Crop and straighten (R)" onClick={() => setCrop((c) => !c)} disabled={!s}><Icon name="crop" size={14} />{crop ? 'Done' : 'Crop'}</button>}
           <button className="btn btn-sm btn-primary" onClick={() => setExporting({})} disabled={!s} title="Export JPEG (Ctrl+Shift+E)"><Icon name="export" size={14} />Export</button>
         </div>
@@ -1567,10 +1566,10 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
         <label className="dev-check"><input type="checkbox" checked={!!s.removeCA} onChange={(e) => update({ removeCA: e.target.checked })} />Remove chromatic aberration</label>
         <label className="dev-check"><input type="checkbox" checked={!!s.lensProfile} onChange={(e) => update({ lensProfile: e.target.checked })} />Enable profile corrections</label>
         {info?.lens?.required
-          ? <p className="muted small">Built-in correction from the camera applied (distortion), as Lightroom does for this lens.</p>
+          ? <p className="muted small">Camera's distortion correction applied.</p>
           : info?.lens
-            ? <p className="muted small">{s.lensProfile ? 'The camera\'s built-in distortion correction is applied.' : 'The camera recorded a distortion correction for this lens: enable profile corrections to apply it.'}</p>
-            : s.lensProfile && <p className="muted small">Lightroom applies your lens's profile when it reads this photo. Flightroom can only apply corrections the camera writes into the file (Nikon Z bodies); use the sliders below for this one.</p>}
+            ? <p className="muted small">{s.lensProfile ? 'Camera\'s distortion correction applied.' : 'Turn on to use the camera\'s distortion correction.'}</p>
+            : s.lensProfile && <p className="muted small" title="Flightroom can only apply corrections the camera writes into the file (Nikon Z bodies). Lightroom applies its own lens profile when it reads this photo.">No correction in this file: use the sliders below.</p>}
         <Groups sec={SECTION.lens} s={s} asShot={asShot} set={set} />
       </>
     ),
