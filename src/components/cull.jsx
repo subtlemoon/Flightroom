@@ -6,6 +6,7 @@ import { clearPreviews, decodeThumb, drawPhoto, fallbackShown, fitEdge, fitKept,
 import { loadAnalysis, measure, saveAnalysis, suggest, upright } from '../cull/analyze.js';
 import { Cancelled, measurePool } from '../cull/measure-pool.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
+import { SUBJECT_GROUPS, bySubject, subjectCounts, subjectGroup, subjectName } from '../cull/subjects.js';
 import { cachedFolder, setWithSubfolders, startAt, useFolder, usePosition, useStripPick, withSubfolders } from '../cull/folder.js';
 import { useDevelopedThumb } from '../develop/thumbs.js';
 import { useExported } from '../develop/exported.js';
@@ -41,6 +42,7 @@ export function CullView({ store, onDevelop }) {
   const [seen] = useState(() => cachedFolder(folder));
   const [currentId, setCurrentId] = useState(() => seen?.list.photos[state.cull?.positions?.[seen.list.folder] || 0]?.id ?? null);
   const [filter, setFilter] = useState(seen?.filter || 'all'); // see inFilter
+  const [subjectView, setSubjectView] = useState('all'); // see bySubject
   const [zoom, setZoom] = useState(null); // null | { cx, cy }
   const [toast, setToast] = useState('');
   const [subs, setSubs] = useState(withSubfolders);
@@ -60,6 +62,7 @@ export function CullView({ store, onDevelop }) {
     lastIndex.current = pos;
     setCurrentId(res.photos[pos]?.id ?? null);
     setFilter('all');
+    setSubjectView('all');
     setAuto(loadAnalysis(res.folder));
   });
 
@@ -75,10 +78,23 @@ export function CullView({ store, onDevelop }) {
     return r <= 0 || auto.applied[p.id] === r;
   };
   const photos = useMemo(() => {
-    if (filter === 'all') return allPhotos;
-    if (filter === 'rejects') return allPhotos.filter((p) => suggestions[p.id]?.stars === 1);
-    return allPhotos.filter((p) => inFilter(filter, photoRating(p, meta[p.id])));
-  }, [allPhotos, meta, filter, suggestions]);
+    const shown = filter === 'all' ? allPhotos
+      : filter === 'rejects' ? allPhotos.filter((p) => suggestions[p.id]?.stars === 1)
+        : allPhotos.filter((p) => inFilter(filter, photoRating(p, meta[p.id])));
+    return bySubject(shown, subjectView, auto.measured);
+  }, [allPhotos, meta, filter, suggestions, subjectView, auto.measured]);
+  // Sorted by subject: where each group starts in the filmstrip.
+  const groupStarts = useMemo(() => {
+    if (subjectView !== 'sort') return null;
+    const starts = new Map();
+    let prev = null;
+    for (const p of photos) {
+      const g = subjectGroup(auto.measured[p.id]);
+      if (g !== prev) starts.set(p.id, subjectName(g));
+      prev = g;
+    }
+    return starts;
+  }, [photos, subjectView]);
   const starOptions = useMemo(() => STAR_FILTERS.map(([k, label]) => ({ value: k, label, hint: allPhotos.filter((p) => inFilter(k, photoRating(p, meta[p.id]))).length })), [allPhotos, meta]);
   // The current photo is tracked by id so it stays put when the filter changes.
   // If it drops out of the filter (say, rated while showing Unrated), the photo
@@ -211,6 +227,8 @@ export function CullView({ store, onDevelop }) {
           }
         }));
         setAutoRun((r) => r && { ...r, done: Math.min(todo.length, i + batch.length) });
+        // Shown as they come in (sorting by subject fills up), saved when the run ends.
+        if (shownFolder.current === dir) setAuto((a) => ({ ...a, measured: { ...a.measured, ...measured } }));
       }
     } finally {
       pool.close(); // each worker holds its own detector, so they never outlive a run
@@ -346,6 +364,18 @@ export function CullView({ store, onDevelop }) {
   const rejectCount = allPhotos.filter((p) => suggestions[p.id]?.stars === 1).length;
   const filters = [['all', 'All', allPhotos.length], ['rated', '★ Rated', ratedCount], ['unrated', 'Unrated', allPhotos.length - ratedCount]];
   if (measuredCount) filters.push(['rejects', 'Likely rejects', rejectCount]);
+  const subjectN = subjectCounts(allPhotos, auto.measured);
+  const subjectOptions = [
+    { value: 'all', label: 'All subjects', hint: allPhotos.length },
+    { value: 'sort', label: 'Sort by subject' },
+    ...SUBJECT_GROUPS.map(([k, label]) => ({ value: k, label: `Only ${label.toLowerCase()}`, hint: subjectN[k], disabled: !subjectN[k] && !subjectN.unknown })),
+  ];
+  // Grouping needs every photo's subject: picking a view finds the missing ones.
+  const pickSubjectView = (v) => {
+    setSubjectView(v);
+    if (v !== 'all' && subjectN.unknown && !autoRun) analyze();
+  };
+  const finding = autoRun?.kind === 'analyze';
 
   return (
     <div className="cull">
@@ -365,6 +395,10 @@ export function CullView({ store, onDevelop }) {
         <Dropdown className={`cull-stars${filter.startsWith('stars:') ? ' on' : ''}`} value={filter} label={filter.startsWith('stars:') ? undefined : 'Stars…'}
           onChange={setFilter} title="Show photos by star rating"
           options={starOptions} />
+        <Dropdown className={`cull-subject ai-glow${subjectView !== 'all' ? ' on' : ''}${finding ? ' busy' : ''}`} value={subjectView}
+          label={finding && subjectView !== 'all' ? `Finding subjects ${autoRun.done}/${autoRun.total}` : subjectView === 'all' ? 'Subject…' : undefined}
+          onChange={pickSubjectView} title="Sort or show photos by what they're of (people, vehicles, animals…), found by AI on this computer"
+          options={subjectOptions} />
         <div className="cull-stats muted">
           {list?.loading ? 'Reading folder…' : `${photos.length ? index + 1 : 0} of ${photos.length}`}
         </div>
@@ -377,7 +411,7 @@ export function CullView({ store, onDevelop }) {
         <button className="btn btn-sm" onClick={() => open(folder, true)} title="Look for new files"><Icon name="refresh" size={14} />Reload</button>
         {onDevelop && <button className="btn btn-sm" onClick={onDevelop} disabled={!photo} title="Edit this photo (D)"><Icon name="develop" size={14} />Develop</button>}
         <button className="btn btn-sm" onClick={() => setExporting(true)} disabled={!allPhotos.length} title="Export JPEGs of this photo, the rated ones or the ones shown (Ctrl+Shift+E)"><Icon name="export" size={14} />Export</button>
-        <button className={`btn btn-sm${measuredCount ? '' : ' btn-primary'}`} onClick={() => setAutoOpen(true)} disabled={!allPhotos.length}>
+        <button className={`btn btn-sm ai-glow${measuredCount ? '' : ' btn-primary'}${autoRun ? ' busy' : ''}`} onClick={() => setAutoOpen(true)} disabled={!allPhotos.length}>
           <Icon name="spark" size={14} />
           {autoRun ? `${autoRun.kind === 'apply' ? 'Rating' : 'Analyzing'} ${autoRun.done}/${autoRun.total}` : 'Auto-rate'}
         </button>
@@ -390,6 +424,7 @@ export function CullView({ store, onDevelop }) {
             <div className="stage-top">
               <span className="stage-name">{photoLabel(photo)}{photo.raw && photo.jpeg && <span className="pill-mini">RAW+JPEG</span>}<ExportedTag id={photo.id} /></span>
               <ShotInfo meta={curMeta} />
+              {subjectView !== 'all' && <span className="pill-mini">{subjectName(subjectGroup(auto.measured[photo.id]))}</span>}
               {zoom && <span className="pill-mini zoom">{zoomPct}%</span>}
             </div>
             <div className="stage-bottom">
@@ -398,13 +433,13 @@ export function CullView({ store, onDevelop }) {
               <Stars value={curRating} onRate={(r) => ratePicked(r)} keys={keys} />
             </div>
           </Stage>
-          <Filmstrip photos={photos} index={index} meta={meta} suggestions={suggestions} onSelect={selectInStrip} requestMeta={requestMeta} picked={picked.size ? picked : null} onMenu={(e, i) => photoMenu(e, photos[i], i)} />
+          <Filmstrip photos={photos} index={index} meta={meta} suggestions={suggestions} groupStarts={groupStarts} onSelect={selectInStrip} requestMeta={requestMeta} picked={picked.size ? picked : null} onMenu={(e, i) => photoMenu(e, photos[i], i)} />
         </>
       ) : (
         <div className="hero-empty">
-          <h2>{list?.loading ? 'Reading folder…' : allPhotos.length ? `No ${filterName(filter)} photos` : 'No photos in this folder'}</h2>
+          <h2>{list?.loading ? 'Reading folder…' : allPhotos.length ? `No ${[filterName(filter), SUBJECT_GROUPS.find(([k]) => k === subjectView)?.[1].toLowerCase()].filter(Boolean).join(' ')} photos`.replace('No no clear subject', 'No photos without a clear subject') : 'No photos in this folder'}</h2>
           {!list?.loading && (allPhotos.length
-            ? <button className="btn" onClick={() => setFilter('all')}>Show all {allPhotos.length} photos</button>
+            ? <button className="btn" onClick={() => { setFilter('all'); setSubjectView('all'); }}>Show all {allPhotos.length} photos</button>
             : <p className="muted">Flightroom shows NEF, other RAW files and JPEGs. Pick another folder to start culling.</p>)}
         </div>
       )}
@@ -581,6 +616,7 @@ function AutoRatePanel({ photos, measuredCount, suggestions, run, applicable, ha
           <p>Flightroom looks at each photo's built-in preview and suggests stars:</p>
           <ul className="auto-list">
             <li><b>Subject:</b> a small AI model finds what the photo is of (a kart, car, bike, person, animal) and focus is judged on that. Hover a suggestion to see what it picked.</li>
+            <li><b>Sort by subject:</b> once analyzed, the Subject menu groups photos into people, vehicles, animals and the rest.</li>
             <li><b>Sharpness:</b> missed focus and motion blur on the subject, checked on the full-size preview, as you'd see it zoomed in. A blurred background is fine. Without a clear subject, the middle of the frame counts.</li>
             <li><b>Exposure:</b> blown highlights, crushed shadows, very dark or bright frames.</li>
             <li><b>Bursts:</b> similar shots taken seconds apart. The best one keeps its stars, and the rest get one star less.</li>
@@ -805,7 +841,7 @@ export function Filmstrip(props) {
 
 // `picked`: ids selected along with the current photo (Develop's Ctrl/Shift+click); onSelect gets the click,
 // onMenu(event, index) a right-click.
-function FilmstripRow({ photos, index, meta, suggestions, onSelect, requestMeta, picked, onMenu }) {
+function FilmstripRow({ photos, index, meta, suggestions, groupStarts, onSelect, requestMeta, picked, onMenu }) {
   const ref = useRef();
   const [scroll, setScroll] = useState({ left: 0, width: 0 });
 
@@ -838,14 +874,14 @@ function FilmstripRow({ photos, index, meta, suggestions, onSelect, requestMeta,
     <div className="filmstrip" ref={ref} onScroll={(e) => setScroll({ left: e.currentTarget.scrollLeft, width: e.currentTarget.clientWidth })} onWheel={onWheel}>
       <div className="filmstrip-track" style={{ width: photos.length * CELL }}>
         {visible.map((p, i) => (
-          <Thumb key={p.id} photo={p} meta={meta[p.id]} suggested={suggestions[p.id]?.stars} active={first + i === index} picked={picked?.has(p.id)} left={(first + i) * CELL} onClick={(e) => onSelect(first + i, e)} onMenu={onMenu && ((e) => onMenu(e, first + i))} />
+          <Thumb key={p.id} photo={p} meta={meta[p.id]} suggested={suggestions[p.id]?.stars} group={groupStarts?.get(p.id)} active={first + i === index} picked={picked?.has(p.id)} left={(first + i) * CELL} onClick={(e) => onSelect(first + i, e)} onMenu={onMenu && ((e) => onMenu(e, first + i))} />
         ))}
       </div>
     </div>
   );
 }
 
-function Thumb({ photo, meta, suggested, active, picked, left, onClick, onMenu }) {
+function Thumb({ photo, meta, suggested, group, active, picked, left, onClick, onMenu }) {
   const [src, setSrc] = useState(() => imgUrl('thumb', photo.id));
   // Edited in Develop this session: the photo as developed (already upright and cropped).
   const session = useDevelopedThumb(photo.id);
@@ -865,6 +901,7 @@ function Thumb({ photo, meta, suggested, active, picked, left, onClick, onMenu }
     <button className={`thumb${active ? ' active' : ''}${picked ? ' picked' : ''}`} style={{ left }} onClick={onClick} onContextMenu={onMenu} onMouseDown={(e) => e.preventDefault()}
       title={`${photo.copy ? `${photo.name}, virtual copy ${photo.copy}` : photo.name}${exported ? ' (exported)' : ''}`}>
       <img src={developed || src} alt="" decoding="async" draggable={false} onError={session ? undefined : onError} onLoad={onLoad} style={rot ? { transform: `rotate(${rot}deg)` } : undefined} />
+      {group && <span className="thumb-group">{group}</span>}
       {photo.copy && <span className="thumb-copy" title="Virtual copy">Copy {photo.copy}</span>}
       {exported && <span className="thumb-exported"><Icon name="check" size={10} /></span>}
       {rating > 0 ? <span className="thumb-stars">{'★'.repeat(rating)}</span>

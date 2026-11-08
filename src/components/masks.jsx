@@ -106,7 +106,7 @@ export function MaskPanel({ s, size, sel, setSel, acts, overlay, setOverlay, ai,
         </button>
         {menu === 'new' && <PartMenu onPick={(t) => { setMenu(null); acts.create(t); }} onAi={(t) => pickAi(t)} onClose={() => setMenu(null)} />}
       </div>
-      {ai.busy && <div className="ai-busy small"><span className="ai-spin" />Finding {ai.busy.toLowerCase()}…</div>}
+      {ai.busy && <div className="ai-busy small ai-glow busy"><span className="ai-spin" />Finding {ai.busy.toLowerCase()}…</div>}
       {ai.picker}
       <div className="mask-list">
         {masks.map((m) => (
@@ -130,9 +130,11 @@ function PartMenu({ onPick, onAi, onClose, mode }) {
   return (
     <div className="mask-menu" ref={ref}>
       <div className="mask-menu-title">AI</div>
-      {AI_TYPES.map(([t, label]) => (
-        <button key={t} className="mask-menu-item" onClick={() => onAi(t)}><Icon name={t} size={15} /><span className="grow">{t === 'people' || t === 'landscape' ? `${label}…` : label}</span></button>
-      ))}
+      <div className="ai-group ai-glow">
+        {AI_TYPES.map(([t, label]) => (
+          <button key={t} className="mask-menu-item" onClick={() => onAi(t)}><Icon name={t} size={15} /><span className="grow">{t === 'people' || t === 'landscape' ? `${label}…` : label}</span></button>
+        ))}
+      </div>
       <div className="mask-menu-title">Tools</div>
       {PART_TYPES.filter(([t]) => !(mode === 'subtract' && t === 'luminance')).map(([t, label, key]) => (
         <button key={t} className="mask-menu-item" onClick={() => onPick(t)}>
@@ -331,7 +333,6 @@ const POINT_SLIDERS = [
 ];
 const CURVE_TABS = [['curve', 'RGB'], ['curveR', 'Red'], ['curveG', 'Green'], ['curveB', 'Blue']];
 const REFINE = { key: 'refineSat', label: 'Refine Saturation', min: 0, max: 100, step: 1, def: 100 };
-const TOOLS = [...AI_TYPES.map(([t, label]) => [t, label, true]), ...PART_TYPES.map(([t, label]) => [t, label, false])];
 const swatch = (t) => (t && t.sat > 0 ? `hsl(${t.hue} ${30 + t.sat * 0.6}% 55%)` : null);
 const hsvCss = (p) => `hsl(${p.h} ${Math.round(p.s * 100)}% ${Math.round(Math.max(8, Math.min(92, p.v * (1 - p.s / 2) * 100)))}%)`;
 
@@ -395,9 +396,14 @@ export function MaskAdjust({ m, part, acts, brush, setBrush, options, setOptions
       </div>
       <div className="dev-section-body">
         <div className="mask-tools" title="Add to this mask">
-          {TOOLS.map(([t, label, isAi], i) => (
-            <button key={t} className={`icon-btn sm${!isAi && part?.type === t ? ' on' : ''}${i === AI_TYPES.length ? ' gap' : ''}`} title={`Add ${label.toLowerCase()}`}
-              onClick={() => (isAi ? ai.run(t, { mask: m.id, mode: 'add' }) : acts.addPart(m.id, t, t === 'luminance' ? 'intersect' : 'add'))}><Icon name={t} size={15} /></button>
+          <span className="ai-group ai-glow">
+            {AI_TYPES.map(([t, label]) => (
+              <button key={t} className="icon-btn sm" title={`Add ${label.toLowerCase()} (AI)`} onClick={() => ai.run(t, { mask: m.id, mode: 'add' })}><Icon name={t} size={15} /></button>
+            ))}
+          </span>
+          {PART_TYPES.map(([t, label], i) => (
+            <button key={t} className={`icon-btn sm${part?.type === t ? ' on' : ''}${i === 0 ? ' gap' : ''}`} title={`Add ${label.toLowerCase()}`}
+              onClick={() => acts.addPart(m.id, t, t === 'luminance' ? 'intersect' : 'add')}><Icon name={t} size={15} /></button>
           ))}
         </div>
         {part && part.type !== 'ai' && (

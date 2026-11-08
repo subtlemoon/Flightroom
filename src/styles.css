@@ -362,6 +362,8 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .cull-filter button { display: inline-flex; align-items: center; gap: 6px; }
 .dd.cull-stars { width: 128px; height: 30px; border-radius: var(--r); color: var(--muted); font-size: 13px; font-weight: 500; }
 .cull-stars.on { color: var(--text); border-color: rgba(255, 255, 255, 0.22); background: var(--sel); }
+.dd.cull-subject { min-width: 128px; height: 30px; border-radius: var(--r); color: var(--muted); font-size: 13px; font-weight: 500; }
+.cull-subject.on { color: var(--text); background: var(--sel); }
 .stage { position: relative; flex: 1; min-height: 0; background: #3a3a3a; overflow: hidden; cursor: zoom-in; }
 .stage.zoomed { cursor: grab; }
 .stage.zoomed:active { cursor: grabbing; }
@@ -897,4 +899,23 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .cm-sep { height: 1px; margin: 4px 6px; background: var(--line); }
 .cm-head { padding: 6px 8px 3px; font-size: 11px; font-weight: 600; color: var(--muted); }
 .thumb-exported { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; display: grid; place-items: center; border-radius: 3px; color: var(--ok); background: rgba(0, 0, 0, 0.6); pointer-events: none; }
+.thumb-group { position: absolute; top: 3px; left: 3px; max-width: calc(100% - 6px); padding: 0 4px; border-radius: 3px; font-size: 10px; font-weight: 600; line-height: 14px; color: var(--text); background: rgba(0, 0, 0, 0.7); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
 .thumb-copy { position: absolute; top: 3px; right: 3px; padding: 0 4px; border-radius: 3px; font: 600 10px/14px var(--mono); color: var(--text); background: rgba(0, 0, 0, 0.6); pointer-events: none; }
+
+/* Everything AI wears a turning rainbow ring, like Apple Intelligence: the one
+   place colour gradients are allowed. The ring is a mask over a conic gradient
+   whose start angle turns; the element keeps its own background and hover. */
+@property --ai-turn { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+@keyframes ai-turn { to { --ai-turn: 360deg; } }
+.ai-glow { position: relative; border-color: transparent !important; box-shadow: -3px 0 12px -5px rgba(8, 148, 255, 0.6), 3px 0 12px -5px rgba(255, 70, 110, 0.5); }
+.ai-glow::before { content: ''; position: absolute; inset: var(--ai-edge, -1px); z-index: 0; border-radius: inherit; padding: 1.5px; pointer-events: none;
+  background: conic-gradient(from var(--ai-turn), #0894ff, #c959dd, #ff2e54, #ff9004, #ffd84d, #0894ff);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
+  animation: ai-turn 6s linear infinite; }
+.ai-glow.busy::before { animation-duration: 1.4s; }
+.ai-glow.busy { box-shadow: -4px 0 16px -4px rgba(8, 148, 255, 0.75), 4px 0 16px -4px rgba(255, 70, 110, 0.65); }
+.ai-glow:disabled::before, .ai-glow.off::before { animation: none; opacity: 0.4; }
+.ai-progress.ai-glow { --ai-edge: 0px; }
+.ai-group { display: flex; flex-direction: column; gap: 2px; padding: 3px; margin: 2px 0 4px; border-radius: var(--r); --ai-edge: 0px; }
+.mask-tools .ai-group { flex-direction: row; padding: 1px; margin: 0; }
+@media (prefers-reduced-motion: reduce) { .ai-glow::before { animation: none; } }
