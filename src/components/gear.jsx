@@ -19,9 +19,9 @@ export function GearCard({ item, owned, onOpen, action, compact, onToggleOwned }
       onKeyDown={(e) => e.key === 'Enter' && onOpen?.(item)}>
       <div className="gear-icon"><Icon name={typeIcon(item)} size={compact ? 16 : 20} /></div>
       <div className="gear-main">
-        <div className="gear-brand">{item.brand} · {typeLabel(item)}{owned && <span className="owned-pill">Owned</span>}{!item.builtIn && <span className="custom-pill">Custom</span>}</div>
+        <div className="gear-brand">{item.brand} · {typeLabel(item)}{!item.builtIn && <span className="custom-pill">Custom</span>}</div>
         <div className="gear-model">{item.model}</div>
-        {!compact && <div className="gear-specs">{keySpecs(item).map((s) => <span key={s}>{s}</span>)}</div>}
+        {!compact && <div className="gear-specs" title={keySpecs(item).join(' · ')}>{keySpecs(item).map((s) => <span key={s}>{s}</span>)}</div>}
       </div>
       {action && <div className="gear-action" onClick={(e) => e.stopPropagation()}>{action}</div>}
     </div>

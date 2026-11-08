@@ -271,13 +271,13 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .compact .gear-icon { width: 32px; height: 32px; border-radius: var(--r-sm); }
 .gear-icon.big { width: 56px; height: 56px; border-radius: var(--r-lg); }
 .gear-main { flex: 1; min-width: 0; }
-.gear-brand { font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+.gear-brand { font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; white-space: nowrap; overflow: hidden; }
 .gear-model { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.gear-specs { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 4px; font-size: 12px; color: var(--muted); }
-.gear-specs span + span::before { content: '·'; margin-right: 8px; color: var(--faint); }
-.owned-pill, .custom-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
-.owned-pill { color: var(--ok); }
-.owned-pill::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.gear-specs { margin-top: 4px; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gear-specs span + span::before { content: '·'; margin: 0 6px; color: var(--faint); }
+.gear-own { border: 1px solid var(--line-2); }
+.gear-own.on { color: var(--ok); border-color: transparent; }
+.custom-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
 .custom-pill { color: var(--text-2); }
 
 .filter-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
@@ -354,12 +354,15 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 
 /* ── Culling ────────────────────────────────────────────── */
 .cull { display: flex; flex-direction: column; height: 100%; position: relative; }
-.cull-bar { display: flex; align-items: center; gap: 12px; height: 64px; padding: 0 20px; border-bottom: 1px solid var(--line); background: var(--bg); }
-.cull-title .eyebrow { margin-bottom: 0; font-size: 12px; }
-.cull-folder { font-weight: 500; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cull-stats { font: 12px var(--mono); color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.cull-advance { margin: 0; font-size: 13px; white-space: nowrap; }
-.cull-filter button { display: inline-flex; align-items: center; gap: 6px; }
+.cull-bar { display: flex; align-items: center; gap: 10px; height: 64px; padding: 0 16px 0 12px; border-bottom: 1px solid var(--line); background: var(--bg); }
+.cull-bar > .icon-btn { flex: none; }
+.develop .cull-bar { padding-left: 20px; }
+.cull-title { min-width: 120px; }
+.cull-folder { font-weight: 500; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cull-sub { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; margin-top: 1px; }
+.bar-gap { width: 1px; height: 22px; background: var(--line); margin: 0 2px; flex: none; }
+.cull-filter { flex: none; }
+.cull-filter button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .dd.cull-stars { width: 128px; height: 30px; border-radius: var(--r); color: var(--muted); font-size: 13px; font-weight: 500; }
 .cull-stars.on { color: var(--text); border-color: rgba(255, 255, 255, 0.22); background: var(--sel); }
 .dd.cull-subject { min-width: 128px; height: 30px; border-radius: var(--r); color: var(--muted); font-size: 13px; font-weight: 500; }
@@ -461,7 +464,8 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 
 
 .develop { display: flex; flex-direction: column; height: 100%; position: relative; }
-.dev-tools { display: flex; align-items: center; gap: 8px; }
+.dev-tools { display: flex; align-items: center; gap: 4px; }
+.dev-tools .btn { margin-left: 4px; }
 .dev-tools .btn.on { background: var(--sel); border-color: rgba(255, 255, 255, 0.3); }
 .dev-main { position: relative; flex: 1; min-height: 0; display: flex; }
 .dev-stage-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -502,6 +506,8 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .dev-line > .muted { font-size: 12px; }
 .dev-check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); cursor: pointer; margin: 2px 0; }
 .dev-check input { accent-color: var(--accent); }
+.dev-check kbd { margin-left: auto; }
+.mask-empty kbd { font-size: 10px; padding: 0 3px; }
 .dev-check.inline { margin: 0 0 0 auto; font-weight: 400; }
 .dev-tool { border: 1px solid var(--line-2); border-radius: var(--r); padding: 0 10px; background: var(--panel); }
 .dev-tool-foot { justify-content: flex-end; gap: 6px; margin-top: 2px; }
@@ -542,7 +548,7 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .dev-curve.ch-r path { stroke: #ff6a6a; } .dev-curve.ch-g path { stroke: #5ddc7a; } .dev-curve.ch-b path { stroke: #6aa0ff; }
 .dev-curve path.combined { stroke: rgba(238, 241, 246, 0.35); stroke-width: 1.2; stroke-dasharray: 4 3; }
 .dev-curve-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 28px; margin-top: 4px; }
-.dev-curve-read { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.dev-curve-read { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .dev-curve-pad { padding: 6px; margin: -6px; touch-action: none; cursor: crosshair; }
 .dev-curve.readonly svg, .dev-curve.readonly .dev-curve-pad { cursor: default; }
 

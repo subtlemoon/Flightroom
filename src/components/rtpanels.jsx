@@ -538,7 +538,7 @@ function LayersPanel({ rx, onDevelop }) {
 
 function PropertiesPanel({ rx }) {
   const { cur, acts, L } = rx;
-  if (!cur) return <p className="muted small rt-note">Pick a layer to see its properties. Adjustments, fills, type and shapes stay editable here.</p>;
+  if (!cur) return <p className="muted small rt-note">Pick a layer to edit its properties.</p>;
   const kind = kindOf(cur);
   return (
     <div className="rt-props">
