@@ -45,16 +45,37 @@ export function textLayout(t, ow, oh) {
 // Placed pictures (File > Place, drag and drop, paste): kept in the layer as a
 // data URL and decoded once. Until one is decoded its layer draws nothing, and
 // 'retouch:image' asks the stage to draw again when it is.
-const IMAGES = new Map(); // src -> HTMLImageElement (null while loading)
+const IMAGES = new Map(); // src -> { img: HTMLImageElement (null while loading), at: last asked for }; least recently used first
+// Decoded pictures kept: the ones in use (asked for in the last few seconds,
+// however many) and the most recent others. Before, every picture ever placed
+// or opened stayed decoded, with its data URL, until the app closed.
+const IMAGES_KEPT = 24, IMAGE_IN_USE_MS = 10000;
+function keepImage(src, img) {
+  const now = Date.now();
+  IMAGES.delete(src);
+  IMAGES.set(src, { img, at: now });
+  for (const [k, v] of IMAGES) {
+    if (IMAGES.size <= IMAGES_KEPT) break;
+    if (k !== src && now - v.at > IMAGE_IN_USE_MS) IMAGES.delete(k);
+  }
+}
 export function placedImage(src) {
-  if (IMAGES.has(src)) return IMAGES.get(src);
-  IMAGES.set(src, null);
+  const hit = IMAGES.get(src);
+  if (hit) {
+    hit.at = Date.now();
+    IMAGES.delete(src);
+    IMAGES.set(src, hit);
+    return hit.img;
+  }
+  keepImage(src, null);
   const img = new Image();
-  img.onload = () => { IMAGES.set(src, img); window.dispatchEvent(new Event('retouch:image')); };
+  img.onload = () => { keepImage(src, img); window.dispatchEvent(new Event('retouch:image')); };
   img.onerror = () => IMAGES.delete(src);
   img.src = src;
   return null;
 }
+/** Lets go of every decoded placed picture (leaving Develop); they decode again when drawn. */
+export function forgetPlacedImages() { IMAGES.clear(); }
 
 /**
  * A picture file as a layer's image: { src (data URL), w, h }, at most `edge`
@@ -75,11 +96,11 @@ export async function loadPlaced(blob, edge = 4096) {
   const out = c.convertToBlob ? await c.convertToBlob({ type: alpha ? 'image/png' : 'image/jpeg', quality: 0.92 })
     : await new Promise((res) => c.toBlob(res, alpha ? 'image/png' : 'image/jpeg', 0.92));
   const src = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(out); });
-  IMAGES.set(src, null);
+  keepImage(src, null);
   const img = new Image();
   img.src = src;
   await img.decode();
-  IMAGES.set(src, img);
+  keepImage(src, img);
   return { src, w, h };
 }
 

@@ -9,7 +9,7 @@ import { BUILT_IN, CopyDialog, PresetPanel } from './copy.jsx';
 import { fileItems, fromMenuBar, openMenu, photoLabel, ratingMenu } from './menu.jsx';
 import { copyActions } from '../cull/copies.js';
 import { applyTo, pick as pickSettings } from '../develop/copy.js';
-import { MASK_EDGE, POINT_DEFAULT, newId } from '../develop/masks.js';
+import { MASK_EDGE, POINT_DEFAULT, forgetMaskImages, newId } from '../develop/masks.js';
 import { toggle, useLayout } from '../layout.js';
 import { ExportedTag, Filmstrip, photoRating } from './cull.jsx';
 import { imgUrl, ROTATION } from '../cull/previews.js';
@@ -35,6 +35,8 @@ import { RetouchStage } from './rtstage.jsx';
 import { OptionsBar, RetouchPanels, ToolRail } from './rtpanels.jsx';
 import { MenuBar, RetouchDialogs } from './rtmenus.jsx';
 import { findSpotSource, sourceRegions, visibleLayers } from '../develop/retouch.js';
+import { forgetPlacedImages } from '../develop/raster.js';
+import { forgetSelectionImages } from '../develop/selection.js';
 
 // The Develop tab: the full RAW file with Lightroom-style controls. Edits are
 // never written into the photo: they're saved, as Lightroom's own settings,
@@ -46,6 +48,7 @@ const TRANSFORM_KEYS = ['perspVertical', 'perspHorizontal', 'perspRotate', 'pers
 const META_WINDOW = 20;
 // Stands in for a photo's as-shot colour when it isn't decoded (see applyPart).
 const NO_AS_SHOT = { temp: 5500, tint: 0 };
+const NO_SUGGESTIONS = {};
 const HISTORY_PHOTOS = 60;
 // The RAW data stays in memory a while after leaving, so coming straight back is instant.
 const RELEASE_AFTER = 120000;
@@ -94,6 +97,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const settingsCache = useRef(session.settings);
   const history = useRef(session.history);
   const dirty = useRef(false);
+  const shownMemo = useRef(null);
 
   // Shared with Culling; its "Likely rejects" is Culling's own.
   const [filter, setFilter] = useState(() => (seen?.filter && seen.filter !== 'rejects' ? seen.filter : 'all')); // see inFilter
@@ -127,11 +131,16 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
     requestMeta([photo.id, ...photos.slice(Math.max(0, index - 3), index + META_WINDOW).map((p) => p.id)]);
   }, [photo?.id, photos, requestMeta]);
 
-  // Free the graphics card's copy of the photo on leaving the tab, and the RAW
-  // data a while after (coming straight back doesn't decode it again).
+  // Free the graphics card's copy of the photo on leaving the tab, with the
+  // pictures kept for drawing it (mask images, placed pictures, selections),
+  // and the RAW data a while after (coming straight back doesn't decode it again).
   useEffect(() => {
     clearTimeout(releaseTimer);
-    return () => { dropStage(); releaseTimer = setTimeout(() => app?.develop.close(), RELEASE_AFTER); };
+    return () => {
+      dropStage();
+      forgetMaskImages(); forgetPlacedImages(); forgetSelectionImages();
+      releaseTimer = setTimeout(() => app?.develop.close(), RELEASE_AFTER);
+    };
   }, []);
 
   // Open the current photo: decode its RAW and read its saved settings.
@@ -542,12 +551,19 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
     );
   }
 
-  let shown = s && before && opened?.asShot ? { ...defaults(opened.asShot), crop: s.crop }
-    : s && hoverPreset && opened?.asShot ? applyTo(s, hoverPreset.part, opened.asShot) : s;
-  if (shown && !before && gradeHidden.size) {
-    shown = { ...shown };
-    for (const k of gradeHidden) { shown[`${k}Sat`] = 0; shown[`${k}Lum`] = 0; }
+  // What the stage draws. The same object until one of these changes, so an
+  // unrelated redraw of this view (a toast, a menu) doesn't draw the photo again.
+  const shownFrom = [s, before, hoverPreset, gradeHidden, opened?.asShot];
+  if (!shownMemo.current || shownFrom.some((x, i) => x !== shownMemo.current.from[i])) {
+    let next = s && before && opened?.asShot ? { ...defaults(opened.asShot), crop: s.crop }
+      : s && hoverPreset && opened?.asShot ? applyTo(s, hoverPreset.part, opened.asShot) : s;
+    if (next && !before && gradeHidden.size) {
+      next = { ...next };
+      for (const k of gradeHidden) { next[`${k}Sat`] = 0; next[`${k}Lum`] = 0; }
+    }
+    shownMemo.current = { from: shownFrom, value: next };
   }
+  const shown = shownMemo.current.value;
   // On the main photo: the mask overlay (when on) and Point Color's Visualize Range.
   const pointView = !!(maskOptions.visualize && selMask?.point);
   const mainMaskView = selMask && (overlay.show || pointView) ? { ...maskView(selMask, overlay), noOverlay: !overlay.show, point: pointView } : null;
@@ -612,7 +628,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
           ) : (
             <div className="hero-empty dev-msg"><h2>{list?.loading ? 'Reading folder…' : filter !== 'all' && allPhotos.length ? 'No photos with those stars' : 'No photos in this folder'}</h2></div>
           )}
-          <Filmstrip photos={photos} index={index} meta={meta} suggestions={{}} onSelect={selectInStrip} requestMeta={requestMeta} picked={picked.size ? picked : null} onMenu={(e, i) => photoMenu(e, photos[i], i)} />
+          <Filmstrip photos={photos} index={index} meta={meta} suggestions={NO_SUGGESTIONS} onSelect={selectInStrip} requestMeta={requestMeta} picked={picked.size ? picked : null} onMenu={(e, i) => photoMenu(e, photos[i], i)} />
         </div>
         <PanelHandle side="right" open={layout.panel} onClick={() => toggle('panel')} title={`${layout.panel ? 'Hide' : 'Show'} adjustments (F8)`} />
         {layout.panel && <aside className="dev-panel">
@@ -802,7 +818,8 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
       grid.current = sampleGrid(frame);
       setReady(true);
       drawRef.current(); // a new source (AI Denoise amount) with nothing else changed still shows now
-      if (nextPhoto?.raw) fetch(app.develop.imageUrl(nextPhoto, fitEdge(), true)).catch(() => {});
+      // Only so the desktop side decodes it ahead: its answer is empty and let go at once.
+      if (nextPhoto?.raw) fetch(app.develop.imageUrl(nextPhoto, fitEdge(), true)).then((res) => res.body?.cancel(), () => {}).catch(() => {});
     }, (err) => live && setError(String(err.message || err)));
     return () => { live = false; };
   }, [!!info, dn, glGen]);
@@ -1721,9 +1738,12 @@ export function Histogram() {
     if (!c) return;
     const { shown: smooth, bins } = anim.current;
     const dpr = window.devicePixelRatio || 1;
-    const w = c.clientWidth * dpr, h = c.clientHeight * dpr;
-    c.width = w; c.height = h;
+    const w = Math.floor(c.clientWidth * dpr), h = Math.floor(c.clientHeight * dpr);
+    // Sized only when its size changes: setting it throws the canvas's memory away, and this runs every frame the histogram glides.
+    if (c.width !== w) c.width = w;
+    if (c.height !== h) c.height = h;
     const ctx = c.getContext('2d');
+    ctx.globalCompositeOperation = 'source-over';
     ctx.clearRect(0, 0, w, h);
     if (!bins) return;
     // Drawn as Lightroom draws it: counts to scale (not a square root, which

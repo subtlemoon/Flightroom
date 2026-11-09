@@ -23,15 +23,18 @@ async function fullSizeBlur(full, orientation, subject) {
 let detector = null; // Promise<boolean>: false when the model can't start
 self.onmessage = async ({ data: { id, bmp, orientation, full } }) => {
   detector ||= loadDetector().then(() => true, (err) => { console.warn('[auto-rate] subject detection unavailable', err); return false; });
+  let img = null;
   try {
-    const img = upright(bmp, orientation);
+    img = upright(bmp, orientation);
     const subject = (await detector) ? await findSubject(img).catch(() => null) : null;
     const blur = full?.width ? await fullSizeBlur(full, orientation, subject).catch(() => null) : null;
     const m = measure(img, subject, blur == null ? null : Math.round(blur * 1000) / 1000);
-    if (img !== bmp) img.close();
-    bmp.close();
     self.postMessage({ id, m });
   } catch (err) {
     self.postMessage({ id, error: String(err?.message || err) });
+  } finally {
+    // Also when measuring failed: the pictures would stay until the run ends.
+    if (img && img !== bmp) img.close();
+    bmp.close();
   }
 };

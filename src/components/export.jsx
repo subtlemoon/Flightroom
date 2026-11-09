@@ -9,6 +9,7 @@ import { Geometry, Renderer } from '../develop/renderer.js';
 import { exportPhoto, exportSize } from '../develop/export.js';
 import { session } from '../develop/session.js';
 import { setExported } from '../develop/exported.js';
+import { forgetMaskImages } from '../develop/masks.js';
 
 const SIZES = [['Full size', 0], ['Long edge 4096 px', 4096], ['Long edge 2048 px', 2048]];
 
@@ -68,7 +69,7 @@ export function ExportModal({ photo, photos, shown = photos, picked = null, meta
     renderer?.dispose();
     // Develop: the photo on screen goes back to the front of memory, for zooming.
     // Culling: nothing needs the RAW data any more.
-    if (!info) app.develop.close();
+    if (!info) { app.develop.close(); forgetMaskImages(); }
     else if (list.some((p) => p.id !== photo.id)) app.develop.open(photo);
     setRun(null);
     if (failed.length) { onDone(`Exported ${saved.length}, ${failed.length} failed (${failed[0]})`); return; }

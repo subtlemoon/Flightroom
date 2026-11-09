@@ -90,6 +90,26 @@ describe('camera colour', () => {
     close(dcpTransform(info.adobe.profiles['Adobe Standard'], xy).wb, [2.1, 1, 1.45], 1e-6);
   });
 
+  it('keeps one copy of a profile or look that comes again with the next photo', () => {
+    const look = () => ({ name: 'Adobe Color', table: { dims: [2, 2, 1], data: [0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1], srgb: false }, curve: [[0, 0], [255, 255]] });
+    const answer = (p = profile(), l = look()) => withAdobe({ adobe: { profiles: { 'Adobe Standard': p }, looks: { 'Adobe Color': l } }, matrices: [] });
+    const a = answer(), b = answer();
+    expect(b.adobe.profiles['Adobe Standard']).toBe(a.adobe.profiles['Adobe Standard']);
+    expect(b.adobe.looks['Adobe Color']).toBe(a.adobe.looks['Adobe Color']);
+    // Another one (any number in it) is its own.
+    const other = look();
+    other.table.data[5] = 0.5;
+    const c = answer(profile(), other);
+    expect(c.adobe.looks['Adobe Color']).toBe(other);
+    expect(c.adobe.profiles['Adobe Standard']).toBe(a.adobe.profiles['Adobe Standard']);
+    const changed = profile();
+    changed.illuminants[0].color = changed.illuminants[0].color.map((v) => v * 1.01);
+    expect(answer(changed).adobe.profiles['Adobe Standard']).toBe(changed);
+    // An answer without profiles, or a failed one, passes through.
+    expect(withAdobe({ error: 'no' })).toEqual({ error: 'no' });
+    expect(withAdobe({ matrices: [1] })).toEqual({ matrices: [1] });
+  });
+
   it('blends the hue/sat maps for the white point', () => {
     const dcp = profile();
     expect(hueSatFor(dcp, 1).data[4]).toBe(1);

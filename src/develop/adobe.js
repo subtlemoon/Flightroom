@@ -347,7 +347,40 @@ export function rgbTone(curve, rgb) {
  * matrices, so the numbers are Lightroom's.
  */
 export function withAdobe(info) {
+  if (info?.adobe && !info.error) {
+    for (const [kind, set] of [['profile', info.adobe.profiles], ['look', info.adobe.looks]]) {
+      for (const name of Object.keys(set || {})) set[name] = keepOne(kind, name, set[name]);
+    }
+  }
   const dcp = info?.adobe?.profiles?.['Adobe Standard'];
   if (dcp && !info.error) info.matrices = dcpMatrices(dcp);
   return info;
+}
+
+// Every photo's answer carries its own copy of Lightroom's profiles and looks
+// (tens of thousands of numbers), nearly always the same as the last photo's.
+// The same ones are kept as one object, so each photo doesn't hold its own copy
+// and the renderer (which tells them apart by identity) doesn't build and send
+// the same tables to the graphics card again for every photo.
+const kept = new Map(); // kind | name | camera -> the last one seen
+function sameData(a, b) {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || !a || !b) return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i] && !sameData(a[i], b[i])) return false;
+    return true;
+  }
+  if (Array.isArray(b)) return false;
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((k) => sameData(a[k], b[k]));
+}
+function keepOne(kind, name, v) {
+  if (!v || typeof v !== 'object') return v;
+  const key = `${kind}|${name}|${v.camera || ''}`;
+  const old = kept.get(key);
+  if (old && sameData(old, v)) return old;
+  kept.set(key, v);
+  if (kept.size > 12) kept.delete(kept.keys().next().value);
+  return v;
 }

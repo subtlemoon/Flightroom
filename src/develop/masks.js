@@ -351,6 +351,18 @@ export function rasterChange(r, old) {
   return log.length ? [x0, y0, x1 - x0, y1 - y0] : [0, 0, 0, 0];
 }
 
+/**
+ * Lets go of every mask image kept here (leaving Develop, or after an export
+ * from Culling): full-size mask images, brush layers and unpacked AI
+ * selections, a few hundred MB with several masks. They're made again when drawn.
+ */
+export function forgetMaskImages() {
+  maskState.clear();
+  brushCache.clear();
+  aiCache.clear();
+  scratch[0] = scratch[1] = null;
+}
+
 export const lumRange = (mask) => mask.parts.find((p) => p.type === 'luminance');
 
 // --- the sidecar -----------------------------------------------------------------
