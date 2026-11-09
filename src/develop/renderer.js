@@ -18,6 +18,8 @@ const GUIDE_EDGE = 320;
 // between triangles (Intel's integrated graphics) can't stop one to put the
 // desktop on screen, so a 100+ ms pass makes the whole screen stall or flash.
 const BAND_PX = 1 << 17;
+// Mask textures left undrawn this long (ms) are freed (see updateMasks).
+const MASK_TEX_IDLE = 20000;
 // The base rendering under the sliders, per profile (params.js PROFILES).
 // Fitted to Lightroom's Adobe Color and to the Z7 II's own JPEGs.
 const LINEAR = [[0, 0], [255, 255]];
@@ -397,7 +399,7 @@ export class Renderer {
     gl.deleteBuffer(this.quad);
     for (const p of [this.down, this.blur, this.final, this.copy, this.resample]) gl.deleteProgram(p.p);
     this.free(this.acc);
-    for (const t of this.maskTex || []) gl.deleteTexture(t.tex);
+    for (const t of this.maskTex || []) if (t) gl.deleteTexture(t.tex);
     this.composer?.dispose();
     this.setOpHi(null);
     if (this.maskCurveTex) gl.deleteTexture(this.maskCurveTex);
@@ -556,9 +558,19 @@ export class Renderer {
   updateMasks(s, geo) {
     const masks = (s.masks || []).filter((m) => !m.hidden).slice(0, MAX_MASKS);
     this.masks = masks;
+    const gl = this.gl;
+    // Textures of masks not drawn for a while (another photo's, or removed
+    // ones) are given back: each holds four full mask images on the graphics
+    // card. Not at once, so Before / After and the small pictures made without
+    // masks don't send them to the card again.
+    const groups = Math.ceil(masks.length / 4), now = performance.now();
+    (this.maskTex || []).forEach((t, i) => {
+      if (!t) return;
+      if (i < groups) t.used = now;
+      else if (now - t.used > MASK_TEX_IDLE) { gl.deleteTexture(t.tex); this.maskTex[i] = null; }
+    });
     if (!masks.length) return;
     const rasters = masks.map((m) => maskRaster(m, geo.ow, geo.oh));
-    const gl = this.gl;
     this.maskTex ||= [];
     for (let t = 0; t * 4 < rasters.length; t++) {
       const group = rasters.slice(t * 4, t * 4 + 4);
@@ -590,7 +602,7 @@ export class Renderer {
         cur.rasters = group;
       } else {
         if (cur) gl.deleteTexture(cur.tex);
-        this.maskTex[t] = { tex: this.texture(gl.RGBA8, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px), W, H, rasters: group };
+        this.maskTex[t] = { tex: this.texture(gl.RGBA8, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px), W, H, rasters: group, used: now };
       }
     }
   }
@@ -893,15 +905,20 @@ export class Renderer {
       return count(px);
     };
     // Counted in Melissa RGB (ProPhoto colours, sRGB tones), as Lightroom's histogram is.
+    let out, pre;
     this.melissa = true;
-    this.render(info, s, geo, frame, o2f, { target: this.histTarget });
-    const out = read();
-    // What goes into the tone curve (the photo without it), which Lightroom
-    // draws behind the curve. Reads are queued in order, so reusing the target is safe.
-    this.render(info, { ...s, ...FLAT_CURVE }, geo, frame, o2f, { target: this.histTarget });
-    this.melissa = false;
-    const pre = read();
-    this.hi = saveHi;
+    try {
+      this.render(info, s, geo, frame, o2f, { target: this.histTarget });
+      out = read();
+      // What goes into the tone curve (the photo without it), which Lightroom
+      // draws behind the curve. Reads are queued in order, so reusing the target is safe.
+      this.render(info, { ...s, ...FLAT_CURVE }, geo, frame, o2f, { target: this.histTarget });
+      pre = read();
+    } finally {
+      // Put back even if a draw fails, or the photo itself would be drawn this way from then on.
+      this.melissa = false;
+      this.hi = saveHi;
+    }
     const join = (a, b) => (a ? Object.assign(a, { pre: b }) : null);
     return later ? Promise.all([out, pre]).then(([a, b]) => join(a, b)) : join(out, pre);
   }
@@ -915,8 +932,11 @@ export class Renderer {
     }
     const saveHi = this.hi;
     this.hi = null;
-    this.render(info, s, geo, frame, outToFrame(w, h, frame, { scale: fitScale(w, h, frame), u: 0, v: 0 }), { target: this[slot], maskView });
-    this.hi = saveHi;
+    try {
+      this.render(info, s, geo, frame, outToFrame(w, h, frame, { scale: fitScale(w, h, frame), u: 0, v: 0 }), { target: this[slot], maskView });
+    } finally {
+      this.hi = saveHi;
+    }
     if (later) return this.readLater(this[slot]);
     const px = new Uint8Array(w * h * 4);
     gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
@@ -995,19 +1015,24 @@ export class Renderer {
           // just while it renders (nothing else runs in between).
           const keep = this.hi;
           const t = this.target(tw, th);
-          this.hi = hi;
+          let done;
+          // The tile's buffer is given back however this ends (a failed draw used to leave it on the card).
           try {
-            this.render(info, s, geo, frame, mm(out2frame, mat(ow / tw, 0, tx, 0, oh / th, ty)), { ...opts, target: t });
+            this.hi = hi;
+            try {
+              this.render(info, s, geo, frame, mm(out2frame, mat(ow / tw, 0, tx, 0, oh / th, ty)), { ...opts, target: t });
+            } finally {
+              this.hi = keep;
+              if (hi) gl.deleteTexture(hi.tex);
+            }
+            gl.bindTexture(gl.TEXTURE_2D, t.tex);
+            gl.generateMipmap(gl.TEXTURE_2D);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+            this.drawRect(this.resample, this.acc, [tx, ty, ow, oh], { uTex: t.tex, uRect: [tx, ty, ow, oh], uScale: tw / ow });
+            done = await this.waitFrame();
           } finally {
-            this.hi = keep;
-            if (hi) gl.deleteTexture(hi.tex);
+            this.free(t);
           }
-          gl.bindTexture(gl.TEXTURE_2D, t.tex);
-          gl.generateMipmap(gl.TEXTURE_2D);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-          this.drawRect(this.resample, this.acc, [tx, ty, ow, oh], { uTex: t.tex, uRect: [tx, ty, ow, oh], uScale: tw / ow });
-          const done = await this.waitFrame();
-          this.free(t);
           if (!done || !current()) return false;
           await new Promise((res) => setTimeout(res, 0)); // let the page breathe between tiles
         }

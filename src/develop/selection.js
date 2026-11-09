@@ -72,6 +72,8 @@ function bitmapCanvas(sh) {
   return c;
 }
 const bitmapPx = new Map();
+/** Lets go of the unpacked selection images kept here (leaving Develop). */
+export function forgetSelectionImages() { decoded.clear(); bitmapPx.clear(); }
 function bitmapValues(sh) {
   let v = bitmapPx.get(sh.data);
   if (!v) { v = inflateSync(fromB64(sh.data)); bitmapPx.set(sh.data, v); if (bitmapPx.size > 6) bitmapPx.delete(bitmapPx.keys().next().value); }

@@ -485,38 +485,49 @@ pub async fn cull_scan(app: AppHandle, folder: String, subfolders: Option<bool>)
                     copies.entry(base.to_lowercase()).or_default().push((k, n));
                 }
             }
-            for g in lib::group_photos(&names) {
-                let text = g.sidecar.as_deref().and_then(sidecar);
-                let id = join(&g.file);
-                photos.push(Photo {
-                    id: id.clone(),
-                    name: g.file.clone(),
-                    raw: g.raw.as_deref().map(join),
-                    jpeg: g.jpeg.as_deref().map(join),
-                    sidecar: join(g.sidecar.as_deref().unwrap_or(&format!("{}.xmp", g.base))),
-                    rating_in: if g.rating_in_file { "file" } else { "sidecar" },
-                    rating: text.as_deref().and_then(lib::read_rating),
-                    developed: text.as_deref().is_some_and(has_develop),
-                    copy: None,
-                });
-                // Its virtual copies right after it (only RAW files are developed).
-                let Some(list) = g.raw.as_ref().and_then(|_| copies.get_mut(&g.base.to_lowercase())) else { continue };
+            for list in copies.values_mut() {
                 list.sort();
-                for &(k, name) in list.iter() {
-                    let text = sidecar(name);
-                    photos.push(Photo {
-                        id: format!("{id}{COPY_TAG}{k}"),
+            }
+            // Each photo's sidecar is read for its stars: several at a time (a folder
+            // of thousands took a file read per photo, one after another), in the same order.
+            use rayon::prelude::*;
+            let groups = lib::group_photos(&names);
+            let found: Vec<Vec<Photo>> = groups
+                .par_iter()
+                .map(|g| {
+                    let text = g.sidecar.as_deref().and_then(sidecar);
+                    let id = join(&g.file);
+                    let mut out = vec![Photo {
+                        id: id.clone(),
                         name: g.file.clone(),
                         raw: g.raw.as_deref().map(join),
                         jpeg: g.jpeg.as_deref().map(join),
-                        sidecar: join(name),
-                        rating_in: "sidecar",
+                        sidecar: join(g.sidecar.as_deref().unwrap_or(&format!("{}.xmp", g.base))),
+                        rating_in: if g.rating_in_file { "file" } else { "sidecar" },
                         rating: text.as_deref().and_then(lib::read_rating),
                         developed: text.as_deref().is_some_and(has_develop),
-                        copy: Some(k),
-                    });
-                }
-            }
+                        copy: None,
+                    }];
+                    // Its virtual copies right after it (only RAW files are developed).
+                    let Some(list) = g.raw.as_ref().and_then(|_| copies.get(&g.base.to_lowercase())) else { return out };
+                    for &(k, name) in list.iter() {
+                        let text = sidecar(name);
+                        out.push(Photo {
+                            id: format!("{id}{COPY_TAG}{k}"),
+                            name: g.file.clone(),
+                            raw: g.raw.as_deref().map(join),
+                            jpeg: g.jpeg.as_deref().map(join),
+                            sidecar: join(name),
+                            rating_in: "sidecar",
+                            rating: text.as_deref().and_then(lib::read_rating),
+                            developed: text.as_deref().is_some_and(has_develop),
+                            copy: Some(k),
+                        });
+                    }
+                    out
+                })
+                .collect();
+            photos.extend(found.into_iter().flatten());
         }
         Ok(Scan { folder: root.to_string_lossy().to_string(), photos })
     })

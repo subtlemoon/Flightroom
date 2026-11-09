@@ -573,11 +573,16 @@ pub fn for_camera(cameras: &[String], sidecar: Option<&str>, cache: &Path) -> Ad
         let file = cache.join(format!("{}.json", norm(name)));
         if let Some(l) = sidecar.and_then(|t| look_from_xmp(t, name)).filter(|l| l.table.is_some()) {
             // Lightroom wrote this look's table into the sidecar: keep it for every photo.
-            let _ = std::fs::create_dir_all(cache);
-            if let Ok(j) = serde_json::to_string(&LookFile::from(&l)) {
-                let _ = std::fs::write(&file, j);
+            // Every photo Lightroom has touched carries it, so it's only written
+            // (a megabyte of text) when it isn't the one already kept.
+            let same = looks.lock().unwrap().get(name).is_some_and(|k| k.as_ref() == Some(&l));
+            if !same {
+                let _ = std::fs::create_dir_all(cache);
+                if let Ok(j) = serde_json::to_string(&LookFile::from(&l)) {
+                    let _ = std::fs::write(&file, j);
+                }
+                looks.lock().unwrap().insert(name.to_string(), Some(l));
             }
-            looks.lock().unwrap().insert(name.to_string(), Some(l));
         }
         let known = looks.lock().unwrap().get(name).cloned();
         let found = match known {

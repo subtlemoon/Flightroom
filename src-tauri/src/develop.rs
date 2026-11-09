@@ -518,12 +518,7 @@ impl Develop {
                 return Some(d.clone());
             }
         }
-        let bytes = std::fs::read(&path).ok()?;
-        if bytes.len() != 8 + raw.w * raw.h * 6 || bytes[..8] != [&(raw.w as u32).to_le_bytes()[..], &(raw.h as u32).to_le_bytes()[..]].concat() {
-            return None;
-        }
-        let d = Arc::new(bytes[8..].chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect::<Vec<u16>>());
-        drop(bytes);
+        let d = Arc::new(read_denoised(&path, raw.w, raw.h)?);
         *cur = Some((name, raw.path.clone(), d.clone()));
         drop(cur);
         // It counts against the RAWs' budget: neighbours may have to go.
@@ -539,6 +534,50 @@ impl Develop {
     }
 }
 
+/// A denoise cache file (width, height, then half floats) for a w x h photo, read
+/// a piece at a time straight into its numbers: the file (270 MB at 45 MP) is
+/// never held in memory next to them.
+fn read_denoised(path: &Path, w: usize, h: usize) -> Option<Vec<u16>> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let n = w.checked_mul(h)?.checked_mul(3)?;
+    if f.metadata().ok()?.len() != 8 + n as u64 * 2 {
+        return None;
+    }
+    let mut head = [0u8; 8];
+    f.read_exact(&mut head).ok()?;
+    if head[..4] != (w as u32).to_le_bytes() || head[4..] != (h as u32).to_le_bytes() {
+        return None;
+    }
+    let mut out = vec![0u16; n];
+    let mut buf = vec![0u8; 1 << 20];
+    for part in out.chunks_mut(buf.len() / 2) {
+        let bytes = &mut buf[..part.len() * 2];
+        f.read_exact(bytes).ok()?;
+        for (v, b) in part.iter_mut().zip(bytes.chunks_exact(2)) {
+            *v = u16::from_le_bytes([b[0], b[1]]);
+        }
+    }
+    Some(out)
+}
+
+/// Writes a denoise cache file, a piece at a time (no second copy of the photo in memory).
+fn write_denoised(path: &Path, w: usize, h: usize, data: &[u16]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(path)?);
+    f.write_all(&(w as u32).to_le_bytes())?;
+    f.write_all(&(h as u32).to_le_bytes())?;
+    let mut buf = vec![0u8; 1 << 20];
+    for part in data.chunks(buf.len() / 2) {
+        let bytes = &mut buf[..part.len() * 2];
+        for (b, v) in bytes.chunks_exact_mut(2).zip(part) {
+            b.copy_from_slice(&v.to_le_bytes());
+        }
+        f.write_all(bytes)?;
+    }
+    f.into_inner().map(|_| ()).map_err(|e| e.into_error())
+}
+
 fn num(q: &HashMap<String, String>, k: &str) -> Option<usize> {
     q.get(k).and_then(|v| v.parse::<f64>().ok()).map(|v| v.max(0.0) as usize)
 }
@@ -552,6 +591,9 @@ pub fn handle(app: &AppHandle, kind: &str, q: &HashMap<String, String>) -> HttpR
             let edge = num(q, "edge").unwrap_or(2560).clamp(64, 8192);
             let keep = q.get("ahead").is_none();
             match dev.overview(app, &p, edge, keep, num(q, "dn").unwrap_or(0).min(100)) {
+                // A look-ahead only gets the photo decoded and kept here: nothing reads its
+                // answer, so the picture (tens of MB) isn't copied and sent to the window.
+                Ok(_) if !keep => respond(200, "application/octet-stream", Vec::new()),
                 Ok(b) => respond(200, "application/octet-stream", b.as_ref().clone()),
                 Err(e) => fail(e),
             }
@@ -753,14 +795,11 @@ pub async fn develop_denoise(app: AppHandle, id: String) -> Result<bool, String>
         let file = denoise_file(&app, &raw);
         let dir = file.parent().unwrap();
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        let mut bytes = Vec::with_capacity(8 + out.len() * 2);
-        bytes.extend((raw.w as u32).to_le_bytes());
-        bytes.extend((raw.h as u32).to_le_bytes());
-        for v in &out {
-            bytes.extend(v.to_le_bytes());
-        }
         let part = file.with_extension("part");
-        std::fs::write(&part, bytes).map_err(|e| format!("Couldn't save the denoised photo: {e}"))?;
+        if let Err(e) = write_denoised(&part, raw.w, raw.h, &out) {
+            let _ = std::fs::remove_file(&part);
+            return Err(format!("Couldn't save the denoised photo: {e}"));
+        }
         std::fs::rename(&part, &file).map_err(|e| e.to_string())?;
         *dev.denoised.lock().unwrap() = Some((file.to_string_lossy().to_string(), raw.path.clone(), Arc::new(out)));
         dev.overviews.lock().unwrap().clear();
@@ -1094,6 +1133,28 @@ mod tests {
             "adobe": crate::adobe::for_camera(&crate::adobe::camera_names(&raw.make, &raw.model, &raw.exif_model), Some(text.as_str()), &std::env::temp_dir()),
         });
         std::fs::write(p.with_extension("json"), info.to_string()).unwrap();
+    }
+
+    #[test]
+    fn denoise_cache_files_round_trip() {
+        let p = std::env::temp_dir().join(format!("fr-dn-{}.frdn", std::process::id()));
+        // More than one 1 MB piece, and not a whole number of them.
+        let (w, h) = (701, 503);
+        let data: Vec<u16> = (0..w * h * 3).map(|i| (i * 7919 % 65536) as u16).collect();
+        write_denoised(&p, w, h, &data).unwrap();
+        // The file is what earlier versions wrote: width, height, little-endian half floats.
+        let bytes = std::fs::read(&p).unwrap();
+        assert_eq!(bytes.len(), 8 + data.len() * 2);
+        assert_eq!(bytes[..4], (w as u32).to_le_bytes());
+        assert_eq!(bytes[4..8], (h as u32).to_le_bytes());
+        assert!(bytes[8..].chunks_exact(2).zip(&data).all(|(b, v)| u16::from_le_bytes([b[0], b[1]]) == *v));
+        assert_eq!(read_denoised(&p, w, h).as_deref(), Some(&data[..]));
+        // Another photo's size, or a cut-off file, isn't used.
+        assert!(read_denoised(&p, h, w).is_none());
+        assert!(read_denoised(&p, w, h - 1).is_none());
+        std::fs::write(&p, &bytes[..bytes.len() - 2]).unwrap();
+        assert!(read_denoised(&p, w, h).is_none());
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

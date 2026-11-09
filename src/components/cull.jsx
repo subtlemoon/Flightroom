@@ -1,5 +1,5 @@
 import { bridge as app, FILES } from '../bridge.js';
-import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Dropdown, Icon, Modal, PanelHandle } from './ui.jsx';
 import { toggle, useLayout } from '../layout.js';
 import { clearPreviews, decodeThumb, drawPhoto, fallbackShown, fitEdge, fitKept, fitKey, fullKey, geometry, imgUrl, loadFit, loadFull, loadThumb, prune, releaseFull, ROTATION, thumbFallbackUrl, thumbKey } from '../cull/previews.js';
@@ -158,6 +158,8 @@ export function CullView({ store, onDevelop }) {
   const { picked, setPicked, selectInStrip } = useStripPick(photos, index, go, list?.folder);
 
   const rememberApplied = (id, stars) => setAuto((a) => {
+    // Rating a photo auto-rate never rated changes nothing here: nothing to save or redraw.
+    if (stars == null && !(id in a.applied)) return a;
     const applied = { ...a.applied };
     if (stars == null) delete applied[id]; else applied[id] = stars;
     const next = { ...a, applied };
@@ -831,17 +833,27 @@ const CELL = 96;
 // The filmstrip with its hide/show handle (F6).
 export function Filmstrip(props) {
   const { strip } = useLayout();
+  // The row is drawn again only when what it shows changes (photos, the current
+  // one, stars, the selection), not on every slider move or zoom drag of the
+  // view around it: its clicks go through these, which always call the latest handlers.
+  const latest = useRef(props);
+  latest.current = props;
+  const onSelect = useCallback((i, e) => latest.current.onSelect(i, e), []);
+  const onMenu = useCallback((e, i) => latest.current.onMenu?.(e, i), []);
+  const requestMeta = useCallback((ids) => latest.current.requestMeta(ids), []);
+  const { photos, index, meta, suggestions, groupStarts, picked } = props;
   return (
     <div className={`strip-wrap${strip ? '' : ' closed'}`}>
       <PanelHandle side="bottom" open={strip} onClick={() => toggle('strip')} title={`${strip ? 'Hide' : 'Show'} filmstrip (F6)`} />
-      {strip && <FilmstripRow {...props} />}
+      {strip && <FilmstripRow photos={photos} index={index} meta={meta} suggestions={suggestions} groupStarts={groupStarts} picked={picked}
+        onSelect={onSelect} requestMeta={requestMeta} onMenu={props.onMenu ? onMenu : undefined} />}
     </div>
   );
 }
 
 // `picked`: ids selected along with the current photo (Develop's Ctrl/Shift+click); onSelect gets the click,
 // onMenu(event, index) a right-click.
-function FilmstripRow({ photos, index, meta, suggestions, groupStarts, onSelect, requestMeta, picked, onMenu }) {
+const FilmstripRow = memo(function FilmstripRow({ photos, index, meta, suggestions, groupStarts, onSelect, requestMeta, picked, onMenu }) {
   const ref = useRef();
   const [scroll, setScroll] = useState({ left: 0, width: 0 });
 
@@ -879,7 +891,7 @@ function FilmstripRow({ photos, index, meta, suggestions, groupStarts, onSelect,
       </div>
     </div>
   );
-}
+});
 
 function Thumb({ photo, meta, suggested, group, active, picked, left, onClick, onMenu }) {
   const [src, setSrc] = useState(() => imgUrl('thumb', photo.id));

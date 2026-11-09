@@ -30,7 +30,8 @@ function cached(key, load) {
   }
   const p = load();
   cache.set(key, p);
-  p.catch(() => cache.delete(key));
+  // A failed load is forgotten, unless a newer one has taken its place.
+  p.catch(() => { if (cache.get(key) === p) cache.delete(key); });
   return p;
 }
 

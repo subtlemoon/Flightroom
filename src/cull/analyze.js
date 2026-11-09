@@ -346,7 +346,18 @@ export function suggest(items) {
 // { measured: { [id]: m }, applied: { [id]: stars } }. `applied` remembers the
 // stars auto-rating wrote, so a later run can tell them apart from your own.
 const KEY = 'gearcheck-autocull';
-const readAll = () => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; } };
+// Every folder's results are one saved text, megabytes after a few big shoots:
+// it is read and unpacked once, not again for each save (one per rating).
+let all = null, allText = null;
+const readAll = () => {
+  let text = null;
+  try { text = localStorage.getItem(KEY); } catch {}
+  if (!all || text !== allText) {
+    try { all = JSON.parse(text) || {}; } catch { all = {}; }
+    allText = text;
+  }
+  return all;
+};
 export function loadAnalysis(folder) {
   const saved = readAll()[folder] || {};
   // Measurements from an older version are dropped, so they're redone the new way.
@@ -354,5 +365,10 @@ export function loadAnalysis(folder) {
   return { measured, applied: saved.applied || {} };
 }
 export function saveAnalysis(folder, data) {
-  try { localStorage.setItem(KEY, JSON.stringify({ ...readAll(), [folder]: data })); } catch {}
+  const next = { ...readAll(), [folder]: data };
+  try {
+    const text = JSON.stringify(next);
+    localStorage.setItem(KEY, text);
+    all = next; allText = text;
+  } catch {}
 }

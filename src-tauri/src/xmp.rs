@@ -31,8 +31,12 @@ impl Doc {
 
     /// Byte range of the value of attribute `qname="..."` (without quotes).
     fn find_attr(&self, qname: &str) -> Option<(usize, usize)> {
+        self.find_attr_from(qname, 0)
+    }
+
+    /// find_attr, looking only from byte `from` on.
+    fn find_attr_from(&self, qname: &str, mut from: usize) -> Option<(usize, usize)> {
         let b = self.text.as_bytes();
-        let mut from = 0;
         while let Some(i) = self.text[from..].find(qname) {
             let at = from + i;
             from = at + qname.len();
@@ -63,10 +67,14 @@ impl Doc {
 
     /// Byte range of a whole `<qname>...</qname>` element and of its content.
     fn find_elem(&self, qname: &str) -> Option<((usize, usize), (usize, usize))> {
+        self.find_elem_from(qname, 0)
+    }
+
+    /// find_elem, looking only from byte `from` on.
+    fn find_elem_from(&self, qname: &str, mut from: usize) -> Option<((usize, usize), (usize, usize))> {
         let open = format!("<{qname}");
         let close = format!("</{qname}>");
         let b = self.text.as_bytes();
-        let mut from = 0;
         while let Some(i) = self.text[from..].find(&open) {
             let at = from + i;
             from = at + open.len();
@@ -102,11 +110,15 @@ impl Doc {
     }
 
     pub fn get(&self, prefix: &str, name: &str) -> Option<String> {
-        let q = format!("{prefix}:{name}");
-        if let Some((s, e)) = self.find_attr(&q) {
+        self.get_from(&format!("{prefix}:{name}"), 0)
+    }
+
+    /// The value of `q` ("prefix:Name"), looking only from byte `from` on.
+    fn get_from(&self, q: &str, from: usize) -> Option<String> {
+        if let Some((s, e)) = self.find_attr_from(q, from) {
             return Some(unescape(&self.text[s..e]));
         }
-        let (_, (s, e)) = self.find_elem(&q)?;
+        let (_, (s, e)) = self.find_elem_from(q, from)?;
         let inner = self.text[s..e].trim();
         if inner.contains('<') {
             return None;
@@ -132,6 +144,8 @@ impl Doc {
     /// Every simple `prefix:Name` value (attributes and plain elements).
     pub fn all(&self, prefix: &str) -> HashMap<String, String> {
         let mut out = HashMap::new();
+        // Names looked up already, found or not: the answer would be the same again.
+        let mut tried = std::collections::HashSet::new();
         let pat = format!("{prefix}:");
         let b = self.text.as_bytes();
         let mut from = 0;
@@ -142,10 +156,14 @@ impl Doc {
                 continue;
             }
             let name: String = self.text[from..].bytes().take_while(|&c| is_name_char(c) && c != b':').map(|c| c as char).collect();
-            if name.is_empty() || out.contains_key(&name) {
+            if name.is_empty() || !tried.insert(name.clone()) {
                 continue;
             }
-            if let Some(v) = self.get(prefix, &name) {
+            // This is the name's first place in the text, so its value is looked
+            // for from here on (from the "<" before it, for an element), not from
+            // the top again for every name: with megabytes of masks in a sidecar,
+            // that was a search through all of it per setting.
+            if let Some(v) = self.get_from(&format!("{pat}{name}"), at.saturating_sub(1)) {
                 out.insert(name, v);
             }
         }
@@ -220,6 +238,69 @@ pub fn empty() -> String {
 
 #[cfg(test)]
 mod tests {
+    /// all() as it was: every name looked up from the top of the text.
+    fn all_from_the_top(doc: &Doc, prefix: &str) -> HashMap<String, String> {
+        let mut out = HashMap::new();
+        let pat = format!("{prefix}:");
+        let b = doc.text.as_bytes();
+        let mut from = 0;
+        while let Some(i) = doc.text[from..].find(&pat) {
+            let at = from + i;
+            from = at + pat.len();
+            if at > 0 && (is_name_char(b[at - 1]) && b[at - 1] != b'<') {
+                continue;
+            }
+            let name: String = doc.text[from..].bytes().take_while(|&c| is_name_char(c) && c != b':').map(|c| c as char).collect();
+            if name.is_empty() || out.contains_key(&name) {
+                continue;
+            }
+            if let Some(v) = doc.get(prefix, &name) {
+                out.insert(name, v);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn all_reads_the_same_values_as_looking_each_name_up() {
+        let docs = [
+            // Attributes, plain and structured elements, the same name nested and again later.
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF><rdf:Description rdf:about="" xmlns:crs="c" xmlns:fr="f" xmlns:xcrs="z"
+   crs:Exposure2012="+0.50" crs:Contrast2012 = '10' xcrs:Exposure2012="9" crs:Exposure2012x="7" fr:Masks="[{&quot;crs:Fake&quot;:1}]"
+   crs:WhiteBalance="As Shot" notcrs:Tint="3">
+   <crs:ToneCurvePV2012><rdf:Seq><rdf:li>0, 0</rdf:li><rdf:li>255, 255</rdf:li></rdf:Seq></crs:ToneCurvePV2012>
+   <crs:Look><rdf:Description crs:Name="Adobe Color" crs:Amount="1"><crs:Group>Profiles</crs:Group></rdf:Description></crs:Look>
+   <crs:Group>Later</crs:Group><crs:Tint>+5</crs:Tint><crs:Tint>+6</crs:Tint><crs:Empty/>
+   <crs:PaintBasedCorrections><rdf:Seq><rdf:li><rdf:Description crs:What="Correction" crs:LocalExposure2012="0.25" crs:Exposure2012="nested">
+     <crs:CorrectionMasks><rdf:Seq><rdf:li crs:What="Mask/Paint" crs:Radius="0.05"/></rdf:Seq></crs:CorrectionMasks></rdf:Description></rdf:li></rdf:Seq></crs:PaintBasedCorrections>
+   <crs:Name>plain after nested</crs:Name><fr:Denoise>40</fr:Denoise>
+  </rdf:Description></rdf:RDF></x:xmpmeta>"#
+                .to_string(),
+            // A name first met as a structured element, then as a plain one and as an attribute.
+            r#"<rdf:Description><crs:A><rdf:Seq/></crs:A><crs:A>plain</crs:A><crs:B><i/></crs:B><rdf:li crs:B="attr" crs:C:D="odd" crs:="none"/> crs:E crs:E="late" <crs:F>unclosed"#.to_string(),
+            empty(),
+            String::new(),
+            "crs:".to_string(),
+        ];
+        for text in docs {
+            let doc = Doc::new(&text);
+            for prefix in ["crs", "fr", "rdf", "x", "xmlns", "none"] {
+                assert_eq!(doc.all(prefix), all_from_the_top(&doc, prefix), "{prefix} in {text}");
+            }
+        }
+        // And on a sidecar as Flightroom writes it.
+        let mut doc = Doc::new(&empty());
+        for (i, name) in ["Exposure2012", "Contrast2012", "Tint", "Temperature", "WhiteBalance"].iter().enumerate() {
+            doc.set_attr("crs", name, &format!("{i}"), CRS_NS);
+        }
+        doc.set_attr("fr", "Masks", &format!("[{{\"data\":\"{}\"}}]", "crs:Tint=\"9\" ".repeat(50)), FR_NS);
+        doc.set_seq("crs", "ToneCurvePV2012", &["0, 0".to_string(), "255, 255".to_string()], CRS_NS);
+        doc.set_attr("crs", "Sharpness", "40", CRS_NS);
+        assert_eq!(doc.all("crs"), all_from_the_top(&doc, "crs"));
+        assert_eq!(doc.all("fr"), all_from_the_top(&doc, "fr"));
+        assert_eq!(doc.all("crs").get("Tint").map(String::as_str), Some("2"));
+    }
+
     use super::*;
 
     const LR: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
