@@ -338,7 +338,7 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .update-version { font-weight: 500; font-size: 15px; margin-bottom: 2px; }
 .card .update-row .muted { margin-bottom: 0; }
 .update-current { color: var(--ok) !important; }
-.update-ready { color: var(--info) !important; }
+.update-ready, .update-available { color: var(--info) !important; }
 .update-error { color: var(--warn) !important; }
 
 /* ── News ───────────────────────────────────────────────── */

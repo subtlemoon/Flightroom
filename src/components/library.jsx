@@ -93,9 +93,11 @@ function UpdatesCard() {
         </div>
         {status?.state === 'ready'
           ? <button className="btn btn-primary" onClick={() => bridge.installUpdate()}><Icon name="refresh" size={16} />Restart now</button>
+          : status?.state === 'available'
+          ? <button className="btn btn-primary" onClick={() => bridge.downloadUpdate()}><Icon name="refresh" size={16} />Update</button>
           : <button className="btn" disabled={busy} onClick={() => bridge.checkForUpdates()}><Icon name="refresh" size={16} />Check now</button>}
       </div>
-      <p className="muted small">Updates download in the background and install when you close the app.</p>
+      <p className="muted small">Fixes download in the background and install when you close the app. A new major version (like 3.0) waits until you choose Update.</p>
     </section>
   );
 }

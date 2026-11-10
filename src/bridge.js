@@ -43,6 +43,8 @@ export const bridge = inApp ? {
   getUpdateStatus: () => invoke('update_status'),
   checkForUpdates: () => call('update_check'),
   installUpdate: () => call('update_install'),
+  // A new major version waits until asked for: downloads it, then it installs like any update.
+  downloadUpdate: () => call('update_download'),
   displayProfile: () => call('display_profile'),
   onUpdateStatus: (fn) => onEvent('update:status', fn),
   openUrl: (url) => openUrl(url).catch((err) => console.error('Could not open link', err)),

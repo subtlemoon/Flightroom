@@ -1,6 +1,6 @@
 {
   "name": "flightroom",
-  "version": "2.18.5",
+  "version": "2.18.6",
   "description": "Photo culling, RAW developing and camera gear planner",
   "private": true,
   "type": "module",

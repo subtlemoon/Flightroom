@@ -167,7 +167,8 @@ function RefreshButton({ status, onRefresh, count }) {
   );
 }
 
-// Shown once a new version has downloaded, so it doesn't wait for the app to be closed.
+// Shown once a new version has downloaded, so it doesn't wait for the app to be
+// closed; and while a new major version waits to be chosen (it never installs by itself).
 function UpdateReady() {
   const bridge = app;
   const [status, setStatus] = useState(null);
@@ -176,6 +177,12 @@ function UpdateReady() {
     bridge.getUpdateStatus().then(setStatus);
     return bridge.onUpdateStatus(setStatus);
   }, [bridge]);
+  if (status?.state === 'available') return (
+    <div className="update-box">
+      <div className="grow"><div className="update-box-title">New version</div><div className="nav-sub">{status.message.replace(' is available', '')} is out. Your version keeps working until you choose.</div></div>
+      <button className="btn btn-sm btn-primary" onClick={() => bridge.downloadUpdate()}>Update</button>
+    </div>
+  );
   if (status?.state !== 'ready') return null;
   return (
     <div className="update-box">

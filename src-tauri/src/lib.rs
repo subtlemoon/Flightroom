@@ -171,6 +171,7 @@ pub fn run() {
             updater::update_status,
             updater::update_check,
             updater::update_install,
+            updater::update_download,
             migrate::migration_data,
             develop::develop_open,
             develop::develop_read,
