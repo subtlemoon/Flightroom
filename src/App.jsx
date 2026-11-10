@@ -84,10 +84,6 @@ export default function App() {
   return (
     <div className={`app${rail ? ' rail' : layout.nav ? '' : ' nav-hidden'}`}>
       <nav className="sidebar" aria-hidden={!rail && !layout.nav}>
-        <div className="logo">
-          <div className="logo-mark"><Icon name="lens" size={18} /></div>
-          <div><div className="logo-name">Flightroom</div><div className="logo-sub">Cull · develop · plan</div></div>
-        </div>
         {navBtn('home', 'Home', 'home')}
         <div className="nav-label">Library</div>
         {navBtn('mygear', 'My Gear', 'bag', <span className="nav-count">{state.owned.length}</span>)}

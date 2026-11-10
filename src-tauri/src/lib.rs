@@ -40,6 +40,11 @@ fn main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         .inner_size(1400.0, 900.0)
         .min_inner_size(960.0, 640.0)
         .background_color(tauri::window::Color(38, 38, 38, 255))
+        // No Windows frame: Flightroom draws its own title bar and buttons
+        // (src/components/titlebar.jsx). The shadow keeps Windows 11's rounded
+        // corners and border; Tauri still lets the edges resize the window.
+        .decorations(false)
+        .shadow(true)
         .disable_drag_drop_handler()
         .additional_browser_args(BROWSER_ARGS)
         .build()?;
@@ -99,10 +104,11 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }))
-        // The window comes back as it was left: size, place, maximized or full screen.
+        // The window comes back as it was left: size, place, maximized or full screen
+        // (not DECORATIONS: older versions saved the Windows frame as on, which would bring it back).
         .plugin(
             tauri_plugin_window_state::Builder::default()
-                .with_state_flags(tauri_plugin_window_state::StateFlags::all() - tauri_plugin_window_state::StateFlags::VISIBLE)
+                .with_state_flags(tauri_plugin_window_state::StateFlags::all() - tauri_plugin_window_state::StateFlags::VISIBLE - tauri_plugin_window_state::StateFlags::DECORATIONS)
                 .with_denylist(&["updating"])
                 .build(),
         )
