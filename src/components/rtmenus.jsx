@@ -155,10 +155,10 @@ function ColorRangeDialog({ rx, d, close }) {
   const img = useRef(null);
   const [invert, setInvert] = useState(false);
   useEffect(() => {
-    const t = setTimeout(() => {
+    const t = setTimeout(async () => {
       if (d.range === 'sampled' && !d.colors.length) return;
       img.current ||= rx.picture(1024);
-      const pic = img.current;
+      const pic = await img.current;
       if (!pic) return;
       const v = colorRange(pic, d);
       if (invert) for (let i = 0; i < v.length; i++) v[i] = 255 - v[i];

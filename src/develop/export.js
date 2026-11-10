@@ -66,6 +66,8 @@ export async function exportPhoto(photo, info, s, opts) {
     const dn = info.denoised ? s.aiDenoise || 0 : 0;
     r.setSource(await fetchFrame(dev.imageUrl(photo, 2048, false, dn)));
     const geo = new Geometry(info.width, info.height, info.orientation, info.lens);
+    // What the adaptive sliders measure from the whole photo, before any tile.
+    await r.prepare(info, s);
     const f = geo.frame(s.crop);
     const { scale, w: EW, h: EH } = exportSize(f, opts.longEdge);
     const k = scale; // output px per oriented px
@@ -125,7 +127,7 @@ export async function exportPhoto(photo, info, s, opts) {
         for (const g of regions) frames.push(await fetchFrame(dev.regionUrl(photo, g, dn)));
         r.setOpHi(new Map(regions.map((g, i) => [g.id, { frame: frames[i], rect: [g.x / geo.sw, g.y / geo.sh, g.w / geo.sw, g.h / geo.sh] }])));
       }
-      let px = r.renderTile(info, s, geo, f, out2frame, tw, th);
+      let px = await r.renderTile(info, s, geo, f, out2frame, tw, th);
       if (P) px = inner(px, tw, P, itw, ith);
       const res = await dev.exportTile(job, itx, ity, itw, ith, px);
       if (res?.error) throw new Error(res.error);

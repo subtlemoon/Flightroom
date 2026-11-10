@@ -324,8 +324,9 @@ export function useRetouch(ctx) {
   };
 
   // --- selections ---
-  const picture = (edge = 2048) => {
-    const p = stage.current.picture?.(edge);
+  // The photo as it looks, read back from the graphics card (a promise).
+  const picture = async (edge = 2048) => {
+    const p = await stage.current.picture?.(edge);
     return p && { w: p.w, h: p.h, rgb: flipRgba(p.rgba, p.w, p.h) };
   };
   const selPx = (sel, edge = 2048) => {
@@ -347,8 +348,8 @@ export function useRetouch(ctx) {
     }
     setSelection({ ...selection, shapes: [...selection.shapes, ...shapes] });
   };
-  const fromPicture = (fn, mode = 'new') => {
-    const img = picture();
+  const fromPicture = async (fn, mode = 'new') => {
+    const img = await picture();
     if (!img) return;
     combine(bitmapSelection(fn(img), img.w, img.h), mode);
   };
@@ -365,9 +366,9 @@ export function useRetouch(ctx) {
       return colorSelect(img, seeds, 22, true);
     }, mode),
     /** Grow / Similar: pixels like the selected ones, joined to them or anywhere. */
-    grow(contiguous) {
+    async grow(contiguous) {
       if (!selection) return;
-      const img = picture();
+      const img = await picture();
       if (!img) return;
       const { v } = selPx(selection, Math.max(img.w, img.h));
       const seeds = [];
@@ -399,11 +400,11 @@ export function useRetouch(ctx) {
     if (!t) return;
     acts.addOp(t.id, { id: newId(), t: 'fill', color: t.mask ? grey(color) : color, opacity, keepAlpha: t.keepAlpha, ...opBase() }, t.mask, label);
   };
-  const contentAware = () => {
+  const contentAware = async () => {
     if (!selection) { toast('Make a selection around what should go first'); return; }
     const b = selectionBounds(selection, ow, oh);
     if (!b) return;
-    const pic = stage.current.basePicture?.();
+    const pic = await stage.current.basePicture?.();
     const size = (Math.max((b[2] - b[0]) * ow, (b[3] - b[1]) * oh) / 2) / L;
     const off = pic ? findSpotSource({ t: 'heal', size, pts: [[(b[0] + b[2]) / 2, (b[1] + b[3]) / 2]] }, pic, pic.w, pic.h) : { dx: (b[2] - b[0]) * 1.3, dy: 0 };
     const id = paintTarget('patch')?.id;
@@ -516,8 +517,8 @@ export function useRetouch(ctx) {
   };
 
   // --- auto levels from the picture ---
-  const autoLevels = (perChannel, neutral, name) => {
-    const img = picture(512);
+  const autoLevels = async (perChannel, neutral, name) => {
+    const img = await picture(512);
     if (!img) return;
     const hist = [0, 1, 2, 3].map(() => new Uint32Array(256));
     for (let i = 0; i < img.w * img.h; i++) {
@@ -550,8 +551,8 @@ export function useRetouch(ctx) {
   const stampVisible = () => acts.insert(newLayer(acts.layers, nextName(acts.layers, 'Merged'), 'stamp'), 'Stamp Visible');
 
   /** Paint Bucket: fills pixels like the one clicked (within the selection, if any). */
-  const bucket = (fx, fy) => {
-    const img = picture();
+  const bucket = async (fx, fy) => {
+    const img = await picture();
     if (!img) return;
     const v = colorSelect(img, [[Math.floor(fx * img.w), Math.floor(fy * img.h)]], rt.bucket.tol, rt.bucket.contiguous);
     if (selection) { const s2 = selPx(selection, Math.max(img.w, img.h)); for (let i = 0; i < v.length; i++) v[i] = Math.min(v[i], s2.v[i]); }

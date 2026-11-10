@@ -6,6 +6,7 @@ import { EDITING_APPS } from '../data/software.js';
 import { START_PAGES } from './home.jsx';
 import { screenColorOn, screenProfile, setScreenColor } from '../develop/icc.js';
 import { graphicsMode, graphicsState, setGraphicsMode } from '../develop/graphics.js';
+import { enginePref, setEnginePref } from '../develop/gpu/engine.js';
 import { DEFAULT_RATING_KEYS, DEFAULT_ZOOM_KEY, RESERVED_KEYS, ZOOM_LEVELS, assignKey, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zoomLevel } from '../cull/keys.js';
 
 export function MyGearView({ store, onOpenGear, onBrowse, onCustom }) {
@@ -240,6 +241,8 @@ function GraphicsCard() {
   const [gpu, setGpu] = useState(null);
   const [copied, setCopied] = useState(false);
   const [mode, setMode] = useState(graphicsMode);
+  const [engine, setEngine] = useState(enginePref);
+  const [engineAtStart] = useState(enginePref);
   useEffect(() => { app.ai.gpu().then((g) => !g?.error && setGpu(g)); }, []);
   const resets = (() => { try { return JSON.parse(localStorage.getItem('flightroom-gpu-resets') || '[]'); } catch { return []; } })();
   if (!gpu) return null;
@@ -255,6 +258,12 @@ function GraphicsCard() {
       <h3 className="section-title">Graphics</h3>
       <p className="muted">{gpu.adapters.map((a) => `${a.name} (${a.own_mb >= 1024 ? `${Math.round(a.own_mb / 1024)} GB` : `${a.own_mb} MB`} of its own)`).join(', ') || 'Not known'}</p>
       {chip && <p className="muted small">Develop draws with the {chip} ({kind}).</p>}
+      <div className="update-row">
+        <p className="muted grow start-page-text">Photo engine</p>
+        <Dropdown value={engine} onChange={(v) => { setEnginePref(v); setEngine(v); }}
+          options={[{ value: 'auto', label: 'WebGPU (automatic)' }, { value: 'webgl2', label: 'WebGL2 (older)' }]} />
+      </div>
+      <p className="muted small">{g.engine.kind === 'webgpu' ? 'Develop draws with WebGPU.' : `Develop draws with WebGL2${g.engine.why ? ` (${g.engine.why})` : ''}.`}{engine !== engineAtStart ? ' The change takes effect when Flightroom starts again.' : ''} WebGL2 is the engine from before 3.0, for a computer where WebGPU misbehaves.</p>
       <div className="update-row">
         <p className="muted grow start-page-text">While dragging a slider</p>
         <Dropdown value={mode} onChange={(m) => { setGraphicsMode(m); setMode(m); }}
