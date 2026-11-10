@@ -93,6 +93,8 @@ export const bridge = inApp ? {
   ai: {
     status: () => invoke('ai_status'),
     prefer: (device) => call('ai_prefer', { device }),
+    // The computer's graphics adapters, and whether there's only graphics built into the processor.
+    gpu: () => call('gpu_info'),
     install: (feature) => call('ai_install', { feature }),
     onProgress: (fn) => onEvent('ai:progress', fn),
     // rgba: bottom-up RGBA of the upright, uncropped photo. Answers [{ name, data }] of w x h bytes.

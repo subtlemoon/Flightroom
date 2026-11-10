@@ -26,7 +26,7 @@ import {
 } from '../develop/params.js';
 import { asShotTempTint, inv3, neutralToXy, xyToTempTint } from '../develop/color.js';
 import { adobeRendering } from '../develop/adobe.js';
-import { Geometry, Renderer, ap, cameraTransform, constrainedCrop, fitScale, lookFor, mat, mm, outToFrame, parseFrame, sourceMap } from '../develop/renderer.js';
+import { Geometry, Renderer, gentleGraphics, ap, cameraTransform, constrainedCrop, fitScale, lookFor, mat, mm, outToFrame, parseFrame, sourceMap } from '../develop/renderer.js';
 import { ExportModal } from './export.jsx';
 import { activeToneMap } from '../develop/tonemap.js';
 import { useRetouch } from './retouch.jsx';
@@ -713,6 +713,22 @@ function sampleGrid(frame, edge = 320) {
   return { gw, gh, data: out };
 }
 
+// Graphics resets (Windows restarting the driver: the screen goes black for a
+// few seconds), with the frames just before, for the graphics report in Settings.
+const recentFrames = []; // [at, ms, w, h, masks], the last 30
+function noteFrame(ms, w, h, masks) {
+  recentFrames.push([Date.now(), Math.round(ms), w, h, masks]);
+  if (recentFrames.length > 30) recentFrames.shift();
+}
+export const RESET_LOG = 'flightroom-gpu-resets';
+function noteReset() {
+  try {
+    const log = JSON.parse(localStorage.getItem(RESET_LOG) || '[]');
+    log.push({ at: new Date().toISOString(), version: window.flightroomVersion, frames: recentFrames.slice(-10) });
+    localStorage.setItem(RESET_LOG, JSON.stringify(log.slice(-20)));
+  } catch {}
+}
+
 // One canvas and renderer for every photo while Develop is open. A new WebGL
 // context per photo would compile the shaders again and keep another
 // screen-sized drawing buffer until garbage collection. Freed on leaving Develop.
@@ -779,6 +795,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
     let giveUp = 0;
     const lost = (e) => {
       e.preventDefault();
+      noteReset();
       setReady(false);
       giveUp = setTimeout(() => setError('The graphics card stopped the photo renderer'), 8000);
     };
@@ -978,6 +995,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
     const finishFrame = () => {
       const finishedAt = performance.now();
       renderMs.current = finishedAt - lastRenderAt.current;
+      noteFrame(renderMs.current, W, H, s.masks?.length || 0);
       renderBusy.current = false;
       lastRenderDoneAt.current = finishedAt;
       pumpRenderRef.current();
@@ -1013,7 +1031,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
     const now = performance.now();
     // Pace only when a full-quality GPU frame takes over 25 ms. Fast GPUs
     // update at the input rate; slower ones get a 40 ms breather per frame.
-    const slow = renderMs.current > 25;
+    const slow = renderMs.current > 25 || gentleGraphics();
     const nextAt = Math.max(lastRenderAt.current + 100, lastRenderDoneAt.current + 40);
     const delay = settingsOnly && slow ? Math.max(0, nextAt - now) : 0;
     if (delay > 0) {

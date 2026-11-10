@@ -18,6 +18,16 @@ const GUIDE_EDGE = 320;
 // between triangles (Intel's integrated graphics) can't stop one to put the
 // desktop on screen, so a 100+ ms pass makes the whole screen stall or flash.
 const BAND_PX = 1 << 17;
+// On graphics built into the processor (setGentle): smaller bands, each sent
+// to the card on its own (a flush), so Windows can put the desktop on screen
+// between any two of them. Sent as one batch, a whole frame could still keep
+// the chip busy long enough for Windows to reset the driver (the screen goes
+// black for a few seconds). Bit-identical, only scheduled differently.
+const GENTLE_BAND_PX = 1 << 15;
+let gentle = false;
+/** Set once at start from the computer's graphics (every renderer, the photo's, exports' and thumbnails', draws this way). */
+export const setGentleGraphics = (on) => { gentle = !!on; };
+export const gentleGraphics = () => gentle;
 // Mask textures left undrawn this long (ms) are freed (see updateMasks).
 const MASK_TEX_IDLE = 20000;
 // The base rendering under the sliders, per profile (params.js PROFILES).
@@ -435,12 +445,18 @@ export class Renderer {
   /** The bound pass over x, y, w, h, in bands of rows (BAND_PX); as is when it's small or already scissored. */
   drawBands(x, y, w, h) {
     const gl = this.gl;
-    if (w * h <= BAND_PX * 1.5 || gl.isEnabled(gl.SCISSOR_TEST)) { gl.drawArrays(gl.TRIANGLES, 0, 3); return; }
-    const rows = Math.max(1, Math.floor(BAND_PX / w));
+    const band = gentle ? GENTLE_BAND_PX : BAND_PX;
+    if (w * h <= band * 1.5 || gl.isEnabled(gl.SCISSOR_TEST)) {
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      if (gentle) gl.flush();
+      return;
+    }
+    const rows = Math.max(1, Math.floor(band / w));
     gl.enable(gl.SCISSOR_TEST);
     for (let r = 0; r < h; r += rows) {
       gl.scissor(x, y + r, w, Math.min(rows, h - r));
       gl.drawArrays(gl.TRIANGLES, 0, 3);
+      if (gentle) gl.flush();
     }
     gl.disable(gl.SCISSOR_TEST);
   }
