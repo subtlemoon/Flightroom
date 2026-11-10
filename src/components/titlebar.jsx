@@ -1,5 +1,5 @@
 // Flightroom's own title bar (the window has no Windows frame, lib.rs
-// decorations(false)): an empty strip to drag the window by (double-click
+// decorations(false)): the app's name and a strip to drag the window by (double-click
 // maximizes) and minimize / maximize / close at the right.
 import { useEffect, useState } from 'react';
 import { bridge as app } from '../bridge.js';
@@ -17,6 +17,7 @@ export function Titlebar() {
   if (!app) return null;
   return (
     <div className="titlebar" data-tauri-drag-region>
+      <div className="tb-name" data-tauri-drag-region>Flightroom</div>
       <div className="grow" data-tauri-drag-region />
       <button className="tb-btn" onClick={() => app.win.minimize()} aria-label="Minimize" title="Minimize">
         <svg {...glyph}><path d="M0 5.5h10" /></svg>
