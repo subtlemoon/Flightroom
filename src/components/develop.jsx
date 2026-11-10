@@ -510,7 +510,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
       if (k === 'r') { if (s) setCrop((c) => !c); return; }
       // X while cropping: the ratio between landscape and portrait, as in Lightroom.
       if (k === 'x' && crop && s && geo && ratingForKey(keys, e.key) === undefined) { cropTools(geo, s.crop, (c) => update({ crop: c })).flip(); return; }
-      // Masks: K brush, M linear, Shift+M radial, O overlay, H outlines and pins, [ ] brush size.
+      // Masks: K brush, M linear, Shift+M radial, O overlay, H outlines and pins, [ ] or the wheel brush size.
       const free = ratingForKey(keys, e.key) === undefined;
       if (s && free && !before) {
         if (k === 'k') { acts.create('brush'); return; }
@@ -624,7 +624,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
             <DevelopStage key={photo.id} photo={photo} meta={curMeta} info={info} s={shown} editS={s} cropMode={crop} cropOverlay={cropOverlay} clip={clip}
               onCrop={(c) => update({ crop: c })} apiRef={stageApi} nextPhoto={photos[index + way.current] || photos[index - way.current]} before={before} picker={picker}
               maskView={editing && !retouch ? mainMaskView : null} previewView={layout.nav && !retouch ? maskView(selMask, overlay) || 'none' : null}
-              maskTool={editing && selPart && !picker && !retouch ? { part: selPart, brush, hidden: overlay.pinsHidden, onPart: (patch) => acts.changePart(selMask.id, selPart.id, patch) } : null}
+              maskTool={editing && selPart && !picker && !retouch ? { part: selPart, brush, hidden: overlay.pinsHidden, onPart: (patch) => acts.changePart(selMask.id, selPart.id, patch), setBrush } : null}
               retouch={retouch && s ? { rx, toast: setToast } : null} />
           ) : (
             <div className="hero-empty dev-msg"><h2>{list?.loading ? 'Reading folder…' : filter !== 'all' && allPhotos.length ? 'No photos with those stars' : 'No photos in this folder'}</h2></div>
@@ -1343,8 +1343,20 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
       zoomTo(e.clientX - rect.left, e.clientY - rect.top, 1 / dpr);
     }
   };
+  const wheelSize = useRef(0);
   const onWheel = (e) => {
     if (cropMode || !ready || !frame) return;
+    // Painting a brush mask: the wheel sizes the brush (Ctrl + wheel still zooms).
+    if (maskTool?.part.type === 'brush' && maskTool.setBrush && !e.ctrlKey) {
+      wheelSize.current -= e.deltaY / 50; // a mouse notch is 2; trackpads add up small steps
+      const step = Math.trunc(wheelSize.current);
+      if (step) {
+        wheelSize.current -= step;
+        const size = Math.min(100, Math.max(1, maskTool.brush.size + step));
+        if (size !== maskTool.brush.size) maskTool.setBrush({ size });
+      }
+      return;
+    }
     const rect = canvasRef.current.getBoundingClientRect();
     const cur = view ? view.scale : fit / dpr;
     const next = Math.min(32, Math.max(fit / dpr, cur * Math.exp(-e.deltaY * 0.0015)));

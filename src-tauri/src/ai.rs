@@ -538,9 +538,77 @@ fn salient(ai: &Ai, rgb: &Img) -> Result<Img, String> {
     Ok(Img { w: 1024, h: 1024, c: 1, v: y.iter().map(|v| v.clamp(0.0, 1.0)).collect() })
 }
 
-/// Subject, at the picture's size: one BiRefNet pass, cleaned up.
+/// Subject, at the picture's size. One BiRefNet pass over the whole picture,
+/// then closer passes over the subject, because thin parts (the far bars of a
+/// kart's roll cage) are a pixel or two wide at 1024 and get missed: its
+/// square, and with a graphics card its four overlapping quarters as well.
+/// What the close passes add is kept only where it joins the subject the first
+/// pass found, so clutter that looks like an object up close stays out.
 fn subject(ai: &Ai, rgb: &Img) -> Result<Img, String> {
-    Ok(main_subject(salient(ai, rgb)?).resize(rgb.w, rgb.h))
+    let first = salient(ai, rgb)?.resize(rgb.w, rgb.h);
+    let core = main_subject(Img { w: first.w, h: first.h, c: 1, v: first.v.clone() });
+    let Some((x0, y0, x1, y1)) = bounds_of(&core, 0.5) else { return Ok(core) };
+    let (w, h) = (rgb.w, rgb.h);
+    let side = (((x1 - x0).max(y1 - y0) as f32 * 1.15) as usize).min(w.min(h));
+    // A subject that fills most of the frame gains nothing from a closer look.
+    if side < 64 || side as f32 > 0.75 * w.max(h) as f32 {
+        return Ok(core);
+    }
+    let (cx, cy) = ((x0 + x1) / 2, (y0 + y1) / 2);
+    let sx = cx.saturating_sub(side / 2).min(w - side);
+    let sy = cy.saturating_sub(side / 2).min(h - side);
+    let mut m = first.v;
+    let mut look = |x: usize, y: usize, s: usize, feather: bool| -> Result<(), String> {
+        let close = salient(ai, &rgb.crop_resize(x as f32, y as f32, s as f32, s as f32, 1024, 1024))?.resize(s, s);
+        let ramp = (s as f32 * 0.1).max(1.0);
+        for j in 0..s {
+            for i in 0..s {
+                // Quarters fade out at their cut edges, where things are cut in half.
+                let f = if feather { ((i.min(s - 1 - i).min(j).min(s - 1 - j)) as f32 / ramp).min(1.0) } else { 1.0 };
+                let k = (y + j) * w + x + i;
+                m[k] = m[k].max(close.v[j * s + i] * f);
+            }
+        }
+        Ok(())
+    };
+    look(sx, sy, side, false)?;
+    if ai.gpu_for("birefnet.onnx") {
+        let q = side * 3 / 5;
+        for (qx, qy) in [(sx, sy), (sx + side - q, sy), (sx, sy + side - q), (sx + side - q, sy + side - q)] {
+            look(qx, qy, q, true)?;
+        }
+    }
+    // Keep what touches the first pass's subject.
+    let on: Vec<bool> = m.iter().map(|&v| v >= 0.5).collect();
+    let (label, parts) = regions(&on, w, h);
+    let mut keep = vec![false; parts.len()];
+    for (k, &l) in label.iter().enumerate() {
+        if l > 0 && core.v[k] >= 0.5 {
+            keep[l as usize - 1] = true;
+        }
+    }
+    let kept: Vec<bool> = label.iter().map(|&l| l > 0 && keep[l as usize - 1]).collect();
+    let near = dilate(&kept, w, h, (w.max(h) / 340).max(3));
+    for (k, v) in m.iter_mut().enumerate() {
+        if !near[k] {
+            *v = core.v[k];
+        } else if on[k] && !kept[k] {
+            *v = v.min(0.49);
+        }
+    }
+    Ok(main_subject(Img { w, h, c: 1, v: m }))
+}
+
+/// The box (x0, y0, x1, y1) of the cells at or above `t`.
+fn bounds_of(m: &Img, t: f32) -> Option<(usize, usize, usize, usize)> {
+    let mut b: Option<(usize, usize, usize, usize)> = None;
+    for (k, &v) in m.v.iter().enumerate() {
+        if v >= t {
+            let (x, y) = (k % m.w, k / m.w);
+            b = Some(b.map_or((x, y, x, y), |(a, c, d, e)| (a.min(x), c.min(y), d.max(x), e.max(y))));
+        }
+    }
+    b
 }
 
 /// Connected regions of `on` cells (8-neighbours): a label per cell (0 = off) and each region's cells.
