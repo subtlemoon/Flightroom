@@ -81,10 +81,11 @@ export function useAiMasks({ photo, picture, acts, ensure, toast }) {
   const results = (task) => {
     const key = `${photo.id}|${task}`;
     if (!cache.has(key)) {
-      const pic = picture();
-      if (!pic) return Promise.reject(new Error('The photo isn\'t ready yet'));
       const t0 = performance.now();
-      const p = bridge.ai.masks(task, pic.w, pic.h, pic.rgba).then((r) => {
+      const p = Promise.resolve(picture()).then((pic) => {
+        if (!pic) throw new Error('The photo isn\'t ready yet');
+        return bridge.ai.masks(task, pic.w, pic.h, pic.rgba);
+      }).then((r) => {
         if (r?.error) throw new Error(r.error);
         return { r, secs: (performance.now() - t0) / 1000 };
       });

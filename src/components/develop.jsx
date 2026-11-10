@@ -28,6 +28,7 @@ import { asShotTempTint, inv3, neutralToXy, xyToTempTint } from '../develop/colo
 import { adobeRendering } from '../develop/adobe.js';
 import { Geometry, Renderer, ap, cameraTransform, constrainedCrop, fitScale, lookFor, mat, mm, outToFrame, parseFrame, sourceMap } from '../develop/renderer.js';
 import { lightGraphics } from '../develop/graphics.js';
+import { engineKind, watchResets } from '../develop/gpu/engine.js';
 import { ExportModal } from './export.jsx';
 import { activeToneMap } from '../develop/tonemap.js';
 import { useRetouch } from './retouch.jsx';
@@ -735,7 +736,7 @@ function noteReset() {
 // screen-sized drawing buffer until garbage collection. Freed on leaving Develop.
 let stage = null; // { canvas, renderer }
 function stageRenderer() {
-  if (!stage || stage.renderer.gl.isContextLost()) {
+  if (!stage || stage.renderer.lost()) {
     const canvas = document.createElement('canvas');
     canvas.style.width = canvas.style.height = '100%';
     stage = { canvas, renderer: new Renderer(canvas, { onScreen: true }) };
@@ -750,7 +751,7 @@ function restoreStage() {
 function dropStage() {
   if (!stage) return;
   stage.renderer.dispose();
-  stage.renderer.gl.getExtension('WEBGL_lose_context')?.loseContext();
+  stage.renderer.release();
   stage.canvas.remove();
   stage = null;
 }
@@ -790,28 +791,29 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
     hostRef.current.appendChild(st.canvas);
     canvasRef.current = st.canvas;
     rendererRef.current = st.renderer;
+    // WebGPU reads what the adaptive sliders measure back a frame later: drawn again then.
+    st.renderer.onStale = () => drawRef.current();
     // Windows resets a graphics driver that stops answering; the browser then
     // hands the context back, and the photo is put on the card again. Only if
     // that doesn't happen does the stage give up.
     let giveUp = 0;
-    const lost = (e) => {
-      e.preventDefault();
+    const lost = () => {
       noteReset();
       setReady(false);
       giveUp = setTimeout(() => setError('The graphics card stopped the photo renderer'), 8000);
     };
     const restored = () => {
       clearTimeout(giveUp);
-      try { rendererRef.current = restoreStage(); } catch (err) { setError(String(err.message || err)); return; }
+      // WebGPU gave up for good: a canvas can't change engines, so a new one.
+      if (engineKind() !== st.renderer.kind) { dropStage(); setGlTry((t) => t + 1); setGlGen((g) => g + 1); return; }
+      try { rendererRef.current = restoreStage(); rendererRef.current.onStale = () => drawRef.current(); } catch (err) { setError(String(err.message || err)); return; }
       setError('');
       setGlGen((g) => g + 1);
     };
-    st.canvas.addEventListener('webglcontextlost', lost);
-    st.canvas.addEventListener('webglcontextrestored', restored);
+    const unwatch = watchResets(st.canvas, lost, restored);
     return () => {
       clearTimeout(giveUp);
-      st.canvas.removeEventListener('webglcontextlost', lost);
-      st.canvas.removeEventListener('webglcontextrestored', restored);
+      unwatch();
       st.canvas.remove();
       rendererRef.current = null;
     };
@@ -949,7 +951,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
   const pumpRenderRef = useRef(() => {});
   const draw = (settingsOnly = false, light = false) => {
     const r = rendererRef.current;
-    if (!r || r.gl.isContextLost() || !ready || !s || !info || !frame || !W || !H) return;
+    if (!r || r.lost() || !ready || !s || !info || !frame || !W || !H) return;
     refineGen.current++;
     clearTimeout(refineTimer.current);
     const pending = pendingRender.current;
@@ -976,7 +978,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
   const issueRender = (settingsOnly = false, light = false) => {
     const r = rendererRef.current;
     const c = canvasRef.current;
-    if (!r || r.gl.isContextLost() || !ready || !s || !info || !frame || !W || !H) return;
+    if (!r || r.lost() || !ready || !s || !info || !frame || !W || !H) return;
     if (c.width !== W) c.width = W;
     if (c.height !== H) c.height = H;
     let live = liveRef.current;
@@ -1112,24 +1114,26 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
     liveRaf.current = requestAnimationFrame(() => drawRef.current());
   };
   // The photo upright and uncropped, developed but without layers, small: what spot heals search.
-  const basePicture = () => {
+  // (Pictures read back from the graphics card come as promises: WebGPU has no waiting read.)
+  const basePicture = async () => {
     const r = rendererRef.current;
     if (!r || !ready || !s || !info) return null;
     const k = 1024 / Math.max(geo.ow, geo.oh);
     const w = Math.round(geo.ow * k), h = Math.round(geo.oh * k);
-    return { w, h, data: r.preview(info, { ...s, crop: null, layers: [] }, geo, geo.frame(null), w, h, null) };
+    const data = await r.previewReady(info, { ...s, crop: null, layers: [] }, geo, geo.frame(null), w, h, null);
+    return data && { w, h, data };
   };
-  const commitOp = (layerId, op, mask, label) => {
+  const commitOp = async (layerId, op, mask, label) => {
     let o = op;
     if (op.t === 'spot') {
-      const pic = basePicture();
+      const pic = await basePicture().catch(() => null);
       o = { ...op, t: 'heal', ...(pic ? findSpotSource(op, pic, pic.w, pic.h) : { dx: op.size * 3, dy: 0 }) };
     }
     setLive({ layerId, op: o, target: mask ? 'mask' : undefined }); // shown until the settings have it, so nothing flickers
     retouch.rx.acts.addOp(layerId, o, mask, label);
   };
-  // The colour under a point (css px) as shown, 0-1.
-  const pickColor = (cssX, cssY) => {
+  // The colour under a point (css px) as shown, 0-1 (a promise).
+  const pickColor = async (cssX, cssY) => {
     const r = rendererRef.current;
     if (!r) return null;
     drawNow();
@@ -1137,12 +1141,13 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
   };
   apiRef.current.basePicture = basePicture;
   // The photo upright and uncropped as it looks, layers and all (RGBA, bottom row first): what selections by colour read.
-  apiRef.current.picture = (edge = 2048) => {
+  apiRef.current.picture = async (edge = 2048) => {
     const r = rendererRef.current;
     if (!r || !ready || !s || !info) return null;
     const k = Math.min(1, edge / Math.max(geo.ow, geo.oh));
     const w = Math.max(8, Math.round(geo.ow * k)), h = Math.max(8, Math.round(geo.oh * k));
-    return { w, h, rgba: r.preview(info, { ...s, crop: null }, geo, geo.frame(null), w, h, null) };
+    const rgba = await r.previewReady(info, { ...s, crop: null }, geo, geo.frame(null), w, h, null);
+    return rgba && { w, h, rgba };
   };
   // Zoomed in: sharp copies of what visible clones and heals copy from.
   const layersNow = s?.layers;
@@ -1270,13 +1275,14 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
   // The photo upright and uncropped, without Transform or masks, at mask size:
   // what AI masks are worked out from (RGBA, bottom row first). The lens
   // correction stays as shown, since masks sit on the corrected photo.
-  apiRef.current.aiPicture = () => {
+  apiRef.current.aiPicture = async () => {
     const r = rendererRef.current;
     if (!r || !ready || !s || !info) return null;
     const k = MASK_EDGE / Math.max(geo.ow, geo.oh);
     const w = Math.round(geo.ow * k), h = Math.round(geo.oh * k);
     const flat = { ...s, crop: null, masks: [], layers: [], ...Object.fromEntries(TRANSFORM_KEYS.filter((key) => SLIDER[key]).map((key) => [key, SLIDER[key].def])) };
-    return { w, h, rgba: r.preview(info, flat, geo, geo.frame(null), w, h, null) };
+    const rgba = await r.previewReady(info, flat, geo, geo.frame(null), w, h, null);
+    return rgba && { w, h, rgba };
   };
   apiRef.current.average = () => {
     const g = grid.current;
@@ -1334,7 +1340,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
       if (!picker.shown) { picker.fn(colorAt(x, y)); return; }
       // The colour as it looks: drawn now, then read back from the canvas.
       drawNow();
-      picker.fn(rendererRef.current.readShown(Math.round(x * dpr), Math.round(H - y * dpr)));
+      Promise.resolve(rendererRef.current.readShown(Math.round(x * dpr), Math.round(H - y * dpr))).then((c) => c && picker.fn(c), () => {});
       return;
     }
     if (view) setView(null);

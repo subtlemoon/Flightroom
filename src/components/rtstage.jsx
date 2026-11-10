@@ -150,11 +150,11 @@ export function RetouchStage({ rx, geo, toOri, toCss, live, commit, pickColor, z
     if (xform) { xformDown(e, insideBox(X, Y) ? 'move' : 'rotate'); return; }
     // Color Range's dialog samples colours from the photo, whatever the tool.
     if (rx.dialog?.type === 'colorRange') {
-      const c = pickColor(X, Y);
-      if (c) rx.setDialog((d) => ({ ...d, range: 'sampled', colors: e.shiftKey || e.altKey ? [...d.colors, c.map((v) => v * 255)] : [c.map((v) => v * 255)] }));
+      const add = e.shiftKey || e.altKey;
+      pickColor(X, Y).then((c) => { if (c) rx.setDialog((d) => ({ ...d, range: 'sampled', colors: add ? [...d.colors, c.map((v) => v * 255)] : [c.map((v) => v * 255)] })); });
       return;
     }
-    if (tool === 'dropper') { const c = pickColor(X, Y); if (c) setRt(e.altKey ? { bg: c } : { fg: c }); return; }
+    if (tool === 'dropper') { const alt = e.altKey; pickColor(X, Y).then((c) => { if (c) setRt(alt ? { bg: c } : { fg: c }); }); return; }
     if (tool === 'zoom') { zoomAt(X, Y, e.altKey ? 0.5 : 2); return; }
     if (tool === 'bucket') { rx.bucket(fx, fy); return; }
     // Single Row / Column Marquee: the one-pixel line under the pointer, all the way across.

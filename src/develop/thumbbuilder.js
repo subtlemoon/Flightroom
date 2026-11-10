@@ -35,7 +35,7 @@ export function thumbBuilder({ busy }) {
       const geo = new Geometry(info.width, info.height, info.orientation, info.lens);
       const f = geo.frame(s.crop);
       const { w, h } = thumbSize(f);
-      const px = r.preview(info, s, geo, f, w, h, null);
+      const px = await r.previewReady(info, s, geo, f, w, h, null);
       await keepThumb(p, await pixelsToBlob(px, w, h));
     } catch (err) {
       console.warn(`[thumbs] ${p.name}: ${err.message || err}`);
