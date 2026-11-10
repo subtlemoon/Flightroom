@@ -135,6 +135,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             photos::cull_scan,
             photos::cull_meta,
+            photos::cull_trash,
             photos::cull_rate,
             photos::cull_list_dirs,
             photos::cull_save_thumb,

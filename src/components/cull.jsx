@@ -10,7 +10,8 @@ import { SUBJECT_GROUPS, bySubject, subjectCounts, subjectGroup, subjectName } f
 import { cachedFolder, setWithSubfolders, startAt, useFolder, usePosition, useStripPick, withSubfolders } from '../cull/folder.js';
 import { useDevelopedThumb } from '../develop/thumbs.js';
 import { useExported } from '../develop/exported.js';
-import { fileItems, openMenu, photoLabel, ratingMenu } from './menu.jsx';
+import { confirmAction, fileItems, openMenu, photoLabel, ratingMenu } from './menu.jsx';
+import { ORDERS, filesOf, inOrder, saveOrder, savedOrder } from '../cull/order.js';
 import { copyActions } from '../cull/copies.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zoomLevel } from '../cull/keys.js';
 
@@ -43,6 +44,7 @@ export function CullView({ store, onDevelop }) {
   const [currentId, setCurrentId] = useState(() => seen?.list.photos[state.cull?.positions?.[seen.list.folder] || 0]?.id ?? null);
   const [filter, setFilter] = useState(seen?.filter || 'all'); // see inFilter
   const [subjectView, setSubjectView] = useState('all'); // see bySubject
+  const [order, setOrder] = useState(savedOrder); // see ORDERS
   const [zoom, setZoom] = useState(null); // null | { cx, cy }
   const [toast, setToast] = useState('');
   const [subs, setSubs] = useState(withSubfolders);
@@ -81,8 +83,14 @@ export function CullView({ store, onDevelop }) {
     const shown = filter === 'all' ? allPhotos
       : filter === 'rejects' ? allPhotos.filter((p) => suggestions[p.id]?.stars === 1)
         : allPhotos.filter((p) => inFilter(filter, photoRating(p, meta[p.id])));
-    return bySubject(shown, subjectView, auto.measured);
-  }, [allPhotos, meta, filter, suggestions, subjectView, auto.measured]);
+    return bySubject(inOrder(shown, order, meta), subjectView, auto.measured);
+  }, [allPhotos, meta, filter, suggestions, subjectView, auto.measured, order]);
+  // By date: the camera's own time is read for every photo (a few hundred at a time), so the order settles.
+  const byDate = order === 'oldest' || order === 'newest';
+  useEffect(() => {
+    if (!byDate) return;
+    for (let i = 0; i < allPhotos.length; i += 200) requestMeta(allPhotos.slice(i, i + 200).map((p) => p.id));
+  }, [byDate, allPhotos]);
   // Sorted by subject: where each group starts in the filmstrip.
   const groupStarts = useMemo(() => {
     if (subjectView !== 'sort') return null;
@@ -265,6 +273,58 @@ export function CullView({ store, onDevelop }) {
 
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(''), 2200); return () => clearTimeout(t); }, [toast]);
 
+  // Delete: the photos' files go to the Recycle Bin, after asking. A virtual copy only loses its own sidecar.
+  const askDelete = (targets) => {
+    targets = targets.filter(Boolean);
+    if (!targets.length || autoRun) return;
+    const n = targets.length, files = filesOf(targets, allPhotos);
+    const onlyCopies = targets.every((p) => p.copy);
+    confirmAction({
+      title: n === 1 ? `Delete ${photoLabel(targets[0])}?` : `Delete ${n} photos?`, ok: 'Move to Recycle Bin',
+      text: onlyCopies ? 'The virtual copy and its own edits and stars go to the Recycle Bin. The photo itself stays.'
+        : `${n === 1 ? 'Its' : 'Their'} files (RAW, JPEG, and the edits and stars saved next to them) go to the Recycle Bin, where you can restore them.`,
+      onOk: async () => {
+        const res = await bridge.trash(files);
+        if (res?.error) { setToast(`Couldn't delete: ${res.error}`); return; }
+        // A photo's virtual copies go with it.
+        const raws = new Set(targets.filter((p) => !p.copy && p.raw).map((p) => p.raw));
+        const gone = new Set(allPhotos.filter((p) => targets.includes(p) || (p.copy && raws.has(p.raw))).map((p) => p.id));
+        setList((l) => (l?.photos ? { ...l, photos: l.photos.filter((p) => !gone.has(p.id)) } : l));
+        setPicked(new Set());
+        storeAnalysis(list.folder, (a) => {
+          const measured = { ...a.measured }, applied = { ...a.applied };
+          for (const id of gone) { delete measured[id]; delete applied[id]; }
+          return { ...a, measured, applied };
+        });
+        setToast(`${gone.size === 1 ? photoLabel(targets[0]) : `${gone.size} photos`} moved to the Recycle Bin`);
+      },
+    });
+  };
+  const pickedPhotos = () => (picked.size > 1 ? allPhotos.filter((p) => picked.has(p.id)) : null);
+
+  // Clear ratings: every star on the selected photos, or on all the photos shown.
+  const askClearRatings = () => {
+    const targets = (pickedPhotos() || photos).filter((p) => photoRating(p, meta[p.id]) > 0);
+    if (!targets.length) { setToast('No ratings to clear here'); return; }
+    confirmAction({
+      title: `Clear the ratings of ${targets.length} ${targets.length === 1 ? 'photo' : 'photos'}?`, ok: 'Clear ratings',
+      text: `${picked.size > 1 ? 'The selected photos' : filter === 'all' && subjectView === 'all' ? 'Every photo in this folder' : 'The photos shown'} go back to no stars. Edits are kept.`,
+      onOk: async () => {
+        const cleared = new Set();
+        for (let i = 0; i < targets.length; i += 8) {
+          await Promise.all(targets.slice(i, i + 8).map(async (p) => { if (!(await bridge.rate(p, 0))?.error) cleared.add(p.id); }));
+        }
+        setList((l) => (l?.photos ? { ...l, photos: l.photos.map((x) => (cleared.has(x.id) ? { ...x, rating: 0 } : x)) } : l));
+        storeAnalysis(list.folder, (a) => {
+          const applied = { ...a.applied };
+          for (const id of cleared) delete applied[id];
+          return { ...a, applied };
+        });
+        setToast(`Ratings cleared on ${cleared.size} photos${cleared.size < targets.length ? `, ${targets.length - cleared.size} could not be saved` : ''}`);
+      },
+    });
+  };
+
   // Virtual copies (Ctrl+' as in Lightroom).
   const copies = copyActions({ cull: bridge, setList, toast: setToast, show: (c) => setCurrentId(c.id) });
 
@@ -285,6 +345,7 @@ export function CullView({ store, onDevelop }) {
       '-',
       !many && { label: 'Create virtual copy', icon: 'copy', hint: "Ctrl+'", disabled: !p.raw, onClick: () => copies.make(p) },
       !many && p.copy && { label: 'Remove virtual copy…', icon: 'trash', danger: true, onClick: () => copies.askRemove(p) },
+      !(p.copy && !many) && { label: many ? `Delete ${many} photos…` : 'Delete photo…', icon: 'trash', danger: true, hint: 'Del', disabled: !!autoRun, onClick: () => askDelete(many ? pickedPhotos() : [p]) },
       '-',
       { label: many ? `Export ${many} photos…` : 'Export…', icon: 'export', hint: 'Ctrl+Shift+E', onClick: () => setExporting(true) },
       { label: 'Select all', hint: 'Ctrl+A', onClick: () => setPicked(new Set(photos.map((x) => x.id))) },
@@ -339,6 +400,7 @@ export function CullView({ store, onDevelop }) {
         }
         return;
       }
+      if (e.key === 'Delete' && photo && !e.repeat) { e.preventDefault(); askDelete(pickedPhotos() || [photo]); return; }
       if (e.key.toLowerCase() === 'd' && onDevelop && photo) { e.preventDefault(); onDevelop(); return; }
       const moves = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
       if (moves[e.key]) { e.preventDefault(); go(index + moves[e.key]); }
@@ -382,6 +444,12 @@ export function CullView({ store, onDevelop }) {
   const barMenu = (e) => openMenu(e, [
     { label: 'Auto-advance after rating', checked: advance, onClick: () => actions.setCullSettings({ cullAdvance: !advance }) },
     { label: 'Include subfolders', checked: subs, onClick: () => { setWithSubfolders(!subs); setSubs(!subs); open(folder, true); } },
+    '-',
+    { heading: 'Sort by' },
+    ...ORDERS.map(([k, label]) => ({ label, checked: order === k, onClick: () => { setOrder(k); saveOrder(k); } })),
+    '-',
+    { label: picked.size > 1 ? `Clear ratings of ${picked.size} selected…` : 'Clear ratings…', icon: 'x', disabled: !!autoRun, onClick: askClearRatings },
+    { label: picked.size > 1 ? `Delete ${picked.size} selected…` : 'Delete this photo…', icon: 'trash', danger: true, disabled: !photo || !!autoRun, onClick: () => askDelete(pickedPhotos() || [photo]) },
     '-',
     { label: 'Reload folder', icon: 'refresh', onClick: () => open(folder, true) },
     { label: 'Back to folders', icon: 'back', onClick: () => actions.setCullFolder(null) },

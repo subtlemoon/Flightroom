@@ -96,7 +96,9 @@ pub struct Photos {
     folders: Mutex<HashSet<PathBuf>>,
     info: Mutex<InfoCache>,
     io: Limiter,
-    /// Full-size previews decoded for auto-rating, two at a time (45 MB each at 45 MP).
+    /// Full-size previews decoded for auto-rating (45 MB each at 45 MP, about half
+    /// a second of one core): one per two cores, between 2 and 4 at a time. Two
+    /// at a time held every analysis to about 4 photos a second.
     decode: Limiter,
     /// One lock per file being written, so writes to one file run in order
     /// (see locked; a lock goes once no one holds or waits for it).
@@ -130,7 +132,7 @@ impl Photos {
             folders: Mutex::new(HashSet::new()),
             info: Mutex::new(InfoCache::new(INFO_CACHE_MAX)),
             io: Limiter::new(6),
-            decode: Limiter::new(2),
+            decode: Limiter::new((std::thread::available_parallelism().map_or(4, |n| n.get()) / 2).clamp(2, 4)),
             writes: Mutex::new(HashMap::new()),
             thumbs,
         }
@@ -422,6 +424,9 @@ pub struct Photo {
     /// A virtual copy's number.
     #[serde(skip_serializing_if = "Option::is_none")]
     copy: Option<u32>,
+    /// The file's size in bytes and when it was last written (ms since 1970), for sorting.
+    size: u64,
+    modified: u64,
 }
 
 #[derive(Serialize)]
@@ -497,6 +502,9 @@ pub async fn cull_scan(app: AppHandle, folder: String, subfolders: Option<bool>)
                 .map(|g| {
                     let text = g.sidecar.as_deref().and_then(sidecar);
                     let id = join(&g.file);
+                    let (size, modified) = fs::metadata(dir.join(&g.file)).map_or((0, 0), |md| {
+                        (md.len(), md.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64))
+                    });
                     let mut out = vec![Photo {
                         id: id.clone(),
                         name: g.file.clone(),
@@ -507,6 +515,8 @@ pub async fn cull_scan(app: AppHandle, folder: String, subfolders: Option<bool>)
                         rating: text.as_deref().and_then(lib::read_rating),
                         developed: text.as_deref().is_some_and(has_develop),
                         copy: None,
+                        size,
+                        modified,
                     }];
                     // Its virtual copies right after it (only RAW files are developed).
                     let Some(list) = g.raw.as_ref().and_then(|_| copies.get(&g.base.to_lowercase())) else { return out };
@@ -522,6 +532,8 @@ pub async fn cull_scan(app: AppHandle, folder: String, subfolders: Option<bool>)
                             rating: text.as_deref().and_then(lib::read_rating),
                             developed: text.as_deref().is_some_and(has_develop),
                             copy: Some(k),
+                            size,
+                            modified,
                         });
                     }
                     out
@@ -530,6 +542,78 @@ pub async fn cull_scan(app: AppHandle, folder: String, subfolders: Option<bool>)
             photos.extend(found.into_iter().flatten());
         }
         Ok(Scan { folder: root.to_string_lossy().to_string(), photos })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Moves files to the Recycle Bin, where they can be restored from.
+#[cfg(windows)]
+fn recycle(files: &[PathBuf]) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::UI::Shell::{SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FO_DELETE, SHFILEOPSTRUCTW};
+    // Every path ends in a zero, and the list in one more.
+    let mut from: Vec<u16> = Vec::new();
+    for f in files {
+        from.extend(f.as_os_str().encode_wide());
+        from.push(0);
+    }
+    from.push(0);
+    let mut op = SHFILEOPSTRUCTW {
+        wFunc: FO_DELETE,
+        pFrom: windows::core::PCWSTR(from.as_ptr()),
+        fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT).0 as u16,
+        ..Default::default()
+    };
+    let code = unsafe { SHFileOperationW(&mut op) };
+    if code != 0 || op.fAnyOperationsAborted.as_bool() {
+        return Err(format!("Windows couldn't move the files to the Recycle Bin (code {code})"));
+    }
+    Ok(())
+}
+
+/// Elsewhere (development): the desktop's trash folder.
+#[cfg(not(windows))]
+fn recycle(files: &[PathBuf]) -> Result<(), String> {
+    let home = std::env::var("HOME").map_err(|_| "no trash folder")?;
+    let trash = if cfg!(target_os = "macos") { Path::new(&home).join(".Trash") } else { Path::new(&home).join(".local/share/Trash/files") };
+    fs::create_dir_all(&trash).map_err(|e| e.to_string())?;
+    for f in files {
+        let name = f.file_name().ok_or("bad file name")?.to_string_lossy().to_string();
+        let mut to = trash.join(&name);
+        let mut n = 1;
+        while to.exists() {
+            n += 1;
+            to = trash.join(format!("{n} {name}"));
+        }
+        fs::rename(f, &to).or_else(|_| fs::copy(f, &to).and_then(|_| fs::remove_file(f))).map_err(|e| format!("{name}: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Deletes photos from Culling: their files (RAW, JPEG, sidecars) go to the
+/// Recycle Bin. Only files in folders opened in Culling; ones that aren't there
+/// (a photo without a sidecar yet) are skipped. Answers how many files went.
+#[tauri::command]
+pub async fn cull_trash(app: AppHandle, files: Vec<String>) -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let photos = app.state::<Photos>();
+        let mut list: Vec<PathBuf> = Vec::new();
+        for f in &files {
+            let p = photos.allowed(f).ok_or_else(|| format!("{f} isn't in a folder opened in Culling"))?;
+            if p.is_file() && !list.contains(&p) {
+                list.push(p);
+            }
+        }
+        if list.is_empty() {
+            return Ok(0);
+        }
+        recycle(&list)?;
+        let mut info = photos.info.lock().unwrap();
+        for p in &list {
+            info.remove(p);
+        }
+        Ok(list.len())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -748,6 +832,8 @@ pub async fn cull_virtual_copy(app: AppHandle, args: CopyArgs) -> Result<Photo, 
             rating: text.as_deref().and_then(lib::read_rating),
             developed: text.as_deref().is_some_and(has_develop),
             copy: Some(k),
+            size: fs::metadata(&file).map_or(0, |md| md.len()),
+            modified: fs::metadata(&file).ok().and_then(|md| md.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64),
         })
     })
     .await

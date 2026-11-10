@@ -55,6 +55,8 @@ export const bridge = inApp ? {
     // Virtual copies (src-tauri photos.rs): a new copy of a photo, answered as a photo; removing one deletes only its own sidecar.
     virtualCopy: (photo) => call('cull_virtual_copy', { args: { id: photo.id, sidecar: photo.sidecar } }),
     removeCopy: (photo) => call('cull_remove_copy', { sidecar: photo.sidecar }),
+    // Photos' files (RAW, JPEG, sidecars) to the Recycle Bin; answers how many went.
+    trash: (files) => call('cull_trash', { files }),
     // Thumbnails of photos as developed, kept on disk for each photo's sidecar as it is.
     developedUrl: (photo) => fileUrl('photo/developed', { p: photo.id, s: photo.sidecar }),
     saveDeveloped: (photo, bytes) => call('cull_save_developed', new Uint8Array(bytes), { headers: { 'x-id': encodeURIComponent(photo.id), 'x-sidecar': encodeURIComponent(photo.sidecar) } }),
