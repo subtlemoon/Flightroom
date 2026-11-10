@@ -7,6 +7,18 @@
 ; (%APPDATA%\GearCheck) is kept: Flightroom copies your gear, groups, settings
 ; and culling folders from it the first time it starts.
 
+; Updates leave the desktop alone. The app's updater runs this installer with
+; "/S" (and, since 2.18.1, "/UPDATE"). Tauri only skips the desktop and Start
+; menu shortcuts in update mode, so a silent install over an existing copy
+; switches update mode on here. Without this, every update put the desktop
+; shortcut back, even after you deleted it. A first install still makes one.
+!macro NSIS_HOOK_PREINSTALL
+  ${If} ${Silent}
+  ${AndIf} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
+    StrCpy $UpdateMode 1
+  ${EndIf}
+!macroend
+
 !macro NSIS_HOOK_POSTINSTALL
   ${If} ${FileExists} "$LOCALAPPDATA\Programs\gearcheck\Uninstall GearCheck.exe"
   ${AndIf} "$INSTDIR" != "$LOCALAPPDATA\Programs\gearcheck"

@@ -180,7 +180,9 @@ fn run_installer(app: &AppHandle, reopen: bool) -> bool {
     let Some((version, path)) = app.state::<Updater>().ready.lock().unwrap().take() else { return false };
     guard::mark_installing(app, &version);
     let mut cmd = std::process::Command::new(&path);
-    cmd.arg("/S");
+    // /UPDATE: install over the old copy without touching shortcuts, so a
+    // desktop shortcut you deleted stays deleted.
+    cmd.args(["/S", "/UPDATE"]);
     if reopen {
         cmd.arg("/R");
     }
