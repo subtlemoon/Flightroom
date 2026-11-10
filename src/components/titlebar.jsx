@@ -3,7 +3,6 @@
 // maximizes) and minimize / maximize / close at the right.
 import { useEffect, useState } from 'react';
 import { bridge as app } from '../bridge.js';
-import appIcon from '../assets/app-icon.png';
 
 const glyph = { width: 10, height: 10, viewBox: '0 0 10 10', fill: 'none', stroke: 'currentColor', strokeWidth: 1, shapeRendering: 'crispEdges', 'aria-hidden': true };
 
@@ -18,7 +17,7 @@ export function Titlebar() {
   if (!app) return null;
   return (
     <div className="titlebar" data-tauri-drag-region>
-      <div className="tb-name" data-tauri-drag-region><img src={appIcon} width="16" height="16" alt="" draggable="false" />Flightroom</div>
+      <div className="tb-name" data-tauri-drag-region>Flightroom</div>
       <div className="grow" data-tauri-drag-region />
       <button className="tb-btn" onClick={() => app.win.minimize()} aria-label="Minimize" title="Minimize">
         <svg {...glyph}><path d="M0 5.5h10" /></svg>
