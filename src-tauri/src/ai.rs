@@ -1200,16 +1200,22 @@ pub async fn ai_masks(app: AppHandle, request: tauri::ipc::Request<'_>) -> Resul
 }
 
 /// What graphics the computer has.
-mod gpu {
-    /// Whether there's a graphics card with its own memory (not only graphics
-    /// built into the processor, which share the computer's RAM). Built-in
-    /// graphics report about 128 MB of their own; cards have gigabytes.
+pub mod gpu {
+    /// A graphics adapter: its name and how much memory of its own it has (MB).
+    #[derive(serde::Serialize, Clone)]
+    pub struct Adapter {
+        pub name: String,
+        pub own_mb: u64,
+    }
+
+    /// The computer's graphics adapters (not Windows' software one), read once.
     #[cfg(windows)]
-    pub fn dedicated() -> bool {
-        static HAS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *HAS.get_or_init(|| {
+    pub fn adapters() -> &'static [Adapter] {
+        static LIST: std::sync::OnceLock<Vec<Adapter>> = std::sync::OnceLock::new();
+        LIST.get_or_init(|| {
             use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE};
-            let Ok(f) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else { return true };
+            let mut out = Vec::new();
+            let Ok(f) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else { return out };
             let mut i = 0;
             while let Ok(a) = unsafe { f.EnumAdapters1(i) } {
                 i += 1;
@@ -1217,20 +1223,45 @@ mod gpu {
                 if d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0 {
                     continue;
                 }
-                let name = String::from_utf16_lossy(&d.Description);
-                eprintln!("[ai] graphics: {} ({} MB own memory)", name.trim_end_matches('\0'), d.DedicatedVideoMemory >> 20);
-                if d.DedicatedVideoMemory >= 1 << 30 {
-                    return true;
-                }
+                let name = String::from_utf16_lossy(&d.Description).trim_end_matches('\0').to_string();
+                out.push(Adapter { name, own_mb: (d.DedicatedVideoMemory >> 20) as u64 });
             }
-            false
+            out
         })
     }
 
     #[cfg(not(windows))]
-    pub fn dedicated() -> bool {
-        false
+    pub fn adapters() -> &'static [Adapter] {
+        &[]
     }
+
+    /// Whether there's a graphics card with its own memory (not only graphics
+    /// built into the processor, which share the computer's RAM). Built-in
+    /// graphics report about 128 MB of their own; cards have gigabytes. When
+    /// the adapters can't be read, a card is assumed (the old behaviour).
+    pub fn dedicated() -> bool {
+        if !cfg!(windows) {
+            return false;
+        }
+        let list = adapters();
+        list.is_empty() || list.iter().any(|a| a.own_mb >= 1024)
+    }
+}
+
+#[derive(Serialize)]
+pub struct GpuInfo {
+    adapters: Vec<gpu::Adapter>,
+    /// Only graphics built into the processor: Develop then draws more gently.
+    integrated: bool,
+}
+
+/// The computer's graphics, for Develop (which draws more gently on built-in
+/// graphics) and the graphics report in Settings.
+#[tauri::command]
+pub async fn gpu_info() -> GpuInfo {
+    tauri::async_runtime::spawn_blocking(|| GpuInfo { adapters: gpu::adapters().to_vec(), integrated: cfg!(windows) && !gpu::dedicated() })
+        .await
+        .unwrap_or(GpuInfo { adapters: vec![], integrated: false })
 }
 
 pub fn models_dir(app: &AppHandle) -> PathBuf {

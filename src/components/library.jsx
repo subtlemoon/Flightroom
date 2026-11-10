@@ -232,6 +232,30 @@ function AiDeviceCard() {
   );
 }
 
+// What the computer's graphics are, and the graphics resets Develop has seen, to send when the screen goes black.
+function GraphicsCard() {
+  const [gpu, setGpu] = useState(null);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => { app.ai.gpu().then((g) => !g?.error && setGpu(g)); }, []);
+  const resets = (() => { try { return JSON.parse(localStorage.getItem('flightroom-gpu-resets') || '[]'); } catch { return []; } })();
+  if (!gpu) return null;
+  const copy = async () => {
+    const report = { version: window.flightroomVersion, gpu, resets };
+    try { await navigator.clipboard.writeText(JSON.stringify(report, null, 1)); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch {}
+  };
+  return (
+    <section className="card">
+      <h3 className="section-title">Graphics</h3>
+      <p className="muted">{gpu.adapters.map((a) => `${a.name} (${a.own_mb >= 1024 ? `${Math.round(a.own_mb / 1024)} GB` : `${a.own_mb} MB`} of its own)`).join(', ') || 'Not known'}</p>
+      {gpu.integrated && <p className="muted small">Built-in graphics only: Develop draws the photo in smaller steps and redraws less often while you drag, so the screen stays on.</p>}
+      <div className="update-row">
+        <p className="muted grow start-page-text">{resets.length ? `${resets.length} graphics ${resets.length === 1 ? 'reset' : 'resets'} seen in Develop, last ${new Date(resets[resets.length - 1].at).toLocaleString()}` : 'No graphics resets seen in Develop'}</p>
+        <button className="btn btn-sm" onClick={copy}>{copied ? 'Copied' : 'Copy report'}</button>
+      </div>
+    </section>
+  );
+}
+
 export function SettingsView({ store }) {
   const { state, actions } = store;
   const fileRef = useRef();
@@ -282,6 +306,7 @@ export function SettingsView({ store }) {
       <CullingCard store={store} />
       <ScreenColorCard />
       {app && <AiDeviceCard />}
+      {app && <GraphicsCard />}
       <section className="card">
         <h3 className="section-title">Editing apps you use</h3>
         <p className="muted">Presets check whether these apps can open each camera's photos and video.</p>

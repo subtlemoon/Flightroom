@@ -164,6 +164,7 @@ pub fn run() {
             ai::ai_status,
             ai::ai_install,
             ai::ai_prefer,
+            ai::gpu_info,
             ai::ai_masks,
             display::display_profile,
         ])
