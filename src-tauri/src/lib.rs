@@ -31,7 +31,10 @@ fn handle(app: &tauri::AppHandle, req: &tauri::http::Request<Vec<u8>>) -> photos
 /// same list each time). wry's defaults first, which setting any replaces;
 /// then the fast graphics card on laptops with two: WebView2 otherwise draws
 /// on the built-in Intel/AMD one even when a GeForce or Radeon is there.
-const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --force_high_performance_gpu --disable-domain-blocking-for-3d-apis";
+/// CalculateNativeWinOcclusion off: Chromium stops painting a window it thinks
+/// is covered, and on an Iris Xe laptop Flightroom's window stayed black until
+/// another window was switched to and back (no graphics reset was logged).
+const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --force_high_performance_gpu --disable-domain-blocking-for-3d-apis";
 
 fn main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
     #[cfg_attr(not(windows), allow(unused_variables))]
