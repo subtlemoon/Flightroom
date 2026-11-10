@@ -541,7 +541,10 @@ void main() {
   if (LC.z != 0.0 || LC.w != 0.0) {
     float yb = dot(lin, W709);
     lin *= exp2(vec3(LC.z * 0.45, -LC.w * 0.35, -LC.z * 0.45));
-    lin *= yb / max(dot(lin, W709), 1e-6);
+    // Brightness is put back, but never by dividing by less than CHROMA_FLOOR:
+    // in near-black noise it is about 0 (or below) before or after, and the
+    // ratio of the two blew single pixels up into teal speckles and rings.
+    lin *= max(yb, CHROMA_FLOOR) / max(dot(lin, W709), CHROMA_FLOOR);
   }
 
   float y0 = max(dot(lin, W709), 1e-5);
@@ -745,7 +748,7 @@ void main() {
   if (LF.y != 0.0 || LF.z != 0.0 || LF.w != 0.0) {
     float yt = dot(d, W709);
     d *= 1.0 + LF.yzw * 2.4;
-    d *= yt / max(dot(d, W709), 1e-5);
+    d *= max(yt, CHROMA_FLOOR) / max(dot(d, W709), CHROMA_FLOOR);
   }
   // Point Color: colours near each mask's sampled colour shift in hue,
   // saturation and luminance (range and softness set how near).

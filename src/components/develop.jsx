@@ -747,6 +747,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
   const [ready, setReady] = useState(false); // RAW on the graphics card
   const [error, setError] = useState('');
   const [glGen, setGlGen] = useState(0); // counts graphics resets survived
+  const [glTry, setGlTry] = useState(0); // "Try again" after the renderer gave up
   const [view, setView] = useState(null); // null = fit; { scale (oriented px -> css px), u, v }
   // A zoom is relative to the crop, so a new crop (or going in and out of
   // cropping) starts again from the whole cropped photo, as in Lightroom.
@@ -796,7 +797,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
       st.canvas.remove();
       rendererRef.current = null;
     };
-  }, []);
+  }, [glTry]);
 
   // How much AI Denoise to show; slider moves are let settle before the photo is fetched again.
   const dnWant = info?.denoised ? (s?.aiDenoise || 0) : 0;
@@ -1332,7 +1333,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
         {ready && <span className="pill-mini">{before ? 'Before' : 'RAW'} · {pct}%</span>}
         {clip && <span className="pill-mini clip">Clipping shown (J)</span>}
       </div>
-      {error && <div className="stage-error"><b>Can't show the RAW here.</b> {error}. You're seeing the camera's preview instead.</div>}
+      {error && <div className="stage-error"><b>Can't show the RAW here.</b> {error}. You're seeing the camera's preview instead. <button className="btn btn-sm" onClick={() => { setError(''); setReady(false); setGlTry((n) => n + 1); setGlGen((g) => g + 1); }}>Try again</button></div>}
       {retouch && !cropMode && ready && css2ori && (
         <RetouchStage rx={retouch.rx} geo={geo} toOri={(x, y) => ap(css2ori, x, y)} toCss={(x, y) => ap(ori2css, x, y)}
           live={setLive} commit={commitOp} pickColor={pickColor} zoomAt={zoomAt} toast={retouch.toast} onSpaceTap={() => apiRef.current.toggleZoom?.()} />

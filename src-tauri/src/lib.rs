@@ -31,7 +31,7 @@ fn handle(app: &tauri::AppHandle, req: &tauri::http::Request<Vec<u8>>) -> photos
 /// same list each time). wry's defaults first, which setting any replaces;
 /// then the fast graphics card on laptops with two: WebView2 otherwise draws
 /// on the built-in Intel/AMD one even when a GeForce or Radeon is there.
-const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --force_high_performance_gpu";
+const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --force_high_performance_gpu --disable-domain-blocking-for-3d-apis";
 
 fn main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
     #[cfg_attr(not(windows), allow(unused_variables))]
@@ -162,6 +162,7 @@ pub fn run() {
             develop::develop_denoise_cancel,
             ai::ai_status,
             ai::ai_install,
+            ai::ai_prefer,
             ai::ai_masks,
             display::display_profile,
         ])
