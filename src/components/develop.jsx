@@ -5,6 +5,7 @@ import { Slider } from './slider.jsx';
 import { CurveEditor } from './curve.jsx';
 import { BRUSH_DEFAULT, MASK_OPTIONS_DEFAULT, MaskAdjust, MaskOverlay, MaskPanel, OVERLAY_DEFAULT, maskActions, overlayMenu, maskView, useStored } from './masks.jsx';
 import { AiDenoise, useAiInstall, useAiMasks } from './ai.jsx';
+import { MoodPanel, useMoodGrade } from './mood.jsx';
 import { BUILT_IN, CopyDialog, PresetPanel } from './copy.jsx';
 import { fileItems, fromMenuBar, openMenu, photoLabel, ratingMenu } from './menu.jsx';
 import { copyActions } from '../cull/copies.js';
@@ -447,6 +448,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const acts = maskActions(s, update, sel, setSel, maskOptions);
   const [ensureAi, aiDialog] = useAiInstall();
   const aiMasks = useAiMasks({ photo, picture: () => stageApi.current.aiPicture?.(), acts, ensure: ensureAi, toast: setToast });
+  const mood = useMoodGrade({ photo, s, update, stage: stageApi, aiMasks, toast: setToast });
   const editing = selMask && !before && !crop;
   const picker = picking === 'wb' ? { tip: 'Click something white or grey to set the white balance (Esc to cancel)', fn: pick }
     : picking === 'point' && selMask ? { tip: 'Click a colour in the photo to change it with Point Color (Esc to cancel)', shown: true, fn: pickPoint } : null;
@@ -642,7 +644,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
               cropMode={crop} cropOverlay={cropOverlay} setCropOverlay={setCropOverlay} onCropClose={() => setCrop(false)}
               override={selMask && <MaskAdjust m={selMask} part={selPart} acts={acts} brush={brush} setBrush={setBrush} options={maskOptions} setOptions={setMaskOptions}
                 ai={aiMasks} sampling={picking === 'point'} onSample={() => setPicking((p) => (p === 'point' ? false : 'point'))} onDone={() => setSel(null)} />}
-              photo={photo} ensureAi={ensureAi} onDenoised={onDenoised} gradeHidden={gradeHidden}
+              photo={photo} ensureAi={ensureAi} onDenoised={onDenoised} gradeHidden={gradeHidden} mood={mood}
               onGradeHide={(k, on) => setGradeHidden((h) => { const n = new Set(h); if (on) n.add(k); else n.delete(k); return n; })}
               edited={isEdited(s, opened.asShot)} picking={picking === 'wb'} onPick={() => setPicking((p) => (p === 'wb' ? false : 'wb'))} onAutoWb={autoWb} onAutoTone={autoTone} />
           ) : (
@@ -1275,15 +1277,17 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
   // The photo upright and uncropped, without Transform or masks, at mask size:
   // what AI masks are worked out from (RGBA, bottom row first). The lens
   // correction stays as shown, since masks sit on the corrected photo.
-  apiRef.current.aiPicture = async () => {
+  // renderFlat(settings, edge) is the same for any settings (AI grade measures its tries with it).
+  apiRef.current.renderFlat = async (st, edge = MASK_EDGE) => {
     const r = rendererRef.current;
-    if (!r || !ready || !s || !info) return null;
-    const k = MASK_EDGE / Math.max(geo.ow, geo.oh);
+    if (!r || !ready || !st || !info) return null;
+    const k = edge / Math.max(geo.ow, geo.oh);
     const w = Math.round(geo.ow * k), h = Math.round(geo.oh * k);
-    const flat = { ...s, crop: null, masks: [], layers: [], ...Object.fromEntries(TRANSFORM_KEYS.filter((key) => SLIDER[key]).map((key) => [key, SLIDER[key].def])) };
+    const flat = { ...st, crop: null, masks: [], layers: [], ...Object.fromEntries(TRANSFORM_KEYS.filter((key) => SLIDER[key]).map((key) => [key, SLIDER[key].def])) };
     const rgba = await r.previewReady(info, flat, geo, geo.frame(null), w, h, null);
     return rgba && { w, h, rgba };
   };
+  apiRef.current.aiPicture = () => apiRef.current.renderFlat(s);
   apiRef.current.average = () => {
     const g = grid.current;
     if (!g) return null;
@@ -1572,7 +1576,7 @@ function profileNote(info, profile) {
   return 'A close match to the camera\'s own look';
 }
 
-function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onReset, onCopy, onPaste, edited, picking, onPick, onAutoWb, onAutoTone, cropMode, cropOverlay, setCropOverlay, onCropClose, override, photo, ensureAi, onDenoised, gradeHidden, onGradeHide }) {
+function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onReset, onCopy, onPaste, edited, picking, onPick, onAutoWb, onAutoTone, cropMode, cropOverlay, setCropOverlay, onCropClose, override, photo, ensureAi, onDenoised, gradeHidden, onGradeHide, mood }) {
   const [open, setOpen] = useState(() => {
     try { return JSON.parse(localStorage.getItem(PANELS_KEY)) || { basic: true }; } catch { return { basic: true }; }
   });
@@ -1685,6 +1689,16 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
         <button className="btn btn-sm" onClick={onReset} disabled={!edited} title="Back to how the camera shot it. Edits are saved next to each photo (.xmp), where Lightroom reads them; your RAW files are never changed.">Reset all</button>
       </div>
       {cropMode && <CropPanel s={s} geo={geo} update={update} overlay={cropOverlay} setOverlay={setCropOverlay} onClose={onCropClose} />}
+      {!override && (
+        <section className={`dev-section${open.mood !== false ? ' open' : ''}`}>
+          <div className="dev-section-head" role="button" tabIndex={0} onClick={() => setOpen((o) => keepOpen({ ...o, mood: o.mood === false }))}
+            onKeyDown={(e) => { if (e.key === 'Enter') setOpen((o) => keepOpen({ ...o, mood: o.mood === false })); }}>
+            <span className="grow">AI grade</span>
+            <span className="dev-caret">{open.mood !== false ? '▾' : '▸'}</span>
+          </div>
+          {open.mood !== false && <div className="dev-section-body"><MoodPanel mood={mood} /></div>}
+        </section>
+      )}
       {override || SECTIONS.map((sec) => {
         const changed = sectionEdited(s, sec.id, asShot);
         return (
