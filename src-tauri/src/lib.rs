@@ -36,6 +36,19 @@ fn handle(app: &tauri::AppHandle, req: &tauri::http::Request<Vec<u8>>) -> photos
 /// another window was switched to and back (no graphics reset was logged).
 const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --force_high_performance_gpu --disable-domain-blocking-for-3d-apis";
 
+/// BROWSER_ARGS, plus --disable-direct-composition on Intel Iris Xe / UHD:
+/// a friend's whole screen went black while dragging sliders and stayed black
+/// until Alt+Tab, with no graphics reset. That is Windows putting the app's
+/// DirectComposition layer on a hardware overlay plane, which these drivers
+/// get wrong; a plain swap chain keeps the desktop compositor in charge.
+/// Read once, so every window gets the same list.
+fn browser_args() -> &'static str {
+    static ARGS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ARGS.get_or_init(|| {
+        if ai::gpu::weak_intel() { format!("{BROWSER_ARGS} --disable-direct-composition") } else { BROWSER_ARGS.to_string() }
+    })
+}
+
 fn main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
     #[cfg_attr(not(windows), allow(unused_variables))]
     let win = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
@@ -49,7 +62,7 @@ fn main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         .decorations(false)
         .shadow(true)
         .disable_drag_drop_handler()
-        .additional_browser_args(BROWSER_ARGS)
+        .additional_browser_args(browser_args())
         .build()?;
     #[cfg(windows)]
     {
@@ -93,7 +106,7 @@ fn updating_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         .skip_taskbar(true)
         .center()
         .background_color(tauri::window::Color(38, 38, 38, 255))
-        .additional_browser_args(BROWSER_ARGS)
+        .additional_browser_args(browser_args())
         .build()?;
     Ok(())
 }
