@@ -1038,6 +1038,11 @@ export class Renderer {
     if (!(k < 0.98) || !this.src) return false;
     if (!this.acc || this.acc.w !== W || this.acc.h !== H) { this.free(this.acc); this.acc = this.target(W, H); }
     const T = Math.max(64, Math.floor(Math.min(2048, this.maxTex) * k));
+    // Tiles draw at sensor size and are shrunk by k: the mask outline (a width
+    // in drawn pixels) is widened to match, or it thinned to nothing once the
+    // sharp tiles replaced the first frame.
+    const mv = opts.maskView;
+    if (mv) opts = { ...opts, maskView: { ...mv, line: (mv.line || 1.5) / k } };
     try {
       for (let ty = 0; ty < H; ty += T) {
         for (let tx = 0; tx < W; tx += T) {
