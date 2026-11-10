@@ -213,6 +213,25 @@ function ScreenColorCard() {
   );
 }
 
+// Where AI masks run. Automatic keeps them off graphics built into the processor, which they overload.
+function AiDeviceCard() {
+  const [st, setSt] = useState(null);
+  const load = () => app.ai.status().then(setSt, () => {});
+  useEffect(() => { load(); }, []);
+  if (!st?.prefer) return null;
+  return (
+    <section className="card">
+      <h3 className="section-title">AI masks</h3>
+      <div className="update-row">
+        <p className="muted grow start-page-text">Run on</p>
+        <Dropdown value={st.prefer} onChange={async (v) => { await app.ai.prefer(v); load(); }}
+          options={[{ value: 'auto', label: 'Automatic' }, { value: 'gpu', label: 'Graphics card' }, { value: 'cpu', label: 'Processor' }]} />
+      </div>
+      <p className="muted small">Now on the {st.device}. Automatic uses a separate graphics card when the computer has one, and the processor otherwise: graphics built into the processor are faster at it, but can flicker or crash while a mask is worked out.</p>
+    </section>
+  );
+}
+
 export function SettingsView({ store }) {
   const { state, actions } = store;
   const fileRef = useRef();
@@ -262,6 +281,7 @@ export function SettingsView({ store }) {
       </section>
       <CullingCard store={store} />
       <ScreenColorCard />
+      {app && <AiDeviceCard />}
       <section className="card">
         <h3 className="section-title">Editing apps you use</h3>
         <p className="muted">Presets check whether these apps can open each camera's photos and video.</p>

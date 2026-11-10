@@ -42,6 +42,8 @@ pub struct Ai {
     /// Models the graphics card couldn't run; they run on the processor.
     on_cpu: Mutex<std::collections::HashSet<String>>,
     device: Mutex<Option<String>>,
+    /// Where AI masks run: "auto", "gpu" or "cpu" (Settings; kept in the models folder).
+    prefer: Mutex<Option<String>>,
     installing: Mutex<()>,
     /// When AI masks last ran, and whether a watcher is waiting to free the models after.
     last_use: Mutex<Option<std::time::Instant>>,
@@ -60,6 +62,7 @@ impl Ai {
             sessions: Mutex::new(HashMap::new()),
             on_cpu: Mutex::default(),
             device: Mutex::new(None),
+            prefer: Mutex::new(None),
             installing: Mutex::new(()),
             last_use: Mutex::new(None),
             watching: std::sync::atomic::AtomicBool::new(false),
@@ -193,6 +196,41 @@ impl Ai {
         Ok(d)
     }
 
+    fn preference(&self) -> String {
+        let mut p = self.prefer.lock().unwrap();
+        p.get_or_insert_with(|| {
+            let v = std::fs::read_to_string(self.dir.join("device.txt")).unwrap_or_default();
+            match v.trim() {
+                "gpu" | "cpu" => v.trim().to_string(),
+                _ => "auto".to_string(),
+            }
+        })
+        .clone()
+    }
+
+    /// Whether a model runs on the graphics card. AI masks are one long, heavy job:
+    /// on a laptop with only built-in graphics (Intel Iris Xe and the like) that
+    /// job starves the screen of the same chip, which flickers and can make
+    /// Windows reset the driver, and its memory is the computer's own RAM. So
+    /// there they run on the processor, unless Settings says otherwise. AI Denoise
+    /// works in small tiles, which share the chip well, and would take many
+    /// minutes on a processor, so it stays on the graphics card.
+    fn gpu_for(&self, model: &str) -> bool {
+        if !cfg!(windows) || self.on_cpu.lock().unwrap().contains(model) {
+            return false;
+        }
+        match self.preference().as_str() {
+            "cpu" => false,
+            "gpu" => true,
+            _ => model == DN_MODEL || gpu::dedicated(),
+        }
+    }
+
+    /// Where AI masks run now, for the app to show.
+    fn mask_device(&self) -> &'static str {
+        if self.gpu_for("birefnet.onnx") { "graphics card" } else { "processor" }
+    }
+
     fn session(&self, model: &str) -> Result<Arc<Mutex<ort::session::Session>>, String> {
         self.engine()?;
         if let Some(s) = self.sessions.lock().unwrap().get(model) {
@@ -202,7 +240,7 @@ impl Ai {
         if !path.exists() {
             return Err(format!("{model} isn't downloaded"));
         }
-        let gpu = cfg!(windows) && !self.on_cpu.lock().unwrap().contains(model);
+        let gpu = self.gpu_for(model);
         let s = match open(&path, gpu) {
             Ok(s) => Ok(s),
             // Some graphics drivers reject a model DirectML would otherwise run.
@@ -212,8 +250,16 @@ impl Ai {
                 open(&path, false)
             }
             Err(e) => Err(e),
-        }
-        .map_err(|e| format!("Couldn't load {model}: {e}"))?;
+        };
+        let s = match s {
+            Ok(s) => s,
+            // Out of memory ("bad allocation"): the other models make room and it tries once more.
+            Err(e) => {
+                eprintln!("[ai] {model}: {e}; freeing the other models and trying again");
+                self.release();
+                open(&path, false).map_err(|_| format!("Couldn't load {model}: {e}. The computer is short of memory: close other apps and try again"))?
+            }
+        };
         let s = Arc::new(Mutex::new(s));
         self.sessions.lock().unwrap().insert(model.to_string(), s.clone());
         Ok(s)
@@ -223,7 +269,7 @@ impl Ai {
     /// moves to the processor for good (this run included).
     fn infer(&self, model: &str, shape: Vec<i64>, data: Vec<f32>) -> Result<(Vec<i64>, Vec<f32>), String> {
         let s = self.session(model)?;
-        if !cfg!(windows) || self.on_cpu.lock().unwrap().contains(model) {
+        if !self.gpu_for(model) {
             return run(&s, shape, data);
         }
         match run(&s, shape.clone(), data.clone()) {
@@ -245,12 +291,18 @@ impl Ai {
 
 fn open(path: &Path, gpu: bool) -> Result<ort::session::Session, ort::Error> {
     let mut b = ort::session::Session::builder()?;
+    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
     if gpu {
-        // DirectML wants these.
+        // DirectML wants these. The fast graphics card, on laptops with two.
         b = b.with_memory_pattern(false)?.with_parallel_execution(false)?;
-        b = b.with_execution_providers([ort::ep::DirectML::default().build()])?;
+        b = b.with_execution_providers([ort::ep::DirectML::default().with_performance_preference(ort::ep::directml::PerformancePreference::HighPerformance).build()])?;
+        b = b.with_intra_threads(cores)?;
+    } else {
+        // Memory goes back after each run instead of being kept for the next,
+        // and one core is left so the window keeps up while a model runs.
+        b = b.with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])?;
+        b = b.with_intra_threads(cores.saturating_sub(1).max(2))?;
     }
-    b = b.with_intra_threads(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4))?;
     b.commit_from_file(path)
 }
 
@@ -1011,7 +1063,10 @@ pub struct Status {
     features: HashMap<String, bool>,
     /// Feature -> bytes still to download.
     sizes: HashMap<String, u64>,
+    /// Where AI masks run: "graphics card" or "processor".
     device: Option<String>,
+    /// Settings: "auto", "gpu" or "cpu".
+    prefer: String,
     /// Features with a model the graphics card rejected, so they run on the processor.
     on_cpu: Vec<String>,
     error: Option<String>,
@@ -1021,7 +1076,7 @@ pub struct Status {
 pub async fn ai_status(app: AppHandle) -> Status {
     tauri::async_runtime::spawn_blocking(move || {
         let ai = app.state::<Ai>();
-        let mut st = Status { features: HashMap::new(), sizes: HashMap::new(), device: ai.device.lock().unwrap().clone(), on_cpu: Vec::new(), error: None };
+        let mut st = Status { features: HashMap::new(), sizes: HashMap::new(), device: Some(ai.mask_device().to_string()), prefer: ai.preference(), on_cpu: Vec::new(), error: None };
         let cpu = ai.on_cpu.lock().unwrap().clone();
         match ai.manifest() {
             Ok(m) => {
@@ -1041,7 +1096,23 @@ pub async fn ai_status(app: AppHandle) -> Status {
         st
     })
     .await
-    .unwrap_or(Status { features: HashMap::new(), sizes: HashMap::new(), device: None, on_cpu: Vec::new(), error: Some("AI status failed".into()) })
+    .unwrap_or(Status { features: HashMap::new(), sizes: HashMap::new(), device: None, prefer: "auto".into(), on_cpu: Vec::new(), error: Some("AI status failed".into()) })
+}
+
+/// Settings: where AI masks run ("auto", "gpu" or "cpu"). Models load again on their next use.
+#[tauri::command]
+pub async fn ai_prefer(app: AppHandle, device: String) -> Result<(), String> {
+    let device = match device.as_str() {
+        "gpu" | "cpu" => device,
+        _ => "auto".to_string(),
+    };
+    let ai = app.state::<Ai>();
+    let _ = std::fs::create_dir_all(&ai.dir);
+    std::fs::write(ai.dir.join("device.txt"), &device).map_err(|e| e.to_string())?;
+    *ai.prefer.lock().unwrap() = Some(device);
+    ai.on_cpu.lock().unwrap().clear();
+    ai.release();
+    Ok(())
 }
 
 #[derive(Serialize, Clone)]
@@ -1126,6 +1197,40 @@ pub async fn ai_masks(app: AppHandle, request: tauri::ipc::Request<'_>) -> Resul
         out.extend(m.to_u8());
     }
     Ok(tauri::ipc::Response::new(out))
+}
+
+/// What graphics the computer has.
+mod gpu {
+    /// Whether there's a graphics card with its own memory (not only graphics
+    /// built into the processor, which share the computer's RAM). Built-in
+    /// graphics report about 128 MB of their own; cards have gigabytes.
+    #[cfg(windows)]
+    pub fn dedicated() -> bool {
+        static HAS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *HAS.get_or_init(|| {
+            use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE};
+            let Ok(f) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else { return true };
+            let mut i = 0;
+            while let Ok(a) = unsafe { f.EnumAdapters1(i) } {
+                i += 1;
+                let Ok(d) = (unsafe { a.GetDesc1() }) else { continue };
+                if d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0 {
+                    continue;
+                }
+                let name = String::from_utf16_lossy(&d.Description);
+                eprintln!("[ai] graphics: {} ({} MB own memory)", name.trim_end_matches('\0'), d.DedicatedVideoMemory >> 20);
+                if d.DedicatedVideoMemory >= 1 << 30 {
+                    return true;
+                }
+            }
+            false
+        })
+    }
+
+    #[cfg(not(windows))]
+    pub fn dedicated() -> bool {
+        false
+    }
 }
 
 pub fn models_dir(app: &AppHandle) -> PathBuf {

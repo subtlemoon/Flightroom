@@ -98,7 +98,9 @@ export function useAiMasks({ photo, picture, acts, ensure, toast }) {
   // Opening a mask menu starts on the subject, which is the slow one, if it's downloaded.
   const warm = async () => {
     try {
-      if (photo && (await bridge.ai.status()).features?.subject) results(TASK.subject).catch(() => {});
+      // Only on a graphics card: on the processor it would tie the computer up for a mask nobody asked for yet.
+      const st = photo && await bridge.ai.status();
+      if (st?.features?.subject && st.device === 'graphics card') results(TASK.subject).catch(() => {});
     } catch { /* it runs on click instead */ }
   };
 
@@ -106,7 +108,7 @@ export function useAiMasks({ photo, picture, acts, ensure, toast }) {
   const slow = async (type, secs) => {
     const st = await bridge.ai.status().catch(() => ({}));
     const gpu = st.device === 'graphics card', fell = gpu && st.on_cpu?.includes(FEATURE[type]);
-    toast(`${aiName(type)} took ${Math.round(secs)} s on the ${gpu && !fell ? 'graphics card' : 'processor'}${fell ? ' (the graphics card couldn\'t run it)' : ''}`);
+    toast(`${aiName(type)} took ${Math.round(secs)} s on the ${gpu && !fell ? 'graphics card' : 'processor'}${fell ? ' (the graphics card couldn\'t run it)' : !gpu && st.prefer === 'auto' ? ' (this computer has built-in graphics only; Settings can change it)' : ''}`);
   };
 
   const make = (items, target, separate) => {

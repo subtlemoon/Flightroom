@@ -306,7 +306,8 @@ export class Renderer {
   constructor(canvas, { onScreen = false } = {}) {
     this.canvas = canvas;
     const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, premultipliedAlpha: false, preserveDrawingBuffer: onScreen, powerPreference: 'high-performance' });
-    if (!gl || gl.isContextLost()) throw new Error('WebGL2 is not available on this graphics card');
+    // No context usually means the graphics driver was just reset (it was overloaded), not that the card can't do it.
+    if (!gl || gl.isContextLost()) throw new Error('The graphics card was reset and isn\'t drawing photos right now');
     if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('This graphics card has no float rendering');
     gl.getExtension('OES_texture_float_linear');
     this.gl = gl;
