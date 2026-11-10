@@ -568,10 +568,6 @@ export class GPUDev {
     return this.frameWait;
   }
 
-  renderer() {
-    return '';
-  }
-
   dispose() {
     if (this.presentQueued) this.present();
     this.submit();

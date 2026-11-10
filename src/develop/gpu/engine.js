@@ -5,7 +5,6 @@
 // photo comes out the same either way.
 
 export const ENGINE_KEY = 'flightroom-engine';
-export const ENGINES = ['auto', 'webgl2'];
 
 export function enginePref() {
   try { return localStorage.getItem(ENGINE_KEY) === 'webgl2' ? 'webgl2' : 'auto'; } catch { return 'auto'; }

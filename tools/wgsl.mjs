@@ -68,7 +68,7 @@ function header(uniforms, textures, params) {
   return `#version 450\nlayout(set = 0, binding = 0, std140) uniform FrU {\n${members}\n  float frFlip;\n  float frH;\n};\n${tex}\n${near}`;
 }
 
-/** std140 offsets (bytes); the same as WGSL's for these types. */
+/** std140 offsets (bytes); the same as WGSL's for these types. Answers where the last one ends (frFlip and frH follow, packed). */
 function layout(uniforms) {
   let off = 0;
   for (const u of uniforms) {
@@ -78,7 +78,7 @@ function layout(uniforms) {
     u.offset = off;
     off += u.count ? 16 * u.count : size;
   }
-  return Math.ceil(off / 16) * 16;
+  return Math.ceil(off / 4) * 4;
 }
 
 const dir = mkdtempSync(join(tmpdir(), 'wgsl-'));
@@ -102,13 +102,13 @@ for (const [name, [vert, frag]] of Object.entries(PROGRAMS)) {
   const vertBody = custom ? convert(vert, 'vert', uniforms, textures) : null;
   const usesNearest = /frNearest/.test(fragBody);
   // Uniforms in a stable order: the block is shared by both stages.
-  const size = layout(uniforms);
-  const flip = size, h = size + 4;
+  const end = layout(uniforms);
+  const flip = end, h = end + 4;
   const head = header(uniforms, textures, usesNearest);
   const entry = {
     hash: sourceHash(name),
     frag: naga(name, head + fragBody, 'frag'),
-    size: Math.ceil((size + 8) / 16) * 16,
+    size: Math.ceil((end + 8) / 16) * 16,
     uniforms: Object.fromEntries([...uniforms.map((u) => [u.name, [u.offset, u.type, u.count]]), ['frFlip', [flip, 'float', 0]], ['frH', [h, 'float', 0]]]),
     textures: textures.map((t) => [t.name, t.binding, t.sampler, !!t.sampled]),
     nearest: usesNearest ? 2 * textures.length + 1 : 0,

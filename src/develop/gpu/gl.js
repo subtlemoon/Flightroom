@@ -48,11 +48,6 @@ export class GLDevice {
   width() { return this.gl.drawingBufferWidth; }
   height() { return this.gl.drawingBufferHeight; }
   lost() { return this.gl.isContextLost(); }
-  renderer() {
-    const gl = this.gl, ext = gl.getExtension('WEBGL_debug_renderer_info');
-    return String((ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)) || '');
-  }
-
   program(name) {
     if (this.progs[name]) return this.progs[name];
     const gl = this.gl, [vert, frag] = PROGRAMS[name];
