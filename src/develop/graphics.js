@@ -7,7 +7,7 @@
 // (Intel Arc, Radeon 760M/780M/880M/890M, Snapdragon Adreno X) and graphics
 // cards keep full quality all the time.
 
-import { setGentleGraphics } from './renderer.js';
+import { engineInfo, setGentleGraphics } from './gpu/engine.js';
 
 export const GRAPHICS_KEY = 'flightroom-graphics';
 export const GRAPHICS_MODES = ['auto', 'full', 'light'];
@@ -59,7 +59,7 @@ let light = false;
 
 /** Whether Develop is in the lighter mode (light frames while dragging, gentle drawing). */
 export const lightGraphics = () => light;
-export const graphicsState = () => ({ ...state, mode: graphicsMode(), light });
+export const graphicsState = () => ({ ...state, mode: graphicsMode(), light, engine: engineInfo() });
 
 /** Lighter mode on weak graphics; unknown chips go by whether the computer has only built-in graphics. */
 export function lightFor(mode, kind, integrated) {
@@ -75,7 +75,9 @@ function apply() {
 
 /** Once at start: integrated = the computer has no graphics card with its own memory (ai.rs gpu_info). */
 export function detectGraphics(integrated) {
-  const renderer = webglRenderer();
+  // WebGPU names the chip it draws with when it can; WebGL's name (ANGLE's) otherwise.
+  const a = engineInfo().adapter;
+  const renderer = a?.description || webglRenderer();
   state = { renderer, kind: classifyGpu(renderer), integrated: !!integrated };
   apply();
 }

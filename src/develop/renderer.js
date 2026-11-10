@@ -1,8 +1,9 @@
-// Draws a RAW photo with develop settings using WebGL2. The decoded photo lives
-// on the graphics card as half-float camera RGB; every redraw runs the whole
-// develop pipeline (shaders.js) for just the pixels on screen.
-import { VERT, GUIDE_DOWN, BLUR, FINAL, DISPLAY, COPY, RESAMPLE } from './shaders.js';
+// Draws a RAW photo with develop settings on the graphics card (WebGPU, or
+// WebGL2 where there's none: gpu/). The decoded photo lives there as
+// half-float camera RGB; every redraw runs the whole develop pipeline
+// (shaders.js) for just the pixels on screen.
 import { LUT_SIZE } from './icc.js';
+import { createDevice } from './gpu/index.js';
 import { colorTransform, inv3, mul3, neutralToXy, tempTintToXy } from './color.js';
 import { BASELINE_EXPOSURE, PP_TO_SRGB, SRGB_TO_PP, TONE_SIZE, adobeRendering, dcpTransform, hueSatFor, hueSatPixels, toneTable } from './adobe.js';
 import { CURVE_SIZE, HUE_SIZE, calibrationMatrix, curveTable, gradeTints, hueTable } from './luts.js';
@@ -13,21 +14,7 @@ import { renderLayers } from './retouch.js';
 import { ROTATION } from '../cull/rotation.js';
 
 const GUIDE_EDGE = 320;
-// Big draws go to the graphics card in bands of about this many pixels. A
-// whole-picture pass is one triangle, and cards that can only pause work
-// between triangles (Intel's integrated graphics) can't stop one to put the
-// desktop on screen, so a 100+ ms pass makes the whole screen stall or flash.
-const BAND_PX = 1 << 17;
-// On graphics built into the processor (setGentle): smaller bands, each sent
-// to the card on its own (a flush), so Windows can put the desktop on screen
-// between any two of them. Sent as one batch, a whole frame could still keep
-// the chip busy long enough for Windows to reset the driver (the screen goes
-// black for a few seconds). Bit-identical, only scheduled differently.
-const GENTLE_BAND_PX = 1 << 15;
-let gentle = false;
-/** Set once at start from the computer's graphics (every renderer, the photo's, exports' and thumbnails', draws this way). */
-export const setGentleGraphics = (on) => { gentle = !!on; };
-export const gentleGraphics = () => gentle;
+export { setGentleGraphics, gentleGraphics } from './gpu/engine.js';
 // Mask textures left undrawn this long (ms) are freed (see updateMasks).
 const MASK_TEX_IDLE = 20000;
 // The base rendering under the sliders, per profile (params.js PROFILES).
@@ -89,31 +76,6 @@ export function parseFrame(buf) {
   if (v.getUint32(0, true) !== 0x4d495246) throw new Error('bad image data'); // "FRIM"
   const w = v.getUint32(4, true), h = v.getUint32(8, true);
   return { w, h, data: new Uint16Array(buf, 16, w * h * 3) };
-}
-
-function compile(gl, type, src) {
-  const s = gl.createShader(type);
-  gl.shaderSource(s, src);
-  gl.compileShader(s);
-  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
-  return s;
-}
-
-function program(gl, frag) {
-  const p = gl.createProgram();
-  gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, VERT));
-  gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, frag));
-  gl.bindAttribLocation(p, 0, 'aPos');
-  gl.linkProgram(p);
-  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
-  for (const sh of gl.getAttachedShaders(p)) gl.deleteShader(sh); // freed with the program
-  const loc = {};
-  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
-  for (let i = 0; i < n; i++) {
-    const name = gl.getActiveUniform(p, i).name.replace(/\[0\]$/, '');
-    loc[name] = gl.getUniformLocation(p, name);
-  }
-  return { p, loc };
 }
 
 // 3x3 affine matrices, row-major [a b c; d e f; 0 0 1] as arrays of 9.
@@ -309,72 +271,42 @@ function changedRect(group, was) {
 export class Renderer {
   /**
    * `onScreen`: the canvas is shown on the page. Its picture is then kept
-   * between frames (preserveDrawingBuffer): with the default swap, some
-   * Windows graphics drivers flash an empty or older frame while the photo
-   * redraws every frame (dragging a slider or the curve).
+   * between frames: with the default swap, some Windows graphics drivers flash
+   * an empty or older frame while the photo redraws every frame (dragging a
+   * slider or the curve). `forceGl`: WebGL2 even where there is WebGPU.
+   *
+   * Reading pixels back (histogram, previews, the colour under the pointer,
+   * export tiles) gives a promise on WebGPU; on WebGL2 it's there at once
+   * unless asked for later. `await` covers both.
    */
-  constructor(canvas, { onScreen = false } = {}) {
+  constructor(canvas, { onScreen = false, forceGl = false } = {}) {
     this.canvas = canvas;
-    const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, premultipliedAlpha: false, preserveDrawingBuffer: onScreen, powerPreference: 'high-performance' });
-    // No context usually means the graphics driver was just reset (it was overloaded), not that the card can't do it.
-    if (!gl || gl.isContextLost()) throw new Error('The graphics card was reset and isn\'t drawing photos right now');
-    if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('This graphics card has no float rendering');
-    gl.getExtension('OES_texture_float_linear');
-    this.gl = gl;
-    this.maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
-    this.down = program(gl, GUIDE_DOWN);
-    this.blur = program(gl, BLUR);
-    this.final = program(gl, FINAL);
-    this.copy = program(gl, COPY);
-    this.resample = program(gl, RESAMPLE);
-    this.quad = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    const dev = (this.dev = createDevice(canvas, { onScreen, forceGl }));
+    this.kind = dev.kind;
+    this.maxTex = dev.maxTex;
     this.src = null; // { tex, w, h }
     this.hi = null;  // { tex, rect: [x, y, w, h] (photo 0-1), safe }
     this.guide = null;
     this.guideKey = '';
-    this.curveTex = this.texture(gl.RGBA16F, CURVE_SIZE, 1, gl.RGBA, gl.FLOAT, new Float32Array(CURVE_SIZE * 4));
-    this.hueTex = this.texture(gl.RGBA16F, HUE_SIZE, 1, gl.RGBA, gl.FLOAT, new Float32Array(HUE_SIZE * 4), gl.REPEAT);
-    this.blank = this.texture(gl.RGB16F, 1, 1, gl.RGB, gl.FLOAT, new Float32Array(3));
+    this.guideGen = 0;
+    this.curveTex = dev.texture('rgba16f', CURVE_SIZE, 1, new Float32Array(CURVE_SIZE * 4));
+    this.hueTex = dev.texture('rgba16f', HUE_SIZE, 1, new Float32Array(HUE_SIZE * 4), { wrap: 'repeat' });
+    this.blank = dev.texture('rgb16f', 1, 1, new Float32Array(3));
+    /** Called when something only known after a read-back arrived and the picture should be drawn again (WebGPU). */
+    this.onStale = null;
   }
 
-  texture(internal, w, h, format, type, data, wrap) {
-    const gl = this.gl;
-    const t = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, t);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, format, type, data);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap || gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    return t;
-  }
+  /** Whether the graphics card dropped this renderer (a driver reset). */
+  lost() { return this.dev.lost(); }
 
-  target(w, h, internal = this.gl.RGBA16F) {
-    const gl = this.gl;
-    const tex = this.texture(internal, w, h, gl.RGBA, internal === gl.RGBA8 ? gl.UNSIGNED_BYTE : gl.HALF_FLOAT, null);
-    const fb = gl.createFramebuffer();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-    return { tex, fb, w, h };
-  }
-
-  free(t) {
-    if (!t) return;
-    const gl = this.gl;
-    if (t.fb) gl.deleteFramebuffer(t.fb);
-    if (t.tex) gl.deleteTexture(t.tex);
-  }
+  target(w, h, fmt = 'rgba16f', opts) { return this.dev.target(w, h, fmt, opts); }
+  free(t) { this.dev.free(t); }
+  draw(name, target, uniforms) { this.dev.draw(name, target, uniforms); }
 
   /** The whole photo (frame from the desktop side). */
   setSource(frame) {
     this.free(this.src);
-    const gl = this.gl;
-    this.src = { tex: this.texture(gl.RGB16F, frame.w, frame.h, gl.RGB, gl.HALF_FLOAT, frame.data), w: frame.w, h: frame.h };
+    this.src = { tex: this.dev.texture('rgb16f', frame.w, frame.h, frame.data), w: frame.w, h: frame.h };
     this.guideKey = '';
     this.clearHi();
     this.setOpHi(null);
@@ -383,83 +315,37 @@ export class Renderer {
   /** A full-resolution part of the photo; rect in photo coordinates (0-1). */
   setHi(frame, rect, safe) {
     this.clearHi();
-    const gl = this.gl;
-    this.hi = { tex: this.texture(gl.RGB16F, frame.w, frame.h, gl.RGB, gl.HALF_FLOAT, frame.data), rect, safe: safe || rect };
+    this.hi = { tex: this.dev.texture('rgb16f', frame.w, frame.h, frame.data), rect, safe: safe || rect };
   }
 
   clearHi() {
-    if (this.hi) this.gl.deleteTexture(this.hi.tex);
+    if (this.hi) this.free(this.hi.tex);
     this.hi = null;
   }
 
   /** Sharper parts of the photo for clone and heal sources: Map op id -> { frame, rect }, or null. */
   setOpHi(map) {
-    const gl = this.gl;
-    for (const h of this.opHi?.values() || []) gl.deleteTexture(h.tex);
-    this.opHi = map && new Map([...map].map(([id, h]) => [id, { tex: this.texture(gl.RGB16F, h.frame.w, h.frame.h, gl.RGB, gl.HALF_FLOAT, h.frame.data), rect: h.rect, safe: h.rect }]));
+    for (const h of this.opHi?.values() || []) this.free(h.tex);
+    this.opHi = map && new Map([...map].map(([id, h]) => [id, { tex: this.dev.texture('rgb16f', h.frame.w, h.frame.h, h.frame.data), rect: h.rect, safe: h.rect }]));
   }
 
   /** Releases everything on the graphics card. */
   dispose() {
-    const gl = this.gl;
     this.disposed = true;
     this.free(this.src); this.clearHi(); this.free(this.histTarget); this.free(this.prevTarget); this.free(this.thumbTarget); this.free(this.lightTarget); this.setDisplay(null);
     for (const t of this.guide || []) this.free(t);
-    gl.deleteTexture(this.curveTex); gl.deleteTexture(this.hueTex); gl.deleteTexture(this.blank);
-    for (const t of [this.prof?.tone, this.prof?.hsm, this.prof?.laTex, this.prof?.lbTex]) if (t) gl.deleteTexture(t);
-    gl.deleteBuffer(this.quad);
-    for (const p of [this.down, this.blur, this.final, this.copy, this.resample]) gl.deleteProgram(p.p);
+    this.free(this.curveTex); this.free(this.hueTex); this.free(this.blank);
+    for (const t of [this.prof?.tone, this.prof?.hsm, this.prof?.laTex, this.prof?.lbTex]) if (t) this.free(t);
     this.free(this.acc);
-    for (const t of this.maskTex || []) if (t) gl.deleteTexture(t.tex);
+    for (const t of this.maskTex || []) if (t) this.free(t.tex);
     this.composer?.dispose();
     this.setOpHi(null);
-    if (this.maskCurveTex) gl.deleteTexture(this.maskCurveTex);
-    // An offscreen (export) context is done for good; a page canvas's owner
-    // decides (Develop keeps one canvas for every photo and drops it on leaving).
-    if (typeof OffscreenCanvas !== 'undefined' && this.canvas instanceof OffscreenCanvas) gl.getExtension('WEBGL_lose_context')?.loseContext();
+    if (this.maskCurveTex) this.free(this.maskCurveTex);
+    this.dev.dispose();
   }
 
-  draw(prog, target, uniforms) {
-    const gl = this.gl;
-    gl.useProgram(prog.p);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fb : null);
-    gl.viewport(0, 0, target ? target.w : gl.drawingBufferWidth, target ? target.h : gl.drawingBufferHeight);
-    let unit = 0;
-    for (const [k, v] of Object.entries(uniforms)) {
-      const l = prog.loc[k];
-      if (l == null) continue;
-      if (v instanceof WebGLTexture) {
-        gl.activeTexture(gl.TEXTURE0 + unit);
-        gl.bindTexture(gl.TEXTURE_2D, v);
-        gl.uniform1i(l, unit++);
-      } else if (typeof v === 'number') gl.uniform1f(l, v);
-      else if (v.length > 9) gl.uniform4fv(l, v); // vec4 arrays
-      else if (v.length === 2) gl.uniform2fv(l, v);
-      else if (v.length === 3) gl.uniform3fv(l, v);
-      else if (v.length === 4) gl.uniform4fv(l, v);
-      else if (v.length === 9) gl.uniformMatrix3fv(l, false, v);
-    }
-    this.drawBands(0, 0, target ? target.w : gl.drawingBufferWidth, target ? target.h : gl.drawingBufferHeight);
-  }
-
-  /** The bound pass over x, y, w, h, in bands of rows (BAND_PX); as is when it's small or already scissored. */
-  drawBands(x, y, w, h) {
-    const gl = this.gl;
-    const band = gentle ? GENTLE_BAND_PX : BAND_PX;
-    if (w * h <= band * 1.5 || gl.isEnabled(gl.SCISSOR_TEST)) {
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
-      if (gentle) gl.flush();
-      return;
-    }
-    const rows = Math.max(1, Math.floor(band / w));
-    gl.enable(gl.SCISSOR_TEST);
-    for (let r = 0; r < h; r += rows) {
-      gl.scissor(x, y + r, w, Math.min(rows, h - r));
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
-      if (gentle) gl.flush();
-    }
-    gl.disable(gl.SCISSOR_TEST);
-  }
+  /** Gives the canvas's graphics memory back now (Develop closing). */
+  release() { this.dev.release(); }
 
   colorUniforms(info, s) {
     const key = `${s.profile}|${s.wb}|${s.temp}|${s.tint}|${s.redHue}|${s.redSat}|${s.greenHue}|${s.greenSat}|${s.blueHue}|${s.blueSat}`;
@@ -474,20 +360,16 @@ export class Renderer {
 
   /** Lightroom's profile on the graphics card: its tables and tone curve (rebuilt when the profile or white changes). */
   profileUniforms(r, g) {
-    const gl = this.gl;
     const none = [0, 0, 0, 0];
     if (!r) return { uDcp: 0, uHsm: this.blank, uLookA: this.blank, uLookB: this.blank, uTone: this.blank, uHsmDims: none, uLookADims: none, uLookBDims: none };
     // Float tables, read exactly (texelFetch): no filtering.
-    const table = (old, w, h, data, format = gl.RGBA, internal = gl.RGBA32F) => {
-      if (old) gl.deleteTexture(old);
-      const t = this.texture(internal, w, h, format, gl.FLOAT, data);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-      return t;
+    const table = (old, w, h, data, fmt = 'rgba32f') => {
+      if (old) this.free(old);
+      return this.dev.texture(fmt, w, h, data, { filter: 'nearest' });
     };
     const p = (this.prof ||= {});
     if (p.dcp !== r.dcp) {
-      p.tone = table(p.tone, TONE_SIZE, 1, toneTable(r.dcp), gl.RED, gl.R32F);
+      p.tone = table(p.tone, TONE_SIZE, 1, toneTable(r.dcp), 'r32f');
       p.hsmG = null;
     }
     const mapTex = (old, map) => { const px = hueSatPixels(map); return table(old, px.w, px.h, px.data); };
@@ -519,51 +401,87 @@ export class Renderer {
       this.guide = [this.target(gw, gh), this.target(gw, gh), this.target(gw, gh)];
     }
     const [a, b, c] = this.guide;
-    this.draw(this.down, a, { uSrc: this.src.tex, uOutSize: [gw, gh], ...this.colorUniforms(info, s) });
+    this.draw('down', a, { uSrc: this.src.tex, uOutSize: [gw, gh], ...this.colorUniforms(info, s) });
     const sigma = Math.max(gw, gh) / 45;
-    this.draw(this.blur, b, { uTex: a.tex, uStep: [1 / gw, 0], uSigma: sigma });
-    this.draw(this.blur, c, { uTex: b.tex, uStep: [0, 1 / gh], uSigma: sigma });
+    this.draw('blur', b, { uTex: a.tex, uStep: [1 / gw, 0], uSigma: sigma });
+    this.draw('blur', c, { uTex: b.tex, uStep: [0, 1 / gh], uSigma: sigma });
     this.airY = null; // measured when Dehaze needs it (reading back stalls the graphics card)
     this.lumSorted = null;
+    this.lumWait = null;
+    this.guideGen++;
     this.guideKey = key;
   }
 
-  /** The guide's brightness (log2 scene light), sorted; read back once per guide (it stalls the graphics card). */
+  /**
+   * The guide's brightness (log2 scene light), sorted; read back once per
+   * guide (it stalls the graphics card). On WebGPU the first ask starts the
+   * read and gives null; onStale is called when it's there.
+   */
   guideLum() {
     if (this.lumSorted) return this.lumSorted;
-    const gl = this.gl;
     const a = this.guide[0];
-    const px = new Float32Array(a.w * a.h * 4);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, a.fb);
-    gl.readPixels(0, 0, a.w, a.h, gl.RGBA, gl.FLOAT, px);
-    const lum = new Float32Array(a.w * a.h);
-    for (let i = 0; i < lum.length; i++) lum[i] = px[i * 4];
-    return (this.lumSorted = lum.sort());
+    const sort = (px) => {
+      const lum = new Float32Array(a.w * a.h);
+      for (let i = 0; i < lum.length; i++) lum[i] = px[i * 4];
+      return lum.sort();
+    };
+    const px = this.lumWait || this.dev.read(a, 0, 0, a.w, a.h, 'f32');
+    if (!(px instanceof Promise)) return (this.lumSorted = sort(px));
+    if (!this.lumWait) {
+      const gen = this.guideGen;
+      this.lumWait = px;
+      px.then((got) => {
+        if (gen !== this.guideGen || !got || this.disposed) return;
+        this.lumSorted = sort(got);
+        this.lumWait = null;
+        this.onStale?.();
+      });
+    }
+    return null;
   }
 
   /** Airlight for dehaze: the brightness the haziest parts tend toward. */
   measureAir() {
     const lum = this.guideLum();
-    this.airY = Math.min(1, 2 ** lum[Math.floor(lum.length * 0.995)]);
+    if (lum) this.airY = Math.min(1, 2 ** lum[Math.floor(lum.length * 0.995)]);
+  }
+
+  /** What the adaptive sliders need from the photo itself (Dehaze's airlight, the middle brightness). */
+  measure(s) {
+    if ((s.dehaze || this.masks.some((m) => m.adj?.dehaze)) && this.airY == null) this.measureAir();
+    // The photo's middle brightness, for the adaptive sliders: read once per photo, when they're used.
+    if ((s.shadows > 0 || s.blacks > 0 || s.highlights < 0) && this.keySrc !== this.src) {
+      const lum = this.guideLum();
+      if (!lum) return;
+      this.keyL = lum[lum.length >> 1];
+      this.spanL = lum[Math.min(lum.length - 1, Math.floor(lum.length * 0.999))] - this.keyL;
+      this.keySrc = this.src;
+    }
+  }
+
+  /** Waits until a render of these settings has everything it measures (WebGPU reads back; WebGL2 has it at once). */
+  async prepare(info, s) {
+    if (!this.src) return;
+    this.updateGuide(info, s);
+    this.masks = (s.masks || []).filter((m) => !m.hidden).slice(0, MAX_MASKS);
+    this.measure(s);
+    if (this.lumWait) { await this.lumWait; this.measure(s); }
   }
 
   updateLuts(s, info) {
-    const gl = this.gl;
     // Only rebuilt when their own settings change (cheap to compare: the
     // curves are kept as the same arrays until edited). A look's curve (Adobe
     // Color's) comes first.
     const look = adobeRendering(info, s.profile)?.curve || null;
     const c = [s.curve, s.curveR, s.curveG, s.curveB, s.pShadows, s.pDarks, s.pLights, s.pHighlights, s.pSplitS, s.pSplitM, s.pSplitH, look];
     if (!this.curveKey || c.some((x, i) => x !== this.curveKey[i])) {
-      gl.bindTexture(gl.TEXTURE_2D, this.curveTex);
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, CURVE_SIZE, 1, gl.RGBA, gl.FLOAT, curveTable(s, look));
+      this.dev.upload(this.curveTex, 0, 0, CURVE_SIZE, 1, curveTable(s, look));
       this.curveKey = c;
     }
     const h = [];
     for (let i = 0; i < 8; i++) h.push(s[`hue${i}`], s[`sat${i}`], s[`lum${i}`], s[`gray${i}`]);
     if (!this.hueKey || h.some((x, i) => x !== this.hueKey[i])) {
-      gl.bindTexture(gl.TEXTURE_2D, this.hueTex);
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, HUE_SIZE, 1, gl.RGBA, gl.FLOAT, hueTable(s));
+      this.dev.upload(this.hueTex, 0, 0, HUE_SIZE, 1, hueTable(s));
       this.hueKey = h;
     }
   }
@@ -575,7 +493,6 @@ export class Renderer {
   updateMasks(s, geo) {
     const masks = (s.masks || []).filter((m) => !m.hidden).slice(0, MAX_MASKS);
     this.masks = masks;
-    const gl = this.gl;
     // Textures of masks not drawn for a while (another photo's, or removed
     // ones) are given back: each holds four full mask images on the graphics
     // card. Not at once, so Before / After and the small pictures made without
@@ -584,7 +501,7 @@ export class Renderer {
     (this.maskTex || []).forEach((t, i) => {
       if (!t) return;
       if (i < groups) t.used = now;
-      else if (now - t.used > MASK_TEX_IDLE) { gl.deleteTexture(t.tex); this.maskTex[i] = null; }
+      else if (now - t.used > MASK_TEX_IDLE) { this.free(t.tex); this.maskTex[i] = null; }
     });
     if (!masks.length) return;
     const rasters = masks.map((m) => maskRaster(m, geo.ow, geo.oh));
@@ -605,34 +522,28 @@ export class Renderer {
           const d = r.data;
           for (let j = 0; j < h; j++) for (let i = 0, s = (y + j) * W + x, o = j * w * 4 + c; i < w; i++, o += 4) px[o] = d[s + i];
         });
-        gl.bindTexture(gl.TEXTURE_2D, cur.tex);
-        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        this.dev.upload(cur.tex, x, y, w, h, px);
         continue;
       }
       const px = new Uint8Array(W * H * 4);
       group.forEach((r, c) => { const d = r.data; for (let i = 0; i < d.length; i++) px[i * 4 + c] = d[i]; });
       if (cur && cur.W === W && cur.H === H) {
-        gl.bindTexture(gl.TEXTURE_2D, cur.tex);
-        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        this.dev.upload(cur.tex, 0, 0, W, H, px);
         cur.rasters = group;
       } else {
-        if (cur) gl.deleteTexture(cur.tex);
-        this.maskTex[t] = { tex: this.texture(gl.RGBA8, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px), W, H, rasters: group, used: now };
+        if (cur) this.free(cur.tex);
+        this.maskTex[t] = { tex: this.dev.texture('rgba8', W, H, px), W, H, rasters: group, used: now };
       }
     }
   }
 
   /** Each mask's own curve (Curve section), one row per mask. */
   updateMaskCurves() {
-    const gl = this.gl;
     const key = this.masks.map((m) => (m.curve && !m.off?.curve ? m.curve : null));
     if (this.maskCurveKey && key.length === this.maskCurveKey.length && key.every((c, i) => c === this.maskCurveKey[i])) return;
     this.maskCurveKey = key;
-    this.maskCurveTex ||= this.texture(gl.RGBA16F, CURVE_SIZE, MAX_MASKS, gl.RGBA, gl.FLOAT, new Float32Array(CURVE_SIZE * MAX_MASKS * 4));
-    gl.bindTexture(gl.TEXTURE_2D, this.maskCurveTex);
-    key.forEach((c, i) => { if (c) gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, i, CURVE_SIZE, 1, gl.RGBA, gl.FLOAT, curveTable(c)); });
+    this.maskCurveTex ||= this.dev.texture('rgba16f', CURVE_SIZE, MAX_MASKS, new Float32Array(CURVE_SIZE * MAX_MASKS * 4));
+    key.forEach((c, i) => { if (c) this.dev.upload(this.maskCurveTex, 0, i, CURVE_SIZE, 1, curveTable(c)); });
   }
 
   maskUniforms(view, geo) {
@@ -696,14 +607,7 @@ export class Renderer {
     this.updateLuts(s, info);
     this.updateMasks(s, geo);
     if (this.masks.length) this.updateMaskCurves();
-    if ((s.dehaze || this.masks.some((m) => m.adj?.dehaze)) && this.airY == null) this.measureAir();
-    // The photo's middle brightness, for the adaptive sliders: read once per photo, when they're used.
-    if ((s.shadows > 0 || s.blacks > 0 || s.highlights < 0) && this.keySrc !== this.src) {
-      const lum = this.guideLum();
-      this.keyL = lum[lum.length >> 1];
-      this.spanL = lum[Math.min(lum.length - 1, Math.floor(lum.length * 0.999))] - this.keyL;
-      this.keySrc = this.src;
-    }
+    this.measure(s);
     const out2ori = mm(geo.frameToOriented(frame), out2frame);
     // Retouch layers on top (compose.js); `live` is a stroke still being painted.
     const layers = renderLayers(s.layers || [], live?.layerId);
@@ -712,7 +616,7 @@ export class Renderer {
     this.composer.render((t, extra) => (extra
       ? this.drawPhoto(info, s, geo, frame, out2frame, mm(mat(1, 0, extra.shift[0], 0, 1, extra.shift[1]), extra.out2ori || out2ori), t, false, null, extra.op && this.opHi?.get(extra.op.id))
       : this.drawPhoto(info, s, geo, frame, out2frame, out2ori, t, showClip, maskView, null)), layers, geo, out2ori, target, live,
-    [s, info, frame, this.src, this.hi, this.opHi, showClip, maskView && JSON.stringify(maskView), this.melissa]);
+    [s, info, frame, this.src, this.hi, this.opHi, showClip, maskView && JSON.stringify(maskView), this.melissa, this.keySrc === this.src, this.airY]);
   }
 
   /**
@@ -721,52 +625,24 @@ export class Renderer {
    * weak built-in graphics (develop/graphics.js). A full frame follows.
    */
   renderLight(info, s, geo, frame, view, opts, f = 0.5) {
-    const gl = this.gl, W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+    const W = this.dev.width(), H = this.dev.height();
     const w = Math.max(1, Math.round(W * f)), h = Math.max(1, Math.round(H * f));
     // Screen colour correction reads a float target; without it, an 8-bit one is blitted.
-    const internal = this.display ? gl.RGBA16F : gl.RGBA8;
+    const fmt = this.display ? 'rgba16f' : 'rgba8';
     const t = this.lightTarget;
-    if (!t || t.w !== w || t.h !== h || t.internal !== internal) {
+    if (!t || t.w !== w || t.h !== h || t.fmt !== fmt) {
       this.free(t);
-      this.lightTarget = this.target(w, h, internal);
-      this.lightTarget.internal = internal;
+      this.lightTarget = this.target(w, h, fmt);
     }
     this.render(info, s, geo, frame, outToFrame(w, h, frame, { ...view, scale: (view.scale * w) / W }), { ...opts, target: this.lightTarget });
     if (this.display) { this.present(this.lightTarget); return; }
-    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.lightTarget.fb);
-    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
-    gl.blitFramebuffer(0, 0, w, h, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.LINEAR);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.dev.blit(this.lightTarget, null, true);
   }
 
   /** Wait for the graphics card to finish the submitted full-quality frame. */
   waitFrame() {
-    const gl = this.gl;
     if (this.disposed) return Promise.resolve(false);
-    if (this.frameWait) return this.frameWait;
-    let sync;
-    try { sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0); } catch { return Promise.resolve(false); }
-    if (!sync) return new Promise((resolve) => setTimeout(() => resolve(false), 60));
-    gl.flush();
-    this.frameWait = new Promise((resolve) => {
-      const finish = (done) => {
-        try { gl.deleteSync(sync); } catch {}
-        this.frameWait = null;
-        resolve(done);
-      };
-      const t0 = performance.now();
-      const poll = () => {
-        if (this.disposed || gl.isContextLost()) { finish(false); return; }
-        let status;
-        try { status = gl.clientWaitSync(sync, 0, 0); } catch { finish(false); return; }
-        // Give up after 2 s so a fence that never signals can't stop all redraws.
-        if (status === gl.TIMEOUT_EXPIRED && performance.now() - t0 < 2000) { setTimeout(poll, 8); return; }
-        if (status === gl.TIMEOUT_EXPIRED) { finish(false); return; }
-        finish(status !== gl.WAIT_FAILED);
-      };
-      setTimeout(poll, 8);
-    });
-    return this.frameWait;
+    return this.dev.waitFrame();
   }
 
   /**
@@ -775,16 +651,15 @@ export class Renderer {
    * previews stay sRGB.
    */
   setDisplay(tr) {
-    const gl = this.gl;
-    if (this.display) { gl.deleteTexture(this.display.lut); gl.deleteProgram(this.display.prog.p); }
+    if (this.display) this.free(this.display.lut);
     this.free(this.screenTarget);
     this.screenTarget = null;
-    this.display = tr && !this.disposed ? { m: tr.m, lut: this.texture(gl.RGBA16F, LUT_SIZE, 1, gl.RGBA, gl.FLOAT, tr.lut), prog: program(gl, DISPLAY) } : null;
+    this.display = tr && !this.disposed ? { m: tr.m, lut: this.dev.texture('rgba16f', LUT_SIZE, 1, tr.lut) } : null;
   }
 
   /** A screen-sized render, then corrected onto the canvas. */
   renderScreen(info, s, geo, frame, out2frame, opts) {
-    const gl = this.gl, W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+    const W = this.dev.width(), H = this.dev.height();
     if (!this.screenTarget || this.screenTarget.w !== W || this.screenTarget.h !== H) {
       this.free(this.screenTarget);
       this.screenTarget = this.target(W, H);
@@ -794,8 +669,8 @@ export class Renderer {
   }
 
   present(t) {
-    const gl = this.gl, d = this.display;
-    this.draw(d.prog, null, { uTex: t.tex, uLut: d.lut, uDispM: d.m, uSize: [gl.drawingBufferWidth, gl.drawingBufferHeight], uLutN: LUT_SIZE });
+    const d = this.display;
+    this.draw('display', null, { uTex: t.tex, uLut: d.lut, uDispM: d.m, uSize: [this.dev.width(), this.dev.height()], uLutN: LUT_SIZE });
   }
 
   /** The developed photo; out2ori may be shifted (a clone's source), sharper may stand in for this.hi. */
@@ -812,7 +687,7 @@ export class Renderer {
     // The vignette follows the crop even when the frame shown is another (the whole photo, in crop mode).
     const crop = geo.frame(s.crop);
     const out2vig = mm(inv3(geo.frameToOriented(crop)), mm(geo.frameToOriented(frame), out2frame));
-    this.draw(this.final, target, {
+    this.draw('final', target, {
       uSrc: this.src.tex,
       uHi: hi ? hi.tex : this.blank,
       uHiRect: hi ? hi.rect : [0, 0, 0, 0],
@@ -885,50 +760,22 @@ export class Renderer {
     });
   }
 
-  /**
-   * A target's pixels (bottom row first), read without making the page wait for
-   * the graphics card to finish: resolves once it has (null if it went away).
-   */
-  readLater(t) {
-    const gl = this.gl, { w, h } = t;
-    const buf = gl.createBuffer();
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buf);
-    gl.bufferData(gl.PIXEL_PACK_BUFFER, w * h * 4, gl.STREAM_READ);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb);
-    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, 0);
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-    const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
-    gl.flush();
-    return new Promise((resolve) => {
-      const poll = () => {
-        if (gl.isContextLost()) { resolve(null); return; }
-        if (!this.disposed && gl.clientWaitSync(sync, 0, 0) === gl.TIMEOUT_EXPIRED) { setTimeout(poll, 4); return; }
-        let px = null;
-        if (!this.disposed) {
-          px = new Uint8Array(w * h * 4);
-          gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buf);
-          gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, px);
-          gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-        }
-        gl.deleteSync(sync);
-        gl.deleteBuffer(buf);
-        resolve(px);
-      };
-      poll();
-    });
-  }
+  /** A target's pixels (bottom row first), read without making the page wait for the graphics card: resolves once it has (null if it went away). */
+  readLater(t) { return Promise.resolve(this.dev.read(t, 0, 0, t.w, t.h, 'u8', true)); }
+
+  /** A whole target's pixels: at once on WebGL2 (unless later), a promise on WebGPU. */
+  readAll(t, later) { return this.dev.read(t, 0, 0, t.w, t.h, 'u8', later); }
 
   /**
    * Renders a small copy and counts its pixels per level, for the histogram.
-   * `later`: a promise, without waiting for the graphics card.
+   * `later`: a promise, without waiting for the graphics card (always on WebGPU).
    */
   histogram(info, s, geo, frame, later = false) {
-    const gl = this.gl;
     const k = 256 / Math.max(frame.hw, frame.hh) / 2;
     const w = Math.max(8, Math.round(frame.hw * 2 * k)), h = Math.max(8, Math.round(frame.hh * 2 * k));
     if (!this.histTarget || this.histTarget.w !== w || this.histTarget.h !== h) {
       this.free(this.histTarget);
-      this.histTarget = this.target(w, h, gl.RGBA8);
+      this.histTarget = this.target(w, h, 'rgba8');
     }
     const saveHi = this.hi;
     this.hi = null;
@@ -940,10 +787,8 @@ export class Renderer {
       return bins;
     };
     const read = () => {
-      if (later) return this.readLater(this.histTarget).then(count);
-      const px = new Uint8Array(w * h * 4);
-      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
-      return count(px);
+      const px = this.readAll(this.histTarget, later);
+      return px instanceof Promise ? px.then(count) : count(px);
     };
     // Counted in Melissa RGB (ProPhoto colours, sRGB tones), as Lightroom's histogram is.
     let out, pre;
@@ -961,15 +806,14 @@ export class Renderer {
       this.hi = saveHi;
     }
     const join = (a, b) => (a ? Object.assign(a, { pre: b }) : null);
-    return later ? Promise.all([out, pre]).then(([a, b]) => join(a, b)) : join(out, pre);
+    return out instanceof Promise || pre instanceof Promise ? Promise.all([out, pre]).then(([a, b]) => join(a, b)) : join(out, pre);
   }
 
   /** A small copy of the whole (cropped) photo, for the mask preview; pixels bottom row first. `later` as for histogram(). */
   preview(info, s, geo, frame, w, h, maskView, later = false, slot = 'prevTarget') {
-    const gl = this.gl;
     if (!this[slot] || this[slot].w !== w || this[slot].h !== h) {
       this.free(this[slot]);
-      this[slot] = this.target(w, h, gl.RGBA8);
+      this[slot] = this.target(w, h, 'rgba8');
     }
     const saveHi = this.hi;
     this.hi = null;
@@ -978,47 +822,31 @@ export class Renderer {
     } finally {
       this.hi = saveHi;
     }
-    if (later) return this.readLater(this[slot]);
-    const px = new Uint8Array(w * h * 4);
-    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
-    return px;
+    return this.readAll(this[slot], later);
   }
 
-  /** The colour on the canvas around (x, y) (canvas px, y up) as last drawn, 0-1. */
+  /** The same, once everything it measures is known (always a promise): for pictures worked on off the screen. */
+  async previewReady(info, s, geo, frame, w, h, maskView, slot) {
+    await this.prepare(info, s);
+    return this.preview(info, s, geo, frame, w, h, maskView, false, slot);
+  }
+
+  /** The colour on the canvas around (x, y) (canvas px, y up) as last drawn, 0-1 (a promise on WebGPU). */
   readShown(x, y) {
-    const gl = this.gl;
     // With screen correction, the photo's own colours from before it.
     const t = this.display && this.screenTarget;
-    if (t) {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb);
-      const px = new Float32Array(9 * 4);
-      gl.readPixels(Math.max(0, x - 1), Math.max(0, y - 1), 3, 3, gl.RGBA, gl.FLOAT, px);
+    const avg = (px, f) => {
+      if (!px) return null;
       const c = [0, 0, 0];
-      for (let i = 0; i < 9; i++) for (let k = 0; k < 3; k++) c[k] += Math.min(1, Math.max(0, px[i * 4 + k])) / 9;
+      for (let i = 0; i < 9; i++) for (let k = 0; k < 3; k++) c[k] += f(px[i * 4 + k]) / 9;
       return c;
-    }
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    const px = new Uint8Array(9 * 4);
-    gl.readPixels(Math.max(0, x - 1), Math.max(0, y - 1), 3, 3, gl.RGBA, gl.UNSIGNED_BYTE, px);
-    const c = [0, 0, 0];
-    for (let i = 0; i < 9; i++) for (let k = 0; k < 3; k++) c[k] += px[i * 4 + k] / 255 / 9;
-    return c;
-  }
-
-  /** Renders a w x h tile into an 8-bit buffer and returns its pixels (bottom row first). */
-  /** Like draw(), into just `rect` ([x, y, w, h], y up) of the target. */
-  drawRect(prog, target, rect, uniforms) {
-    const gl = this.gl;
-    gl.useProgram(prog.p);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fb : null);
-    gl.viewport(rect[0], rect[1], rect[2], rect[3]);
-    let unit = 0;
-    for (const [k, v] of Object.entries(uniforms)) {
-      const l = prog.loc[k];
-      if (l == null) continue;
-      if (v instanceof WebGLTexture) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, v); gl.uniform1i(l, unit++); } else if (typeof v === 'number') gl.uniform1f(l, v); else gl.uniform4fv(l, v);
-    }
-    this.drawBands(rect[0], rect[1], rect[2], rect[3]);
+    };
+    const W = t ? t.w : this.dev.width(), H = t ? t.h : this.dev.height();
+    if (W < 3 || H < 3) return null;
+    const x0 = Math.min(W - 3, Math.max(0, x - 1)), y0 = Math.min(H - 3, Math.max(0, y - 1));
+    const px = t ? this.dev.read(t, x0, y0, 3, 3, 'f32') : this.dev.read(null, x0, y0, 3, 3, 'u8');
+    const done = (p) => avg(p, t ? (v) => Math.min(1, Math.max(0, v)) : (v) => v / 255);
+    return px instanceof Promise ? px.then(done) : done(px);
   }
 
   /**
@@ -1032,7 +860,7 @@ export class Renderer {
    * Returns whether it was shown.
    */
   async refine({ info, s, geo, frame, out2frame, regionFor, fetchRegion, current, opts = {} }) {
-    const gl = this.gl, W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+    const W = this.dev.width(), H = this.dev.height();
     const o2o = mm(geo.frameToOriented(frame), out2frame);
     const k = 1 / Math.hypot(o2o[0], o2o[3]); // output px per sensor px
     if (!(k < 0.98) || !this.src) return false;
@@ -1055,12 +883,12 @@ export class Renderer {
           let hi = null;
           if (f) {
             const r = [rect.x / geo.sw, rect.y / geo.sh, rect.w / geo.sw, rect.h / geo.sh];
-            hi = { tex: this.texture(gl.RGB16F, f.w, f.h, gl.RGB, gl.HALF_FLOAT, f.data), rect: r, safe: r };
+            hi = { tex: this.dev.texture('rgb16f', f.w, f.h, f.data), rect: r, safe: r };
           }
           // The tile's own full-resolution pixels stand in for the view's
           // just while it renders (nothing else runs in between).
           const keep = this.hi;
-          const t = this.target(tw, th);
+          const t = this.target(tw, th, 'rgba16f', { mips: true });
           let done;
           // The tile's buffer is given back however this ends (a failed draw used to leave it on the card).
           try {
@@ -1069,12 +897,10 @@ export class Renderer {
               this.render(info, s, geo, frame, mm(out2frame, mat(ow / tw, 0, tx, 0, oh / th, ty)), { ...opts, target: t });
             } finally {
               this.hi = keep;
-              if (hi) gl.deleteTexture(hi.tex);
+              if (hi) this.free(hi.tex);
             }
-            gl.bindTexture(gl.TEXTURE_2D, t.tex);
-            gl.generateMipmap(gl.TEXTURE_2D);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-            this.drawRect(this.resample, this.acc, [tx, ty, ow, oh], { uTex: t.tex, uRect: [tx, ty, ow, oh], uScale: tw / ow });
+            this.dev.mipmaps(t);
+            this.dev.draw('resample', this.acc, { uTex: t.tex, uRect: [tx, ty, ow, oh], uScale: tw / ow }, [tx, ty, ow, oh]);
             done = await this.waitFrame();
           } finally {
             this.free(t);
@@ -1088,17 +914,17 @@ export class Renderer {
     }
     if (!current() || this.disposed) return false;
     if (this.display) this.present(this.acc);
-    else this.drawRect(this.copy, null, [0, 0, W, H], { uTex: this.acc.tex, uRect: [0, 0, W, H] });
+    else this.dev.draw('copy', null, { uTex: this.acc.tex, uRect: [0, 0, W, H] }, [0, 0, W, H]);
     if (!(await this.waitFrame())) return false;
     return true;
   }
 
+  /** Renders a w x h tile and returns its 8-bit pixels (bottom row first): a promise on WebGPU. */
   renderTile(info, s, geo, frame, out2frame, w, h) {
-    const gl = this.gl;
-    const t = this.target(w, h, gl.RGBA8);
+    const t = this.target(w, h, 'rgba8');
     this.render(info, s, geo, frame, out2frame, { target: t });
-    const px = new Uint8Array(w * h * 4);
-    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    const px = this.readAll(t, false);
+    if (px instanceof Promise) return px.finally(() => this.free(t));
     this.free(t);
     return px;
   }

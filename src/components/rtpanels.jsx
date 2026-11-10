@@ -336,7 +336,7 @@ function HistogramPanel({ rx }) {
   const drag = useRef(null);
   // Counted again a moment after each change (a small copy of the picture, so it's quick).
   useEffect(() => {
-    const t = setTimeout(() => { const p = rx.picture(384); if (p) setH(histogramOf(p.rgb, 3)); }, 250);
+    const t = setTimeout(() => { rx.picture(384).then((p) => { if (p) setH(histogramOf(p.rgb, 3)); }, () => {}); }, 250);
     return () => clearTimeout(t);
   }, [rx.s]); // eslint-disable-line react-hooks/exhaustive-deps
   const bins = h && (ch === 'colors' ? null : h[ch]);
