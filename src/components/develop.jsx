@@ -26,7 +26,8 @@ import {
 } from '../develop/params.js';
 import { asShotTempTint, inv3, neutralToXy, xyToTempTint } from '../develop/color.js';
 import { adobeRendering } from '../develop/adobe.js';
-import { Geometry, Renderer, gentleGraphics, ap, cameraTransform, constrainedCrop, fitScale, lookFor, mat, mm, outToFrame, parseFrame, sourceMap } from '../develop/renderer.js';
+import { Geometry, Renderer, ap, cameraTransform, constrainedCrop, fitScale, lookFor, mat, mm, outToFrame, parseFrame, sourceMap } from '../develop/renderer.js';
+import { lightGraphics } from '../develop/graphics.js';
 import { ExportModal } from './export.jsx';
 import { activeToneMap } from '../develop/tonemap.js';
 import { useRetouch } from './retouch.jsx';
@@ -946,13 +947,15 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
   const renderMs = useRef(0);
   const issueRenderRef = useRef(() => {});
   const pumpRenderRef = useRef(() => {});
-  const draw = (settingsOnly = false) => {
+  const draw = (settingsOnly = false, light = false) => {
     const r = rendererRef.current;
     if (!r || r.gl.isContextLost() || !ready || !s || !info || !frame || !W || !H) return;
     refineGen.current++;
     clearTimeout(refineTimer.current);
     const pending = pendingRender.current;
-    pendingRender.current = { settingsOnly: pending ? pending.settingsOnly && settingsOnly : settingsOnly };
+    pendingRender.current = pending
+      ? { settingsOnly: pending.settingsOnly && settingsOnly, light: pending.light && light }
+      : { settingsOnly, light };
     pumpRenderRef.current();
   };
 
@@ -970,7 +973,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
     issueRenderRef.current();
   };
 
-  const issueRender = (settingsOnly = false) => {
+  const issueRender = (settingsOnly = false, light = false) => {
     const r = rendererRef.current;
     const c = canvasRef.current;
     if (!r || r.gl.isContextLost() || !ready || !s || !info || !frame || !W || !H) return;
@@ -984,8 +987,10 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
     const o2f = outToFrame(W, H, frame, v);
     renderBusy.current = true;
     lastRenderAt.current = performance.now();
+    const lightFrame = light && !live;
     try {
-      r.render(info, s, geo, frame, o2f, opts);
+      if (lightFrame) r.renderLight(info, s, geo, frame, v, opts);
+      else r.render(info, s, geo, frame, o2f, opts);
     } catch {
       renderBusy.current = false;
       lastRenderDoneAt.current = performance.now();
@@ -994,14 +999,17 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
     }
     const finishFrame = () => {
       const finishedAt = performance.now();
-      renderMs.current = finishedAt - lastRenderAt.current;
-      noteFrame(renderMs.current, W, H, s.masks?.length || 0);
+      // Light frames don't count: the pacing is for what a full frame costs.
+      if (!lightFrame) {
+        renderMs.current = finishedAt - lastRenderAt.current;
+        noteFrame(renderMs.current, W, H, s.masks?.length || 0);
+      }
       renderBusy.current = false;
       lastRenderDoneAt.current = finishedAt;
       pumpRenderRef.current();
     };
     r.waitFrame().then(finishFrame, finishFrame);
-    if (!live && !cropMode && toSource) {
+    if (!live && !lightFrame && !cropMode && toSource) {
       refineTimer.current = setTimeout(() => {
         const refine = async () => {
           if (gen !== refineGen.current || rendererRef.current !== r) return;
@@ -1027,11 +1035,11 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
 
   const pumpRender = () => {
     if (renderBusy.current || !pendingRender.current) return;
-    const { settingsOnly } = pendingRender.current;
+    const { settingsOnly, light } = pendingRender.current;
     const now = performance.now();
     // Pace only when a full-quality GPU frame takes over 25 ms. Fast GPUs
     // update at the input rate; slower ones get a 40 ms breather per frame.
-    const slow = renderMs.current > 25 || gentleGraphics();
+    const slow = renderMs.current > 25 || lightGraphics();
     const nextAt = Math.max(lastRenderAt.current + 100, lastRenderDoneAt.current + 40);
     const delay = settingsOnly && slow ? Math.max(0, nextAt - now) : 0;
     if (delay > 0) {
@@ -1044,7 +1052,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
     clearTimeout(renderTimer.current);
     renderTimer.current = 0;
     pendingRender.current = null;
-    issueRenderRef.current(settingsOnly);
+    issueRenderRef.current(settingsOnly, light);
   };
   pumpRenderRef.current = pumpRender;
 
@@ -1064,19 +1072,32 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
 
   // Redraw at full quality, but never queue multiple GPU frames. Slider and
   // curve edits keep only the latest settings and pause briefly between frames.
+  // On weak built-in graphics (develop/graphics.js, Settings > Graphics) a
+  // setting that keeps changing draws at half size, then in full 200 ms after
+  // it stops, so the chip keeps up and Windows doesn't reset its driver.
   const raf = useRef(0);
   const drawn = useRef(null);
+  const lastChange = useRef(0);
+  const fullTimer = useRef(0);
   useEffect(() => {
     const key = [ready, s, info, frame, W, H, v.scale, v.u, v.v, clip, maskView && JSON.stringify(maskView)];
     const prev = drawn.current;
     if (prev && key.every((k, i) => k === prev[i])) return;
-    const settingsOnly = prev && key.every((k, i) => i === 1 || k === prev[i]);
+    const settingsOnly = !!prev && key.every((k, i) => i === 1 || k === prev[i]);
+    const now = performance.now();
+    const light = settingsOnly && lightGraphics() && now - lastChange.current < 150;
+    if (settingsOnly) lastChange.current = now;
     drawn.current = key;
     cancelAnimationFrame(raf.current);
-    raf.current = requestAnimationFrame(() => draw(!!settingsOnly));
+    clearTimeout(fullTimer.current);
+    raf.current = requestAnimationFrame(() => draw(settingsOnly, light));
+    if (light) fullTimer.current = setTimeout(() => drawRef.current(), 200);
   });
+  // Settings > Graphics changed: a full frame.
+  useEffect(() => { const on = () => drawRef.current(); window.addEventListener('graphics-mode', on); return () => window.removeEventListener('graphics-mode', on); }, []);
   useEffect(() => () => {
     cancelAnimationFrame(raf.current);
+    clearTimeout(fullTimer.current);
     clearTimeout(renderTimer.current);
     clearTimeout(refineTimer.current);
     pendingRender.current = null;

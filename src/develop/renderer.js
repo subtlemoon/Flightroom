@@ -403,7 +403,7 @@ export class Renderer {
   dispose() {
     const gl = this.gl;
     this.disposed = true;
-    this.free(this.src); this.clearHi(); this.free(this.histTarget); this.free(this.prevTarget); this.free(this.thumbTarget); this.setDisplay(null);
+    this.free(this.src); this.clearHi(); this.free(this.histTarget); this.free(this.prevTarget); this.free(this.thumbTarget); this.free(this.lightTarget); this.setDisplay(null);
     for (const t of this.guide || []) this.free(t);
     gl.deleteTexture(this.curveTex); gl.deleteTexture(this.hueTex); gl.deleteTexture(this.blank);
     for (const t of [this.prof?.tone, this.prof?.hsm, this.prof?.laTex, this.prof?.lbTex]) if (t) gl.deleteTexture(t);
@@ -713,6 +713,30 @@ export class Renderer {
       ? this.drawPhoto(info, s, geo, frame, out2frame, mm(mat(1, 0, extra.shift[0], 0, 1, extra.shift[1]), extra.out2ori || out2ori), t, false, null, extra.op && this.opHi?.get(extra.op.id))
       : this.drawPhoto(info, s, geo, frame, out2frame, out2ori, t, showClip, maskView, null)), layers, geo, out2ori, target, live,
     [s, info, frame, this.src, this.hi, this.opHi, showClip, maskView && JSON.stringify(maskView), this.melissa]);
+  }
+
+  /**
+   * The canvas at a fraction of its pixels, stretched up: about a quarter of
+   * the graphics work, for frames drawn while a setting is being dragged on
+   * weak built-in graphics (develop/graphics.js). A full frame follows.
+   */
+  renderLight(info, s, geo, frame, view, opts, f = 0.5) {
+    const gl = this.gl, W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+    const w = Math.max(1, Math.round(W * f)), h = Math.max(1, Math.round(H * f));
+    // Screen colour correction reads a float target; without it, an 8-bit one is blitted.
+    const internal = this.display ? gl.RGBA16F : gl.RGBA8;
+    const t = this.lightTarget;
+    if (!t || t.w !== w || t.h !== h || t.internal !== internal) {
+      this.free(t);
+      this.lightTarget = this.target(w, h, internal);
+      this.lightTarget.internal = internal;
+    }
+    this.render(info, s, geo, frame, outToFrame(w, h, frame, { ...view, scale: (view.scale * w) / W }), { ...opts, target: this.lightTarget });
+    if (this.display) { this.present(this.lightTarget); return; }
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.lightTarget.fb);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+    gl.blitFramebuffer(0, 0, w, h, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.LINEAR);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
   /** Wait for the graphics card to finish the submitted full-quality frame. */
