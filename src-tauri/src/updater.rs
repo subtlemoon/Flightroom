@@ -38,6 +38,15 @@ pub struct Updater {
     status: Mutex<Option<Status>>,
     ready: Mutex<Option<(String, PathBuf)>>,
     busy: Mutex<bool>,
+    /// A new major version (2 -> 3) only downloads once asked for ("Update" in the app).
+    major_ok: Mutex<bool>,
+}
+
+/// Whether going from `current` to `candidate` is a big jump (a new major
+/// version), which waits for the person to choose it: someone in the middle of
+/// work for a client shouldn't find a different app after a restart.
+pub fn major_jump(candidate: &str, current: &str) -> bool {
+    parse_version(candidate).0 > parse_version(current).0
 }
 
 fn now() -> u64 {
@@ -94,6 +103,10 @@ fn check_inner(app: &AppHandle) -> Result<(), String> {
             set_status(app, "ready", format!("Version {v} will install when you close Flightroom"));
             return Ok(());
         }
+    }
+    if major_jump(&latest.version, &current) && !*app.state::<Updater>().major_ok.lock().unwrap() {
+        set_status(app, "available", format!("Version {} is available", latest.version));
+        return Ok(());
     }
     if !latest.file.starts_with(INSTALLER_PREFIX) || latest.file.contains(['/', '\\']) {
         return Err("the release lists an unexpected file".into());
@@ -215,6 +228,13 @@ pub fn update_check(app: AppHandle) {
     check(&app);
 }
 
+/// "Update": downloads a new major version (it then installs like any other update).
+#[tauri::command]
+pub fn update_download(app: AppHandle) {
+    *app.state::<Updater>().major_ok.lock().unwrap() = true;
+    check(&app);
+}
+
 /// "Restart now": closes, installs silently, and opens the new version.
 #[tauri::command]
 pub fn update_install(app: AppHandle) {
@@ -301,4 +321,20 @@ pub mod guard {
 
     #[cfg(not(windows))]
     pub fn reopen_when_installed() {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_new_major_versions_wait_to_be_chosen() {
+        assert!(major_jump("3.0.0", "2.18.6"));
+        assert!(major_jump("3.1.0", "2.18.6"));
+        assert!(major_jump("3.9.4", "2.19.2"));
+        assert!(!major_jump("2.18.7", "2.18.6"));
+        assert!(!major_jump("2.19.0", "2.18.6"));
+        assert!(!major_jump("3.0.1", "3.0.0"));
+        assert!(newer("3.0.0", "2.18.6"));
+    }
 }
