@@ -1,6 +1,6 @@
 [package]
 name = "flightroom"
-version = "2.17.2"
+version = "2.18.0"
 description = "Flightroom: photo culling, RAW developing and camera gear planner"
 authors = ["Jaewon"]
 edition = "2021"
@@ -57,5 +57,5 @@ opt-level = 2
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.39"
 windows-core = "0.62"
-windows = { version = "0.62", features = ["Win32_Graphics_Dxgi"] }
+windows = { version = "0.62", features = ["Win32_Graphics_Dxgi", "Win32_UI_Shell"] }
 libloading = "0.8"
