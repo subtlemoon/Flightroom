@@ -1,6 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
+import { Titlebar } from './components/titlebar.jsx';
 import { adoptGearCheckData, bridge } from './bridge.js';
 import { detectGraphics } from './develop/graphics.js';
 import './styles.css';
@@ -11,5 +12,5 @@ const graphics = (bridge ? bridge.ai.gpu().then((g) => { window.flightroomGpu = 
   .then((integrated) => detectGraphics(integrated));
 
 Promise.all([adoptGearCheckData(), graphics]).finally(() => {
-  createRoot(document.getElementById('root')).render(<React.StrictMode><App /></React.StrictMode>);
+  createRoot(document.getElementById('root')).render(<React.StrictMode><Titlebar /><App /></React.StrictMode>);
 });

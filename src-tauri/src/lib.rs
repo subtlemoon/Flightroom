@@ -31,7 +31,23 @@ fn handle(app: &tauri::AppHandle, req: &tauri::http::Request<Vec<u8>>) -> photos
 /// same list each time). wry's defaults first, which setting any replaces;
 /// then the fast graphics card on laptops with two: WebView2 otherwise draws
 /// on the built-in Intel/AMD one even when a GeForce or Radeon is there.
-const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --force_high_performance_gpu --disable-domain-blocking-for-3d-apis";
+/// CalculateNativeWinOcclusion off: Chromium stops painting a window it thinks
+/// is covered, and on an Iris Xe laptop Flightroom's window stayed black until
+/// another window was switched to and back (no graphics reset was logged).
+const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --force_high_performance_gpu --disable-domain-blocking-for-3d-apis";
+
+/// BROWSER_ARGS, plus --disable-direct-composition on Intel Iris Xe / UHD:
+/// a friend's whole screen went black while dragging sliders and stayed black
+/// until Alt+Tab, with no graphics reset. That is Windows putting the app's
+/// DirectComposition layer on a hardware overlay plane, which these drivers
+/// get wrong; a plain swap chain keeps the desktop compositor in charge.
+/// Read once, so every window gets the same list.
+fn browser_args() -> &'static str {
+    static ARGS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ARGS.get_or_init(|| {
+        if ai::gpu::weak_intel() { format!("{BROWSER_ARGS} --disable-direct-composition") } else { BROWSER_ARGS.to_string() }
+    })
+}
 
 fn main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
     #[cfg_attr(not(windows), allow(unused_variables))]
@@ -40,8 +56,13 @@ fn main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         .inner_size(1400.0, 900.0)
         .min_inner_size(960.0, 640.0)
         .background_color(tauri::window::Color(38, 38, 38, 255))
+        // No Windows frame: Flightroom draws its own title bar and buttons
+        // (src/components/titlebar.jsx). The shadow keeps Windows 11's rounded
+        // corners and border; Tauri still lets the edges resize the window.
+        .decorations(false)
+        .shadow(true)
         .disable_drag_drop_handler()
-        .additional_browser_args(BROWSER_ARGS)
+        .additional_browser_args(browser_args())
         .build()?;
     #[cfg(windows)]
     {
@@ -85,7 +106,7 @@ fn updating_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         .skip_taskbar(true)
         .center()
         .background_color(tauri::window::Color(38, 38, 38, 255))
-        .additional_browser_args(BROWSER_ARGS)
+        .additional_browser_args(browser_args())
         .build()?;
     Ok(())
 }
@@ -99,10 +120,11 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }))
-        // The window comes back as it was left: size, place, maximized or full screen.
+        // The window comes back as it was left: size, place, maximized or full screen
+        // (not DECORATIONS: older versions saved the Windows frame as on, which would bring it back).
         .plugin(
             tauri_plugin_window_state::Builder::default()
-                .with_state_flags(tauri_plugin_window_state::StateFlags::all() - tauri_plugin_window_state::StateFlags::VISIBLE)
+                .with_state_flags(tauri_plugin_window_state::StateFlags::all() - tauri_plugin_window_state::StateFlags::VISIBLE - tauri_plugin_window_state::StateFlags::DECORATIONS)
                 .with_denylist(&["updating"])
                 .build(),
         )

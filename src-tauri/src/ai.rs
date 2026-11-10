@@ -1246,6 +1246,17 @@ pub mod gpu {
         let list = adapters();
         list.is_empty() || list.iter().any(|a| a.own_mb >= 1024)
     }
+
+    /// Only Intel's older built-in graphics (Iris Xe, UHD; not Arc), the kind
+    /// whose screen went black during slider drags (lib.rs browser_args).
+    pub fn weak_intel() -> bool {
+        cfg!(windows)
+            && !dedicated()
+            && adapters().iter().any(|a| {
+                let n = a.name.to_lowercase();
+                n.contains("intel") && !n.split(|c: char| !c.is_alphanumeric()).any(|w| w == "arc")
+            })
+    }
 }
 
 #[derive(Serialize)]

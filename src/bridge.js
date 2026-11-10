@@ -3,6 +3,7 @@
 // throwing, so screens can show what went wrong. Absent in a plain browser.
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
 import { withAdobe } from './develop/adobe.js';
@@ -23,7 +24,21 @@ const onEvent = (name, fn) => {
   return () => { dead = true; off?.(); };
 };
 
+const onWin = (p) => {
+  let off = null, dead = false;
+  p.then((u) => { if (dead) u(); else off = u; });
+  return () => { dead = true; off?.(); };
+};
+
 export const bridge = inApp ? {
+  // The window itself, for Flightroom's own title bar (titlebar.jsx).
+  win: {
+    minimize: () => safe(getCurrentWindow().minimize()),
+    toggleMaximize: () => safe(getCurrentWindow().toggleMaximize()),
+    close: () => safe(getCurrentWindow().close()),
+    isMaximized: () => getCurrentWindow().isMaximized(),
+    onResized: (fn) => onWin(getCurrentWindow().onResized(fn)),
+  },
   getVersion: () => invoke('app_version'),
   getUpdateStatus: () => invoke('update_status'),
   checkForUpdates: () => call('update_check'),
