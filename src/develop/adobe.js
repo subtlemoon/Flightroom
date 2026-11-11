@@ -9,7 +9,7 @@
 // Lightroom Classic or the free Adobe DNG Converter is on the computer, its
 // profile for the camera (src-tauri/src/adobe.rs) adds Adobe's per-camera
 // colour tables on top. Adobe's profile files themselves can't be shipped.
-import { apply3, inv3, mul3, tempTintToXy, xyToTempTint } from './color.js';
+import { apply3, inv3, mul3, reachableWhite, tempTintToXy, xyToTempTint } from './color.js';
 
 // dng_tone_curve_acr3_default: Adobe's default tone curve, used by profiles
 // without their own (Adobe Standard among them). 1025 values over 0-1, x 100000.
@@ -184,7 +184,8 @@ export const dcpMatrices = (dcp) => dcp.illuminants.map((i) => [i.temp, i.color]
  * (1 / camera white: 1 for the strongest channel, more for the others) and the matrix from
  * balanced camera RGB to linear sRGB.
  */
-export function dcpTransform(dcp, xy) {
+export function dcpTransform(dcp, asked) {
+  const xy = reachableWhite(asked, (p) => blend(dcp.illuminants[0].color, dcp.illuminants[1]?.color, illuminantWeight(dcp, p)));
   const g = illuminantWeight(dcp, xy);
   const [i1, i2] = dcp.illuminants;
   const cm = blend(i1.color, i2?.color, g);
