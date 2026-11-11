@@ -191,3 +191,23 @@ describe('profiles and looks', () => {
     expect(color.remove).not.toContain('Look');
   });
 });
+
+describe('white balance at the ends of Temp and Tint', () => {
+  it('never asks for a white the camera cannot see (no yellow, blue or black frames)', async () => {
+    const { colorTransform } = await import('./color.js');
+    const info = { matrices: [[2850, CM_A], [6500, CM_D65]] };
+    const dcp = profile();
+    for (let temp = 2000; temp <= 50000; temp *= 1.25) for (let tint = -150; tint <= 150; tint += 5) {
+      for (const { wb } of [colorTransform(info, temp, tint), dcpTransform(dcp, tempTintToXy(temp, tint))]) {
+        wb.forEach((m) => { expect(m).toBeGreaterThanOrEqual(1 - 1e-9); expect(m).toBeLessThanOrEqual(16 + 1e-6); });
+      }
+    }
+  });
+
+  it('leaves ordinary white balance alone', () => {
+    const xy = tempTintToXy(5500, 10);
+    const a = dcpTransform(profile(), xy);
+    expect(a.wb[1]).toBeCloseTo(1, 6);
+    expect(Math.max(...a.wb)).toBeLessThan(3);
+  });
+});

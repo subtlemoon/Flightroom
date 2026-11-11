@@ -113,6 +113,23 @@ export function asShotTempTint(info) {
   return { temp: Math.round(t.temp / 50) * 50, tint: Math.round(t.tint) };
 }
 
+// The faintest a camera channel may be at the white point, against its
+// brightest (a white balance multiplier of at most 16). Pushing Temp and Tint
+// hard together (say 2000 K with Tint +75) asks for a white the sensor can't
+// see: one channel goes to zero or below, and the picture turns yellow, solid
+// blue or black. Lightroom keeps getting more coloured instead, so the white
+// point stops at the edge, on the line from D50 towards where it was asked.
+const MIN_WHITE = 1 / 16;
+const D50_XY = [0.3457, 0.3585];
+const whiteRatio = (cm, xy) => { const n = apply3(cm(xy), xyToXYZ(xy)); return Math.min(...n) / Math.max(...n); };
+export function reachableWhite(xy, cm) {
+  if (whiteRatio(cm, xy) >= MIN_WHITE) return xy;
+  const at = (t) => [D50_XY[0] + (xy[0] - D50_XY[0]) * t, D50_XY[1] + (xy[1] - D50_XY[1]) * t];
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 24; i++) { const m = (lo + hi) / 2; if (whiteRatio(cm, at(m)) >= MIN_WHITE) lo = m; else hi = m; }
+  return at(lo);
+}
+
 const BRADFORD = [0.8951, 0.2664, -0.1614, -0.7502, 1.7135, 0.0367, 0.0389, -0.0685, 1.0296];
 const D65 = [0.95047, 1, 1.08883];
 const XYZ_TO_SRGB = [3.2404542, -1.5371385, -0.4985314, -0.969266, 1.8760108, 0.041556, 0.0556434, -0.2040259, 1.0572252];
@@ -125,7 +142,7 @@ function adapt(fromXYZ, toXYZ) {
 // For a white balance: the per-channel multipliers (smallest = 1, so clipped
 // highlights stay white) and the matrix from balanced camera RGB to linear sRGB.
 export function colorTransform(info, temp, tint) {
-  const xy = tempTintToXy(temp, tint);
+  const xy = reachableWhite(tempTintToXy(temp, tint), (p) => cameraMatrix(info.matrices, p));
   const M = cameraMatrix(info.matrices, xy);
   const whiteXYZ = xyToXYZ(xy);
   const neutral = apply3(M, whiteXYZ);
