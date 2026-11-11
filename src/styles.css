@@ -928,6 +928,9 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .ai-glow.busy { box-shadow: -4px 0 16px -4px rgba(8, 148, 255, 0.75), 4px 0 16px -4px rgba(255, 70, 110, 0.65); }
 .ai-glow:disabled::before, .ai-glow.off::before { animation: none; opacity: 0.4; }
 .ai-progress.ai-glow { --ai-edge: 0px; }
+/* AI Denoise lock: over everything but the title bar. */
+.overlay.ai-lock { top: 32px; z-index: 1200; }
+.ai-lock-box { width: min(380px, 100%); }
 .ai-group { display: flex; flex-direction: column; gap: 2px; padding: 3px; margin: 2px 0 4px; border-radius: var(--r); --ai-edge: 0px; }
 .mask-tools .ai-group { flex-direction: row; padding: 1px; margin: 0; }
 @media (prefers-reduced-motion: reduce) { .ai-glow::before { animation: none; } }

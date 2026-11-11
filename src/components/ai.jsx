@@ -2,6 +2,7 @@
 // sky, background, people and their parts, the parts of a landscape) and AI
 // Denoise. The models run on this computer; photos are never uploaded.
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { bridge } from '../bridge.js';
 import { Icon, Modal } from './ui.jsx';
 import { Slider } from './slider.jsx';
@@ -211,6 +212,41 @@ function AiPicker({ type, results, target, onClose, onCreate }) {
 
 // --- AI Denoise -------------------------------------------------------------------
 
+/** While Denoise runs, a panel over the whole app (below the title bar, so the
+ *  window can still be moved) keeps clicks and keys from reaching anything
+ *  else. Esc or Cancel stops it. */
+function DenoiseLock({ run, onCancel }) {
+  const box = useRef(null);
+  useEffect(() => {
+    const onKey = (e) => {
+      if (box.current?.contains(e.target) && (e.key === 'Enter' || e.key === ' ' || e.key === 'Tab')) return;
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      if (e.key === 'Escape') onCancel();
+    };
+    const opts = { capture: true };
+    window.addEventListener('keydown', onKey, opts);
+    window.addEventListener('keyup', onKey, opts);
+    box.current?.querySelector('button')?.focus();
+    return () => { window.removeEventListener('keydown', onKey, opts); window.removeEventListener('keyup', onKey, opts); };
+  }, [onCancel]);
+  const pct = run.total > 1 ? Math.round((100 * run.done) / run.total) : 0;
+  return (
+    <div className="overlay ai-lock" onContextMenu={(e) => e.preventDefault()} onWheel={(e) => e.stopPropagation()}>
+      <div className="modal ai-lock-box" role="alertdialog" aria-modal="true" aria-label="AI Denoise" ref={box}>
+        <div className="modal-head"><h2>AI Denoise</h2></div>
+        <div className="modal-body">
+          <p className="small">{run.cancelling ? 'Stopping…' : 'Removing noise on this computer. The rest of Flightroom waits until it is done.'}</p>
+          <div className="ai-progress ai-glow busy"><span style={{ width: `${pct}%` }} /><em>{run.total > 1 ? `${pct}%` : 'Starting…'}</em></div>
+        </div>
+        <div className="modal-foot">
+          <button className="btn btn-sm" onClick={onCancel} disabled={run.cancelling}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const DN_AMOUNT = { key: 'aiDenoise', label: 'Amount', min: 1, max: 100, step: 1, def: 50 };
 
 /** AI Denoise, in the Detail section: work it out once per photo, then blend it in. */
@@ -231,6 +267,8 @@ export function AiDenoise({ photo, info, s, set, ensure, onDenoised }) {
     onDenoised(s.aiDenoise || DN_AMOUNT.def);
   };
   const busy = run && !run.error;
+  const cancel = () => { setRun((r) => (r && !r.error ? { ...r, cancelling: true } : r)); bridge.develop.cancelDenoise(); };
+  const lock = busy && createPortal(<DenoiseLock run={run} onCancel={cancel} />, document.body);
   if (info.denoised && !busy) {
     return (
       <div className="dev-group ai-denoise">
@@ -247,7 +285,8 @@ export function AiDenoise({ photo, info, s, set, ensure, onDenoised }) {
       {busy ? (
         <div className="dev-line">
           <div className="ai-progress grow ai-glow busy"><span style={{ width: `${(100 * run.done) / Math.max(1, run.total)}%` }} /><em>{run.total > 1 ? `${Math.round((100 * run.done) / run.total)}%` : 'Starting…'}</em></div>
-          <button className="btn btn-sm btn-ghost" onClick={() => bridge.develop.cancelDenoise()}>Cancel</button>
+          <button className="btn btn-sm btn-ghost" onClick={cancel}>Cancel</button>
+          {lock}
         </div>
       ) : (
         <>
