@@ -23,6 +23,7 @@ export const COPY_GROUPS = [
   ['transform', 'Transform', keysOf('transform').filter((k) => k !== 'constrainCrop'), true],
   ['vignette', 'Vignetting', ['vignetteStyle', ...sliders('vignette')], true],
   ['grain', 'Grain', sliders('grain'), true],
+  ['glow', 'Glow', ['glowStyle', ...sliders('glow')], true],
   ['calibration', 'Calibration', keysOf('calibration'), true],
   ['masks', 'Masking', ['masks', 'masksOwned'], false],
   ['crop', 'Crop', ['crop', 'constrainCrop'], false],

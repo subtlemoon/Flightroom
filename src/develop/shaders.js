@@ -65,12 +65,73 @@ void main() {
   o = sum / wsum;
 }`;
 
+// Glow (Effects), as in Lightroom 16: light spilling out of the bright parts
+// of the photo. Built small, in photo coordinates, once per change of its
+// settings or the exposure (renderer.js updateGlow): the light above the
+// Range threshold is taken from the photo (GLOW_SRC), halved again and again
+// (GLOW_DOWN), each size blurred (BLUR, along Direction for Motion and
+// Streak), and the sizes mixed by Spread and coloured by Warmth (GLOW_MIX).
+// FINAL adds the result where the photo is still scene light.
+export const GLOW_SRC = `${COMMON}
+uniform sampler2D uSrc;
+uniform vec2 uOutSize;
+uniform float uGlowGain;  // the exposure, as a factor
+uniform vec2 uGlowKnee;   // threshold (stops over middle grey) and its softness
+uniform float uGlowSat;   // the glow's colour: 0 grey, 1 the photo's, more for richer
+out vec4 o;
+void main() {
+  vec2 cell = 1.0 / uOutSize;
+  vec2 base = (gl_FragCoord.xy - 0.5) * cell;
+  vec3 sum = vec3(0.0);
+  for (int j = 0; j < 6; j++) for (int i = 0; i < 6; i++) {
+    vec2 uv = base + (vec2(float(i), float(j)) + 0.5) * cell / 6.0;
+    vec3 lin = min(max(toLinear(texture(uSrc, uv).rgb), vec3(0.0)) * uGlowGain, vec3(16.0));
+    float y = max(dot(lin, W709), 1e-6);
+    sum += lin * smoothstep(uGlowKnee.x - uGlowKnee.y, uGlowKnee.x + uGlowKnee.y, log2(y / 0.18));
+  }
+  vec3 c = sum / 36.0;
+  float y = dot(c, W709);
+  o = vec4(max(vec3(y) + (c - y) * uGlowSat, vec3(0.0)), 1.0);
+}`;
+
+export const GLOW_DOWN = `#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform vec2 uOutSize;
+out vec4 o;
+void main() {
+  vec2 uv = gl_FragCoord.xy / uOutSize;
+  vec2 px = 0.5 / vec2(textureSize(uTex, 0));
+  o = 0.25 * (texture(uTex, uv + vec2(-px.x, -px.y)) + texture(uTex, uv + vec2(px.x, -px.y))
+    + texture(uTex, uv + vec2(-px.x, px.y)) + texture(uTex, uv + vec2(px.x, px.y)));
+}`;
+
+export const GLOW_MIX = `#version 300 es
+precision highp float;
+uniform sampler2D uG0, uG1, uG2, uG3, uG4;
+uniform vec4 uGlowW;    // how much of each size (finest first; the fifth is uGlowW4)
+uniform float uGlowW4;
+uniform float uGlowHalo; // Halation: the finest size taken back out, so the glow rings the light
+uniform vec3 uGlowTint;
+uniform vec2 uOutSize;
+out vec4 o;
+void main() {
+  vec2 uv = gl_FragCoord.xy / uOutSize;
+  vec3 f = texture(uG0, uv).rgb;
+  vec3 g = uGlowW.x * f + uGlowW.y * texture(uG1, uv).rgb + uGlowW.z * texture(uG2, uv).rgb
+    + uGlowW.w * texture(uG3, uv).rgb + uGlowW4 * texture(uG4, uv).rgb;
+  g = max(g - uGlowHalo * f, vec3(0.0));
+  o = vec4(g * uGlowTint, 1.0);
+}`;
+
 export const FINAL = `${COMMON}
 uniform sampler2D uSrc;   // whole photo (overview)
 uniform sampler2D uHi;    // a sharper part of it, when zoomed or exporting
 uniform vec4 uHiRect;     // where uHi sits, in photo coordinates (0-1); w = 0 when unused
 uniform vec4 uHiSafe;     // the part of uHiRect that is safe to use
 uniform sampler2D uGuide;
+uniform sampler2D uGlow;   // the glow (GLOW_MIX), in photo coordinates
+uniform vec4 uGlowMix;    // amount, how much it stands in for the photo, how much it adds, on
 uniform sampler2D uCurve;
 uniform sampler2D uHue;
 uniform mat3 uOut2Ori;    // output pixel -> oriented pixel of the transformed photo
@@ -141,7 +202,7 @@ uniform vec4 uME[16]; // grain amount, size x amount, roughness x amount, moire
 uniform vec4 uMF[16]; // defringe, colour tint (rgb, no brightness)
 uniform vec4 uMP[16]; // point colour: hue (degrees), saturation, brightness, on
 uniform vec4 uMQ[16]; // point colour shifts: hue (degrees), saturation, luminance; range
-uniform vec4 uMS[16]; // point colour softness, own curve on, its refine saturation
+uniform vec4 uMS[16]; // point colour softness, own curve on, its refine saturation, glow
 uniform sampler2D uMaskCurve; // each mask's curve, a row each (as uCurve)
 // Lightroom's camera profile (adobe.js), when it renders: its hue/sat map, its
 // look table and a look's (Adobe Color), and its tone curve. Dims: hue, sat
@@ -454,6 +515,7 @@ void main() {
 
   // How much each mask covers this pixel, and their sliders added up.
   vec4 LA = vec4(0.0), LB = vec4(0.0), LC = vec4(0.0), LD = vec4(0.0), LE = vec4(0.0), LF = vec4(0.0);
+  float LG = 0.0; // the masks' Glow
   float mw[16];
   for (int i = 0; i < 16; i++) mw[i] = 0.0;
   float shownW = 0.0;
@@ -476,6 +538,7 @@ void main() {
       if (float(i) == uMaskView) shownW = w;
       w *= uMD[i].w;
       mw[i] = w;
+      LG += uMS[i].w * w;
       LA += uMA[i] * w; LB += uMB[i] * w; LC += uMC[i] * w; LD += uMD[i] * w; LE += uME[i] * w; LF += uMF[i] * w;
     }
   }
@@ -615,6 +678,13 @@ void main() {
     } else {
       lin = mix(lin, vec3(air * 0.85), -dehaze * 0.45 * (0.4 + 0.6 * haze));
     }
+  }
+
+  // Glow: the light spilling from bright parts, on scene light (before the tone curve), so it rolls off as light does.
+  float glowAmt = clamp(uGlowMix.x + LG, 0.0, 1.0);
+  if (uGlowMix.w > 0.5 && glowAmt > 0.0) {
+    vec3 gl = texture(uGlow, p).rgb;
+    lin = mix(lin, gl, glowAmt * uGlowMix.y) + gl * (glowAmt * uGlowMix.z);
   }
 
   vec3 mapped;

@@ -6,7 +6,7 @@ import { CurveEditor } from './curve.jsx';
 import { BRUSH_DEFAULT, MASK_OPTIONS_DEFAULT, MaskAdjust, MaskOverlay, MaskPanel, OVERLAY_DEFAULT, maskActions, overlayMenu, maskView, useStored } from './masks.jsx';
 import { AiDenoise, useAiInstall, useAiMasks } from './ai.jsx';
 import { MoodPanel, useMoodGrade } from './mood.jsx';
-import { BUILT_IN, CopyDialog, PresetPanel } from './copy.jsx';
+import { BUILT_IN, GLOW_BUILT_IN, CopyDialog, PresetPanel } from './copy.jsx';
 import { fileItems, fromMenuBar, openMenu, photoLabel, ratingMenu } from './menu.jsx';
 import { copyActions } from '../cull/copies.js';
 import { applyTo, pick as pickSettings } from '../develop/copy.js';
@@ -32,6 +32,7 @@ import { lightGraphics } from '../develop/graphics.js';
 import { engineKind, watchResets } from '../develop/gpu/engine.js';
 import { ExportModal } from './export.jsx';
 import { activeToneMap } from '../develop/tonemap.js';
+import { DIRECTIONAL, GLOW_STYLES } from '../develop/glow.js';
 import { useRetouch } from './retouch.jsx';
 import { screenColorOn, screenProfile } from '../develop/icc.js';
 import { RetouchStage } from './rtstage.jsx';
@@ -382,6 +383,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
         label: many ? `Apply preset to ${many} photos` : 'Apply preset', icon: 'palette', disabled: !s, items: [
           ...(presets.list.length ? [{ heading: 'Yours' }, ...presets.list.map(preset), '-'] : []),
           { heading: 'Flightroom' }, ...BUILT_IN.map(preset),
+          { heading: 'Glow' }, ...GLOW_BUILT_IN.map(preset),
         ],
       },
       '-',
@@ -1664,7 +1666,8 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
         <div className="dev-line dev-wb"><span className="muted">Style</span>
           <Dropdown value={s.vignetteStyle || 1} options={VIGNETTE_STYLES.map(([value, label]) => ({ value, label }))} onChange={(v) => update({ vignetteStyle: v })} />
         </div>
-        <Groups sec={SECTION.effects} s={s} asShot={asShot} set={set} hide={s.vignetteStyle === 3 ? ['vignetteHighlights'] : []} />
+        <Groups sec={SECTION.effects} s={s} asShot={asShot} set={set} only={(g) => g.title !== 'Glow'} hide={s.vignetteStyle === 3 ? ['vignetteHighlights'] : []} />
+        <GlowGroup s={s} set={set} update={update} />
       </>
     ),
     calibration: () => <Groups sec={SECTION.calibration} s={s} asShot={asShot} set={set} />,
@@ -1732,6 +1735,28 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
 const SECTION = Object.fromEntries(SECTIONS.map((sec) => [sec.id, sec]));
 
 // A section's plain sliders, in their groups. `extra` puts something beside a group's title.
+// Glow, as Lightroom 16 lays it out: the amount, and an arrow for the rest.
+function GlowGroup({ s, set, update }) {
+  const [open, setOpen] = useStored('flightroom-glow-open', { open: false });
+  const sl = SECTION.effects.groups.find((g) => g.title === 'Glow').sliders;
+  const show = (k) => k === 'glow' || (open.open && (!['glowDirection', 'glowSoftness'].includes(k) || DIRECTIONAL.includes(s.glowStyle)));
+  return (
+    <div className="dev-group">
+      <div className="dev-group-title dev-line">
+        <button className="dev-glow-toggle" title={open.open ? 'Hide Glow options' : 'Show Glow options: style, range, spread, warmth'} onClick={() => setOpen({ open: !open.open })}>
+          <Icon name={open.open ? 'chevD' : 'chevR'} size={11} />Glow
+        </button>
+      </div>
+      {open.open && (
+        <div className="dev-line dev-wb"><span className="muted">Style</span>
+          <Dropdown value={s.glowStyle || 1} options={GLOW_STYLES.map(([value, label]) => ({ value, label }))} onChange={(v) => update({ glowStyle: v })} />
+        </div>
+      )}
+      {sl.filter((x) => show(x.key)).map((x) => <Slider key={x.key} sl={x} value={s[x.key]} def={x.def} onSet={set} />)}
+    </div>
+  );
+}
+
 function Groups({ sec, s, asShot, set, only, hide = [], untitled = [], extra = {}, before = {} }) {
   const groups = only ? sec.groups.filter(only) : sec.groups;
   return groups.map((g) => (
