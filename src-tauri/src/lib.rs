@@ -111,6 +111,23 @@ fn updating_window(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// An AI job finished: a Windows notification and a taskbar flash, but only
+/// when Flightroom isn't the window in front (Settings can turn it off).
+#[tauri::command]
+fn notify_done(app: tauri::AppHandle, title: String, body: String) {
+    let Some(w) = app.get_webview_window("main") else { return };
+    if w.is_focused().unwrap_or(false) && !w.is_minimized().unwrap_or(false) {
+        return;
+    }
+    use tauri_plugin_notification::NotificationExt;
+    let mut n = app.notification().builder().title(title);
+    if !body.is_empty() {
+        n = n.body(body);
+    }
+    let _ = n.show();
+    let _ = w.request_user_attention(Some(tauri::UserAttentionType::Informational));
+}
+
 pub fn run() {
     let app = tauri::Builder::default()
         // One Flightroom at a time: opening it again brings the open window forward.
@@ -128,6 +145,7 @@ pub fn run() {
                 .with_denylist(&["updating"])
                 .build(),
         )
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .register_asynchronous_uri_scheme_protocol("gcimg", |ctx, req, responder| {
@@ -155,6 +173,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            notify_done,
             photos::cull_scan,
             photos::cull_meta,
             photos::cull_trash,

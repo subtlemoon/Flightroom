@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from './ui.jsx';
 import { MAX_MASKS, newAiPart, newMask } from '../develop/masks.js';
+import { aiDone } from '../notify.js';
 import { maskWeights, measure, MOOD_CHIPS, MOOD_KEYS, parseMood, recipeFor, solveGrade, subjectAdjust } from '../develop/mood.js';
 
 const STRENGTHS = [['Subtle', 0.6], ['Normal', 1], ['Strong', 1.4]];
@@ -82,8 +83,9 @@ export function useMoodGrade({ photo, s, update, stage, aiMasks, toast }) {
       }, `AI grade: ${mood.name}`);
       startedFrom.set(id, { from, set: { exposure: patch.exposure, temp: patch.temp, tint: patch.tint } });
       setLast({ name: text.trim(), unknown: mood.unknown, subject: subjectNote });
+      aiDone('AI grade is done', `Graded “${text.trim()}”`);
     } catch (err) {
-      if (err.message !== 'cancelled') toast(`AI grade didn't work: ${err.message || err}`);
+      if (err.message !== 'cancelled') { toast(`AI grade didn't work: ${err.message || err}`); aiDone('AI grade didn\'t work', String(err.message || err)); }
     } finally {
       if (live.current === id) live.current = null;
       setBusy(null);

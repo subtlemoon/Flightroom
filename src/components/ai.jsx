@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { bridge } from '../bridge.js';
+import { aiDone } from '../notify.js';
 import { Icon, Modal } from './ui.jsx';
 import { Slider } from './slider.jsx';
 import { AI_TYPES, aiName, newAiPart } from '../develop/masks.js';
@@ -33,8 +34,8 @@ function AiDownload({ feature, size, onDone }) {
   const start = async () => {
     setRun({ done: 0, total: size });
     const r = await bridge.ai.install(feature);
-    if (r?.error) setRun({ error: r.error });
-    else onDone(true);
+    if (r?.error) { setRun({ error: r.error }); aiDone(`${FEATURE_LABEL[feature]} download failed`, r.error); }
+    else { aiDone(`${FEATURE_LABEL[feature]} is downloaded`); onDone(true); }
   };
   const busy = run && !run.error;
   return (
@@ -133,6 +134,7 @@ export function useAiMasks({ photo, picture, acts, ensure, toast }) {
       const t0 = performance.now();
       const { r, secs } = await results(TASK[type]);
       if (performance.now() - t0 > 6000) slow(type, secs);
+      aiDone(`AI ${aiName(type)} mask is ready`);
       const named = (n) => r.find((x) => x.name === n);
       if (type === 'subject' || type === 'background') {
         const sub = named('subject');
@@ -148,6 +150,7 @@ export function useAiMasks({ photo, picture, acts, ensure, toast }) {
       else setPick({ type, results: r, target });
     } catch (err) {
       toast(`AI masking didn't work: ${err.message || err}`);
+      aiDone('AI masking didn\'t work', String(err.message || err));
     } finally {
       setBusy(null);
     }
@@ -262,7 +265,12 @@ export function AiDenoise({ photo, info, s, set, ensure, onDenoised }) {
     setRun({ done: 0, total: 1 });
     const r = await bridge.develop.denoise(photo);
     if (live.current !== id) return;
-    if (r?.error) { setRun(r.error === 'cancelled' ? null : { error: r.error }); return; }
+    if (r?.error) {
+      if (r.error !== 'cancelled') aiDone('AI Denoise didn\'t finish', r.error);
+      setRun(r.error === 'cancelled' ? null : { error: r.error });
+      return;
+    }
+    aiDone('AI Denoise is done', photo.name || '');
     setRun(null);
     onDenoised(s.aiDenoise || DN_AMOUNT.def);
   };

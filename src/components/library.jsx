@@ -7,6 +7,7 @@ import { START_PAGES } from './home.jsx';
 import { screenColorOn, screenProfile, setScreenColor } from '../develop/icc.js';
 import { graphicsMode, graphicsState, setGraphicsMode } from '../develop/graphics.js';
 import { enginePref, setEnginePref } from '../develop/gpu/engine.js';
+import { aiNotifyOn, setAiNotify } from '../notify.js';
 import { DEFAULT_RATING_KEYS, DEFAULT_ZOOM_KEY, RESERVED_KEYS, ZOOM_LEVELS, assignKey, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zoomLevel } from '../cull/keys.js';
 
 export function MyGearView({ store, onOpenGear, onBrowse, onCustom }) {
@@ -217,6 +218,21 @@ function ScreenColorCard() {
   );
 }
 
+// A Windows notification when an AI job finishes while Flightroom is in the background.
+function NotifyCard() {
+  const [on, setOn] = useState(aiNotifyOn);
+  return (
+    <section className="card">
+      <h3 className="section-title">Notifications</h3>
+      <label className="toggle-row big">
+        <input type="checkbox" checked={on} onChange={(e) => { setOn(e.target.checked); setAiNotify(e.target.checked); }} />
+        <span>Tell me when an AI job is done</span>
+      </label>
+      <p className="muted small">When AI Denoise, an AI mask, an AI grade or an AI download finishes while you're in another window, Windows shows a notification and Flightroom's taskbar button flashes. Nothing shows while Flightroom is in front.</p>
+    </section>
+  );
+}
+
 // Where AI masks run. Automatic keeps them off graphics built into the processor, which they overload.
 function AiDeviceCard() {
   const [st, setSt] = useState(null);
@@ -329,6 +345,7 @@ export function SettingsView({ store }) {
       </section>
       <CullingCard store={store} />
       <ScreenColorCard />
+      {app && <NotifyCard />}
       {app && <AiDeviceCard />}
       {app && <GraphicsCard />}
       <section className="card">
