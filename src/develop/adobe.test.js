@@ -211,3 +211,26 @@ describe('white balance at the ends of Temp and Tint', () => {
     expect(Math.max(...a.wb)).toBeLessThan(3);
   });
 });
+
+describe('Tint on a Canon 80D, without an Adobe profile', () => {
+  // The 80D's matrices from rawler; at a warm Temp, Tint toward magenta used to flip the photo between solid blue and yellow.
+  const info = { matrices: [[2856, [0.832, -0.1998, -0.0078, -0.3476, 1.0481, 0.348, -0.0384, 0.1349, 0.5901]], [6504, [0.7457, -0.0671, -0.0937, -0.4849, 1.2495, 0.2643, -0.1213, 0.2354, 0.5492]]] };
+  it('keeps the colour matrix tame and white never goes negative', async () => {
+    const { colorTransform } = await import('./color.js');
+    for (let temp = 2000; temp <= 50000; temp *= 1.05) for (let tint = -150; tint <= 150; tint += 2) {
+      const { matrix } = colorTransform(info, temp, tint);
+      matrix.forEach((v) => expect(Math.abs(v)).toBeLessThan(20));
+      apply3(matrix, [1, 1, 1]).forEach((v) => expect(v).toBeGreaterThan(0));
+    }
+  });
+  it('turns bluer as Tint goes toward magenta at 2500 K, never flipping back to yellow', async () => {
+    const { colorTransform } = await import('./color.js');
+    let last = -Infinity;
+    for (let tint = 0; tint <= 150; tint += 5) {
+      const { wb, matrix } = colorTransform(info, 2500, tint);
+      const [r, , b] = apply3(matrix, [0.05, 0.05, 0.05].map((v, i) => Math.min(1, v * wb[i])));
+      expect(b / r).toBeGreaterThanOrEqual(last * 0.95); // where the white stops at the edge it may settle a little
+      last = b / r;
+    }
+  });
+});
