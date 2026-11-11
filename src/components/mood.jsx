@@ -92,6 +92,14 @@ export function useMoodGrade({ photo, s, update, stage, aiMasks, toast }) {
   return { grade, busy, last, opts, setOpts };
 }
 
+const words = (t) => t.toLowerCase().split(/[\s,]+/).filter(Boolean);
+// A chip adds its word to the mood, or takes it out again, so several can be combined before grading.
+const toggleWord = (t, w) => {
+  const has = words(t).includes(w.toLowerCase());
+  if (has) return t.split(/(\s+|,\s*)/).filter((x) => x.toLowerCase() !== w.toLowerCase()).join('').replace(/^[\s,]+|[\s,]+$/g, '').replace(/(\s*,\s*|\s+){2,}/g, ' ');
+  return t.trim() ? `${t.trim()} ${w.toLowerCase()}` : w.toLowerCase();
+};
+
 /** The AI grade box at the top of Develop's right panel. */
 export function MoodPanel({ mood }) {
   const [text, setText] = useState('');
@@ -106,7 +114,11 @@ export function MoodPanel({ mood }) {
           title="Grades this photo to the mood with AI on this computer: the result is normal sliders you can change"><Icon name="ai" size={14} />Grade</button>
       </div>
       <div className="mood-chips">
-        {MOOD_CHIPS.map((m) => <button key={m} className="chip" disabled={!!busy} onClick={() => { setText(m); go(m); }}>{m}</button>)}
+        {MOOD_CHIPS.map((m) => {
+          const on = words(text).includes(m.toLowerCase());
+          return <button key={m} className={`chip${on ? ' on' : ''}`} disabled={!!busy} onClick={() => setText(toggleWord(text, m))}
+            title={on ? 'Take it out of the mood' : 'Add to the mood (pick several, then Grade)'}>{m}</button>;
+        })}
       </div>
       {busy ? (
         <div className="ai-progress ai-glow busy"><span style={{ width: `${Math.round(busy.at * 100)}%` }} /><em>{busy.label}…</em></div>
