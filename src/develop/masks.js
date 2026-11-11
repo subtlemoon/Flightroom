@@ -38,6 +38,8 @@ export const LOCAL_SECTIONS = [
     L('texture', 'Texture', 'LocalTexture', -100, 100),
     L('clarity', 'Clarity', 'LocalClarity2012', -100, 100),
     L('dehaze', 'Dehaze', 'LocalDehaze', -100, 100),
+    // Only the amount: the style and its settings are the whole photo's (as in Lightroom).
+    L('glow', 'Glow', null, -100, 100),
   ], grain: [
     L('grain', 'Amount', null, 0, 100),
     L('grainSize', 'Size', null, 0, 100, 1, { def: 25 }),

@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { openMenu } from './menu.jsx';
 import { Icon, Modal } from './ui.jsx';
 import { COPY_GROUPS, DEFAULT_GROUPS, describe } from '../develop/copy.js';
+import { GLOW_PRESETS } from '../develop/glow.js';
 
 /**
  * The checklist of what to copy, as in Lightroom. With `naming`, it makes a
@@ -40,6 +41,7 @@ export function CopyDialog({ groups: initial, naming, onClose, onDone }) {
 
 // Looks that come with Flightroom. Each sets only what it lists.
 const FADE = [[0, 28], [64, 72], [192, 194], [255, 242]];
+const builtIn = ([name, part]) => ({ id: `fr-${name}`, name, part, groups: COPY_GROUPS.filter(([, , keys]) => keys.some((k) => k in part)).map(([id]) => id) });
 export const BUILT_IN = [
   ['Vivid', { contrast: 15, clarity: 10, vibrance: 25, saturation: 5 }],
   ['Punchy', { contrast: 30, clarity: 15, dehaze: 5, whites: 10, blacks: -10, vibrance: 10 }],
@@ -49,7 +51,9 @@ export const BUILT_IN = [
   ['Cool', { gGlobalHue: 215, gGlobalSat: 12 }],
   ['Black & white', { bw: true, contrast: 15, clarity: 10 }],
   ['Black & white contrast', { bw: true, contrast: 40, whites: 20, blacks: -25, clarity: 20 }],
-].map(([name, part]) => ({ id: `fr-${name}`, name, part, groups: COPY_GROUPS.filter(([, , keys]) => keys.some((k) => k in part)).map(([id]) => id) }));
+].map(builtIn);
+// Lightroom Classic 16's Glow presets.
+export const GLOW_BUILT_IN = GLOW_PRESETS.map(builtIn);
 
 /** Presets in the left panel: hover to preview, click to apply. */
 export function PresetPanel({ presets, open, setOpen, disabled, onApply, onHover, onNew, onDelete }) {
@@ -79,6 +83,8 @@ export function PresetPanel({ presets, open, setOpen, disabled, onApply, onHover
           {presets.map((p) => row(p, true))}
           <div className="preset-group">Flightroom</div>
           {BUILT_IN.map((p) => row(p, false))}
+          <div className="preset-group">Glow</div>
+          {GLOW_BUILT_IN.map((p) => row(p, false))}
         </div>
       )}
     </div>

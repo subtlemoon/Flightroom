@@ -11,6 +11,7 @@ import { MAX_MASKS, POINT_DEFAULT, adjOf, lumRange, maskRaster, rasterChange } f
 import { tonemapUniforms } from './tonemap.js';
 import { Composer } from './compose.js';
 import { renderLayers } from './retouch.js';
+import { GLOW_EDGE, LEVELS, glowPlan, glowUsed } from './glow.js';
 import { ROTATION } from '../cull/rotation.js';
 
 const GUIDE_EDGE = 320;
@@ -334,6 +335,7 @@ export class Renderer {
     this.disposed = true;
     this.free(this.src); this.clearHi(); this.free(this.histTarget); this.free(this.prevTarget); this.free(this.thumbTarget); this.free(this.lightTarget); this.setDisplay(null);
     for (const t of this.guide || []) this.free(t);
+    this.freeGlow();
     this.free(this.curveTex); this.free(this.hueTex); this.free(this.blank);
     for (const t of [this.prof?.tone, this.prof?.hsm, this.prof?.laTex, this.prof?.lbTex]) if (t) this.free(t);
     this.free(this.acc);
@@ -410,6 +412,60 @@ export class Renderer {
     this.lumWait = null;
     this.guideGen++;
     this.guideKey = key;
+  }
+
+  /**
+   * Glow (glow.js): the light above the Range threshold, at five sizes from
+   * GLOW_EDGE px down, each blurred, then mixed by Spread into one small
+   * picture in photo coordinates that the develop pass adds. Redrawn only
+   * when what it depends on changes (its settings, the exposure, the white
+   * balance), which takes a few small passes.
+   */
+  updateGlow(info, s, geo) {
+    if (!glowUsed(s, this.masks)) { this.glowOn = false; return; }
+    this.glowOn = true;
+    const exposure = s.exposure + lookFor(info, s).exposure;
+    const plan = glowPlan(s, exposure, geo.orientedToPhoto());
+    const key = JSON.stringify([this.guideKey, exposure, plan.style, plan.knee, plan.weights, plan.tint, plan.dir, plan.along, plan.across, geo.rot]);
+    if (this.glow && this.glowSrc === this.src && key === this.glowKey) return;
+    const scale = Math.min(1, GLOW_EDGE / Math.max(this.src.w, this.src.h));
+    const w0 = Math.max(8, Math.round(this.src.w * scale)), h0 = Math.max(8, Math.round(this.src.h * scale));
+    if (!this.glow || this.glow.w !== w0 || this.glow.h !== h0) {
+      this.freeGlow();
+      const levels = [];
+      for (let i = 0, w = w0, h = h0; i < LEVELS; i++, w = Math.max(4, Math.ceil(w / 2)), h = Math.max(4, Math.ceil(h / 2))) {
+        levels.push({ a: this.target(w, h), b: this.target(w, h), w, h });
+      }
+      this.glow = { w: w0, h: h0, levels, out: this.target(w0, h0) };
+    }
+    const { levels, out } = this.glow;
+    this.draw('glowSrc', levels[0].a, { uSrc: this.src.tex, uOutSize: [w0, h0], uGlowGain: plan.gain, uGlowKnee: plan.knee, uGlowSat: plan.sat, ...this.colorUniforms(info, s) });
+    for (let i = 1; i < LEVELS; i++) this.draw('glowDown', levels[i].a, { uTex: levels[i - 1].a.tex, uOutSize: [levels[i].w, levels[i].h] });
+    for (const L of levels) {
+      // Along the direction, then across it (round styles: across, then down).
+      let u = [1, 0], v = [0, 1];
+      if (plan.dir) {
+        const tx = plan.dir[0] * L.w, ty = plan.dir[1] * L.h, n = Math.hypot(tx, ty) || 1;
+        u = [tx / n, ty / n]; v = [-u[1], u[0]];
+      }
+      this.draw('blur', L.b, { uTex: L.a.tex, uStep: [u[0] / L.w, u[1] / L.h], uSigma: plan.along });
+      this.draw('blur', L.a, { uTex: L.b.tex, uStep: [v[0] / L.w, v[1] / L.h], uSigma: plan.across });
+    }
+    const [w0w, w1, w2, w3, w4] = plan.weights;
+    this.draw('glowMix', out, {
+      uG0: levels[0].a.tex, uG1: levels[1].a.tex, uG2: levels[2].a.tex, uG3: levels[3].a.tex, uG4: levels[4].a.tex,
+      uGlowW: [w0w, w1, w2, w3], uGlowW4: w4, uGlowHalo: plan.halo, uGlowTint: plan.tint, uOutSize: [w0, h0],
+    });
+    this.glowMix = plan.mix;
+    this.glowSrc = this.src;
+    this.glowKey = key;
+  }
+
+  freeGlow() {
+    for (const L of this.glow?.levels || []) { this.free(L.a); this.free(L.b); }
+    if (this.glow) this.free(this.glow.out);
+    this.glow = null;
+    this.glowKey = '';
   }
 
   /**
@@ -568,7 +624,7 @@ export class Renderer {
         P.set([pc.h, pc.s, pc.v, 1], i * 4);
         Q.set([pc.hue * 0.6, pc.sat / 100, pc.lum / 100, 0.04 + (pc.range / 100) * 0.4], i * 4);
       }
-      S.set([pc ? pc.variance / 100 : 0, m.curve && !m.off?.curve ? 1 : 0, (m.refineSat ?? 100) / 100, 0], i * 4);
+      S.set([pc ? pc.variance / 100 : 0, m.curve && !m.off?.curve ? 1 : 0, (m.refineSat ?? 100) / 100, g('glow')], i * 4);
       const lr = lumRange(m);
       R.set(lr ? [lr.lo / 100, lr.hi / 100, lr.smooth / 100, 1 + (m.invert ? 2 : 0)] : [0, 1, 0, m.invert ? 2 : 0], i * 4);
     });
@@ -606,6 +662,7 @@ export class Renderer {
     this.updateGuide(info, s);
     this.updateLuts(s, info);
     this.updateMasks(s, geo);
+    this.updateGlow(info, s, geo);
     if (this.masks.length) this.updateMaskCurves();
     this.measure(s);
     const out2ori = mm(geo.frameToOriented(frame), out2frame);
@@ -693,6 +750,8 @@ export class Renderer {
       uHiRect: hi ? hi.rect : [0, 0, 0, 0],
       uHiSafe: hi ? hi.safe : [0, 0, 0, 0],
       uGuide: this.guide[2].tex,
+      uGlow: this.glowOn ? this.glow.out.tex : this.blank,
+      uGlowMix: this.glowOn ? [(s.glow || 0) / 100, ...this.glowMix.slice(1)] : [0, 0, 0, 0],
       uCurve: this.curveTex,
       uHue: this.hueTex,
       uOut2Ori: glMat(out2ori),

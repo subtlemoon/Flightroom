@@ -117,7 +117,7 @@ export const SECTIONS = [
       S('perspY', 'Y Offset', 'PerspectiveY', -100, 100, 0.1, 0, { decimals: 1 }),
     ] },
   ] },
-  { id: 'effects', title: 'Effects', keys: ['vignetteStyle'], groups: [
+  { id: 'effects', title: 'Effects', keys: ['vignetteStyle', 'glowStyle'], groups: [
     { title: 'Post-crop vignetting', sliders: [
       S('vignette', 'Amount', 'PostCropVignetteAmount', -100, 100),
       S('vignetteMidpoint', 'Midpoint', 'PostCropVignetteMidpoint', 0, 100, 1, 50),
@@ -129,6 +129,16 @@ export const SECTIONS = [
       S('grain', 'Amount', 'GrainAmount', 0, 100),
       S('grainSize', 'Size', 'GrainSize', 0, 100, 1, 25),
       S('grainRough', 'Roughness', 'GrainFrequency', 0, 100, 1, 50),
+    ] },
+    // Lightroom 16's Glow. Kept in Flightroom's own part of the sidecar (`own`):
+    // Adobe hasn't published how it stores Glow, so a guess could clash with it.
+    { title: 'Glow', sliders: [
+      S('glow', 'Glow', 'GlowAmount', 0, 100, 1, 0, { own: true }),
+      S('glowRange', 'Range', 'GlowRange', 0, 100, 1, 50, { own: true }),
+      S('glowSpread', 'Spread', 'GlowSpread', 0, 100, 1, 50, { own: true }),
+      S('glowWarmth', 'Warmth', 'GlowWarmth', -100, 100, 1, 0, { own: true, gradient: 'temp' }),
+      S('glowDirection', 'Direction', 'GlowDirection', -90, 90, 1, 0, { own: true }),
+      S('glowSoftness', 'Softness', 'GlowSoftness', 0, 100, 1, 50, { own: true }),
     ] },
   ] },
   { id: 'calibration', title: 'Calibration', groups: [
@@ -203,7 +213,7 @@ export function defaults(asShot) {
   return { ...d };
 }
 function makeDefaults(asShot) {
-  const s = { wb: 'As Shot', profile: startProfile, toneMap: 'none', bw: false, removeCA: false, lensProfile: false, vignetteStyle: 1, constrainCrop: false, crop: null, masks: [], layers: [], aiDenoise: 0 };
+  const s = { wb: 'As Shot', profile: startProfile, toneMap: 'none', bw: false, removeCA: false, lensProfile: false, vignetteStyle: 1, glowStyle: 1, constrainCrop: false, crop: null, masks: [], layers: [], aiDenoise: 0 };
   for (const [k] of CURVE_CHANNELS) s[k] = LINEAR_CURVE;
   for (const sl of SLIDERS) s[sl.key] = sl.def;
   s.temp = asShot.temp;
@@ -239,7 +249,7 @@ export function fromXmp(crs, curves, asShot, own = {}, look = null) {
   const num = (k) => (crs[k] != null && crs[k] !== '' && Number.isFinite(Number(crs[k])) ? Number(crs[k]) : null);
   for (const sl of SLIDERS) {
     // Tone mapper sliders are Flightroom's own, kept out of Lightroom's settings.
-    const raw = sl.tm ? own[sl.crs] : crs[sl.crs];
+    const raw = sl.tm || sl.own ? own[sl.crs] : crs[sl.crs];
     const v = raw != null && raw !== '' && Number.isFinite(Number(raw)) ? Number(raw) : null;
     if (v != null) s[sl.key] = Math.min(sl.max, Math.max(sl.min, v));
   }
@@ -258,6 +268,7 @@ export function fromXmp(crs, curves, asShot, own = {}, look = null) {
   s.lensProfile = num('LensProfileEnable') === 1;
   s.constrainCrop = num('CropConstrainToWarp') === 1;
   if ([1, 2, 3].includes(num('PostCropVignetteStyle'))) s.vignetteStyle = num('PostCropVignetteStyle');
+  if ([1, 2, 3, 4, 5].includes(Number(own.GlowStyle))) s.glowStyle = Number(own.GlowStyle);
   const wb = crs.WhiteBalance;
   if (wb && wb !== 'As Shot' && num('Temperature') != null) s.wb = WB_PRESETS.some(([n]) => n === wb) ? wb : 'Custom';
   else { s.temp = asShot.temp; s.tint = asShot.tint; }
@@ -301,6 +312,8 @@ export function toXmp(s) {
   for (const sl of SLIDERS) {
     const v = s[sl.key];
     if (sl.tm) ownTm[sl.crs] = s.toneMap === sl.tm ? Number(v).toFixed(sl.decimals || 0) : '';
+    // Glow is only written while it's on, so photos without it keep a clean sidecar.
+    else if (sl.own) ownTm[sl.crs] = s.glow ? String(Math.round(v)) : '';
     else if (sl.key === 'temp') set[sl.crs] = String(Math.round(v));
     else if (sl.key === 'sharpenRadius') set[sl.crs] = signed(v, 1);
     else set[sl.crs] = sl.min >= 0 ? String(Math.round(v)) : signed(v, sl.decimals || 0);
@@ -342,6 +355,7 @@ export function toXmp(s) {
       // Adobe Color is marked too, so it comes back as Adobe Color whatever new photos start with.
       Profile: s.profile === 'agx' || s.profile === 'adobe' ? s.profile : '',
       ToneMap: s.toneMap && s.toneMap !== 'none' ? s.toneMap : '',
+      GlowStyle: s.glow ? String(s.glowStyle || 1) : '',
       ...ownTm,
     },
   };
