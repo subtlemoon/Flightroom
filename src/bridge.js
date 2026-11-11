@@ -33,6 +33,8 @@ const onWin = (p) => {
 export const bridge = inApp ? {
   // The window itself, for Flightroom's own title bar (titlebar.jsx).
   win: {
+    // Windows notification + taskbar flash, only if Flightroom isn't the window in front.
+    notifyDone: (title, body) => call('notify_done', { title, body }),
     minimize: () => safe(getCurrentWindow().minimize()),
     toggleMaximize: () => safe(getCurrentWindow().toggleMaximize()),
     close: () => safe(getCurrentWindow().close()),

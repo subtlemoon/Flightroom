@@ -121,12 +121,21 @@ export function asShotTempTint(info) {
 // point stops at the edge, on the line from D50 towards where it was asked.
 const MIN_WHITE = 1 / 16;
 const D50_XY = [0.3457, 0.3585];
-const whiteRatio = (cm, xy) => { const n = apply3(cm(xy), xyToXYZ(xy)); return Math.min(...n) / Math.max(...n); };
+// The eye's cones also have to see some of it: Bradford adaptation to D65
+// needs no cone scaled more than 10x (the DNG SDK's limit), or the white
+// can't come out white.
+const CONE_D65 = () => apply3(BRADFORD, [0.95047, 1, 1.08883]);
+const reachable = (cm, xy) => {
+  const n = apply3(cm(xy), xyToXYZ(xy));
+  if (Math.min(...n) / Math.max(...n) < MIN_WHITE) return false;
+  const c = apply3(BRADFORD, xyToXYZ(xy)), d = CONE_D65();
+  return c.every((v, i) => v > 0 && d[i] / v <= 10 && d[i] / v >= 0.1);
+};
 export function reachableWhite(xy, cm) {
-  if (whiteRatio(cm, xy) >= MIN_WHITE) return xy;
+  if (reachable(cm, xy)) return xy;
   const at = (t) => [D50_XY[0] + (xy[0] - D50_XY[0]) * t, D50_XY[1] + (xy[1] - D50_XY[1]) * t];
   let lo = 0, hi = 1;
-  for (let i = 0; i < 24; i++) { const m = (lo + hi) / 2; if (whiteRatio(cm, at(m)) >= MIN_WHITE) lo = m; else hi = m; }
+  for (let i = 0; i < 24; i++) { const m = (lo + hi) / 2; if (reachable(cm, at(m))) lo = m; else hi = m; }
   return at(lo);
 }
 
@@ -134,9 +143,14 @@ const BRADFORD = [0.8951, 0.2664, -0.1614, -0.7502, 1.7135, 0.0367, 0.0389, -0.0
 const D65 = [0.95047, 1, 1.08883];
 const XYZ_TO_SRGB = [3.2404542, -1.5371385, -0.4985314, -0.969266, 1.8760108, 0.041556, 0.0556434, -0.2040259, 1.0572252];
 
+// Bradford adaptation, with each cone's scale pinned to 0.1-10 as the DNG SDK
+// does (MapWhiteMatrix). Unpinned, a very warm white with Tint pushed toward
+// magenta has almost no blue-cone response: the scale shoots up and flips
+// sign, so the photo jumps between solid blue and solid yellow.
 function adapt(fromXYZ, toXYZ) {
-  const a = apply3(BRADFORD, fromXYZ), b = apply3(BRADFORD, toXYZ);
-  return mul3(inv3(BRADFORD), mul3(diag([b[0] / a[0], b[1] / a[1], b[2] / a[2]]), BRADFORD));
+  const a = apply3(BRADFORD, fromXYZ).map((v) => Math.max(v, 0)), b = apply3(BRADFORD, toXYZ).map((v) => Math.max(v, 0));
+  const s = a.map((v, i) => Math.max(0.1, Math.min(v > 0 ? b[i] / v : 10, 10)));
+  return mul3(inv3(BRADFORD), mul3(diag(s), BRADFORD));
 }
 
 // For a white balance: the per-channel multipliers (smallest = 1, so clipped
@@ -152,7 +166,11 @@ export function colorTransform(info, temp, tint) {
   // Balanced camera RGB (1,1,1) is the white point; it maps to sRGB white.
   const camToXYZ = mul3(inv3(M), diag(neutral.map((n) => n * lo)));
   let toSrgb = mul3(XYZ_TO_SRGB, mul3(adapt(whiteXYZ, D65), camToXYZ));
+  // Each row is scaled so the white comes out neutral. Where the adaptation
+  // above had to be pinned, a row's white can head to zero (and past it); its
+  // scale stops at 4x the others' instead of blowing up and flipping sign.
   const w = apply3(toSrgb, [1, 1, 1]);
-  toSrgb = toSrgb.map((v, k) => v / w[Math.floor(k / 3)]);
+  const floor = Math.max(...w) / 4;
+  toSrgb = toSrgb.map((v, k) => v / Math.max(w[Math.floor(k / 3)], floor));
   return { wb, matrix: toSrgb };
 }
