@@ -71,6 +71,10 @@ export function lightFor(mode, kind, integrated) {
 function apply() {
   light = lightFor(graphicsMode(), state.kind, state.integrated);
   setGentleGraphics(light);
+  // The AI rainbow rings stop turning (styles.css .gfx-light): each turning
+  // ring repaints the window 60 times a second, which kept an Iris Xe at 99%
+  // with nothing happening.
+  if (typeof document !== 'undefined') document.documentElement.classList.toggle('gfx-light', light);
 }
 
 /** Once at start: integrated = the computer has no graphics card with its own memory (ai.rs gpu_info). */
