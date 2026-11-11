@@ -31,10 +31,10 @@ fn handle(app: &tauri::AppHandle, req: &tauri::http::Request<Vec<u8>>) -> photos
 /// same list each time). wry's defaults first, which setting any replaces;
 /// then the fast graphics card on laptops with two: WebView2 otherwise draws
 /// on the built-in Intel/AMD one even when a GeForce or Radeon is there.
-/// CalculateNativeWinOcclusion off: Chromium stops painting a window it thinks
-/// is covered, and on an Iris Xe laptop Flightroom's window stayed black until
-/// another window was switched to and back (no graphics reset was logged).
-const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --force_high_performance_gpu --disable-domain-blocking-for-3d-apis";
+/// (Chromium's covered-window check stays on: turning it off in 2.18.4 kept a
+/// hidden Flightroom drawing at full speed behind other windows. The Iris Xe
+/// black screen was the overlay plane, handled by browser_args.)
+const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --force_high_performance_gpu --disable-domain-blocking-for-3d-apis";
 
 /// BROWSER_ARGS, plus --disable-direct-composition on Intel Iris Xe / UHD:
 /// a friend's whole screen went black while dragging sliders and stayed black

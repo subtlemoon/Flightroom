@@ -931,6 +931,8 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .ai-group { display: flex; flex-direction: column; gap: 2px; padding: 3px; margin: 2px 0 4px; border-radius: var(--r); --ai-edge: 0px; }
 .mask-tools .ai-group { flex-direction: row; padding: 1px; margin: 0; }
 @media (prefers-reduced-motion: reduce) { .ai-glow::before { animation: none; } }
+/* Lighter graphics (develop/graphics.js): rings hold still unless something is working. */
+.gfx-light .ai-glow:not(.busy)::before { animation: none; }
 
 /* AI grade (Develop, top of the right panel) */
 .mood { display: flex; flex-direction: column; gap: 8px; }
