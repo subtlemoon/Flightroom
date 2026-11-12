@@ -29,7 +29,8 @@ export function useMoodGrade({ photo, s, update, stage, aiMasks, ensure, toast }
   const [last, setLast] = useState(null);
   const [opts, setOptsState] = useState(readOpts);
   const live = useRef(null);
-  useEffect(() => { setLast(null); }, [photo?.id]);
+  // Another photo: a grade still working stops (its renders and result would land on the new photo).
+  useEffect(() => { live.current = null; setBusy(null); setLast(null); }, [photo?.id]);
   const setOpts = (patch) => setOptsState((o) => { const n = { ...o, ...patch }; try { localStorage.setItem(OPTS_KEY, JSON.stringify(n)); } catch {} return n; });
 
   // The vision model's look at the photo, or null when it's off, declined or can't run here (then words alone grade).
@@ -109,10 +110,9 @@ export function useMoodGrade({ photo, s, update, stage, aiMasks, ensure, toast }
       setLast({ name: mood.name, unknown: mood.unknown, subject: subjectNote, saw: saw || null, notes, picked: !typed });
       aiDone('AI grade is done', `Graded “${mood.name}”`);
     } catch (err) {
-      if (err.message !== 'cancelled') { toast(`AI grade didn't work: ${err.message || err}`); aiDone('AI grade didn\'t work', String(err.message || err)); }
+      if (err.message !== 'cancelled' && live.current === id) { toast(`AI grade didn't work: ${err.message || err}`); aiDone('AI grade didn\'t work', String(err.message || err)); }
     } finally {
-      if (live.current === id) live.current = null;
-      setBusy(null);
+      if (live.current === id) { live.current = null; setBusy(null); }
     }
   };
   return { grade, busy, last, opts, setOpts };
