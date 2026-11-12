@@ -1,3 +1,4 @@
+import { Vectorscope } from './scope.jsx';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { bridge as app } from '../bridge.js';
 import { Dropdown, Icon, Modal, PanelHandle } from './ui.jsx';
@@ -1682,6 +1683,7 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
         <span>{meta?.model || info.camera}</span>
         <ShotLine meta={meta} />
       </div>
+      <Vectorscope />
       <div className="dev-row">
         <div className="stars small-stars">
           {[1, 2, 3, 4, 5].map((n) => (
@@ -1794,6 +1796,10 @@ function smoothBins(bins) {
   });
 }
 
+// Lightroom's histogram colours, measured from its panel.
+const HIST_FILLS = [[0, 'rgba(236,40,40,0.82)'], [2, 'rgba(10,100,225,0.82)'], [1, 'rgba(46,172,74,0.82)']];
+const HIST_GREY = 'rgb(194,194,194)';
+
 let lastHistogram = null;
 if (typeof window !== 'undefined') window.addEventListener('develop:hist', (e) => { lastHistogram = e.detail; });
 
@@ -1845,22 +1851,24 @@ export function Histogram() {
     ctx.globalCompositeOperation = 'source-over';
     ctx.clearRect(0, 0, w, h);
     if (!bins) return;
-    // Drawn as Lightroom draws it: counts to scale (not a square root, which
-    // stretched the low parts of the histogram up), lightly smoothed, and the
-    // channels added so that where all three overlap the histogram is grey,
-    // two make yellow, cyan or magenta, and one shows its own colour.
+    // Drawn as Lightroom draws it: counts to scale, lightly smoothed, each
+    // channel a see-through fill (red, then blue, then green on top, which is
+    // what gives Lightroom's olive and teal where two overlap, never pink),
+    // and light grey wherever all three overlap.
     if (!smooth) return;
     let max = 1e-6;
     for (const b of smooth) for (let i = 2; i < 254; i++) max = Math.max(max, b[i]);
-    ctx.globalCompositeOperation = 'lighter';
-    [[0.55, 0.08, 0.08], [0.08, 0.55, 0.08], [0.08, 0.08, 0.55]].forEach((col, ch) => {
-      ctx.fillStyle = `rgb(${col.map((v) => Math.round(v * 255)).join(',')})`;
+    const yAt = (ch, i) => h - Math.min(1, smooth[ch][i] / max) * h * 0.95;
+    const fill = (style, y) => {
+      ctx.fillStyle = style;
       ctx.beginPath();
       ctx.moveTo(0, h);
-      for (let i = 0; i < 256; i++) ctx.lineTo((i / 255) * w, h - Math.min(1, smooth[ch][i] / max) * h * 0.95);
+      for (let i = 0; i < 256; i++) ctx.lineTo((i / 255) * w, y(i));
       ctx.lineTo(w, h);
       ctx.fill();
-    });
+    };
+    HIST_FILLS.forEach(([ch, style]) => fill(style, (i) => yAt(ch, i)));
+    fill(HIST_GREY, (i) => Math.max(yAt(0, i), yAt(1, i), yAt(2, i)));
     const total = bins[0].reduce((a, b) => a + b, 0);
     const lo = (bins[0][0] + bins[1][0] + bins[2][0]) / total / 3, hi = (bins[0][255] + bins[1][255] + bins[2][255]) / total / 3;
     ctx.globalCompositeOperation = 'source-over';
