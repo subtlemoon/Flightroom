@@ -484,7 +484,12 @@ export class Renderer {
   updateChroma(info, s) {
     if (!(s.nrColor > 0 || this.masks?.some((m) => adjOf(m, 'moire') > 0))) { this.chromaOn = false; return; }
     this.chromaOn = true;
-    if (this.chroma && this.chromaKey === this.guideKey) return;
+    // The noise is measured on the processor (noise.js, ~10 ms): while Temp or
+    // Tint is dragged, at most a few times a second; the old one is close.
+    const now = performance.now();
+    const fresh = this.noiseSrc === this.src && this.noiseKey === this.guideKey;
+    const remeasure = !fresh && (this.noiseSrc !== this.src || now - this.noiseAt > 300);
+    if (this.chroma && this.chromaKey === this.guideKey && !remeasure) return;
     const cw = Math.max(8, Math.round(this.src.w / 2)), ch = Math.max(8, Math.round(this.src.h / 2));
     if (!this.chroma || this.chroma[0].w !== cw || this.chroma[0].h !== ch) {
       for (const t of this.chroma || []) this.free(t);
@@ -492,7 +497,10 @@ export class Renderer {
     }
     const [a, b] = this.chroma;
     const col = this.colorUniforms(info, s);
-    this.noise = noiseModel(this.srcFrame, col.uWB, col.uCam);
+    if (remeasure || !this.noise) {
+      this.noise = noiseModel(this.srcFrame, col.uWB, col.uCam);
+      this.noiseSrc = this.src; this.noiseKey = this.guideKey; this.noiseAt = now;
+    }
     // Sigma about 14 full-size pixels on a 6000 px photo, as wide as Lightroom's at 25.
     const sigma = Math.max(1.5, Math.max(cw, ch) / CNR_DIV);
     this.draw('cnrDown', a, { uSrc: this.src.tex, uOutSize: [cw, ch], ...col });

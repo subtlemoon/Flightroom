@@ -22,39 +22,38 @@ for (let h = 0; h < 65536; h++) {
  */
 export function noiseModel(frame, wb, cam) {
   const { w, h, data } = frame;
-  const bins = Array.from({ length: NOISE_BINS }, () => []);
-  const lin = (i, o) => {
-    let r = f16[data[i]] * wb[0], g = f16[data[i + 1]] * wb[1], b = f16[data[i + 2]] * wb[2];
-    r = Math.min(r, 1); g = Math.min(g, 1); b = Math.min(b, 1);
-    o[0] = cam[0] * r + cam[3] * g + cam[6] * b;
-    o[1] = cam[1] * r + cam[4] * g + cam[7] * b;
-    o[2] = cam[2] * r + cam[5] * g + cam[8] * b;
-  };
-  const a = [0, 0, 0], c = [0, 0, 0];
-  // About 250k pairs, spread over the whole photo.
-  const step = Math.max(1, Math.floor(Math.sqrt((w * h) / 250000)));
+  // About 60k pairs, spread over the whole photo: a few milliseconds, as this
+  // runs again while Temp or Tint is dragged.
+  const step = Math.max(1, Math.floor(Math.sqrt((w * h) / 60000)));
+  const most = Math.ceil(h / step) * Math.ceil(w / step);
+  const bins = Array.from({ length: NOISE_BINS }, () => new Float32Array(most));
+  const n = new Int32Array(NOISE_BINS);
+  const [m0, m1, m2, m3, m4, m5, m6, m7, m8] = cam;
+  const [w0, w1, w2] = wb;
   for (let y = 0; y < h; y += step) {
     for (let x = 0; x + 1 < w; x += step) {
       const i = (y * w + x) * 3;
-      lin(i, a); lin(i + 3, c);
-      const ya = 0.2126 * a[0] + 0.7152 * a[1] + 0.0722 * a[2];
-      const yc = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-      const ym = (ya + yc) / 2;
-      const k = Math.round((Math.log2(Math.max(ym, 1e-4)) - NOISE_LO) / NOISE_STEP);
+      // Both pixels to linear sRGB, as the shaders' toLinear (without the highlight easing).
+      let r = Math.min(f16[data[i]] * w0, 1), g = Math.min(f16[data[i + 1]] * w1, 1), b = Math.min(f16[data[i + 2]] * w2, 1);
+      const ar = m0 * r + m3 * g + m6 * b, ag = m1 * r + m4 * g + m7 * b, ab = m2 * r + m5 * g + m8 * b;
+      r = Math.min(f16[data[i + 3]] * w0, 1); g = Math.min(f16[data[i + 4]] * w1, 1); b = Math.min(f16[data[i + 5]] * w2, 1);
+      const cr = m0 * r + m3 * g + m6 * b, cg = m1 * r + m4 * g + m7 * b, cb = m2 * r + m5 * g + m8 * b;
+      const ya = 0.2126 * ar + 0.7152 * ag + 0.0722 * ab;
+      const yc = 0.2126 * cr + 0.7152 * cg + 0.0722 * cb;
+      const k = Math.round((Math.log2(Math.max((ya + yc) / 2, 1e-4)) - NOISE_LO) / NOISE_STEP);
       if (k < 0 || k >= NOISE_BINS) continue;
-      const dr = a[0] - ya - (c[0] - yc), db = a[2] - ya - (c[2] - yc);
+      const dr = ar - ya - (cr - yc), db = ab - ya - (cb - yc);
       const d = dr * dr + db * db;
-      if (Number.isFinite(d)) bins[k].push(d);
+      if (d === d && d !== Infinity) bins[k][n[k]++] = d;
     }
   }
   // |d|^2 of two independent pixels' offsets is 2 variances times a chi-square
   // of 2 degrees, whose median is 2 ln 2.
   const out = new Float32Array(12);
   for (let k = 0; k < NOISE_BINS; k++) {
-    const v = bins[k];
-    if (v.length < 200) continue;
-    v.sort((p, q) => p - q);
-    out[k] = v[v.length >> 1] / (4 * Math.LN2);
+    if (n[k] < 200) continue;
+    const a = bins[k].subarray(0, n[k]).sort();
+    out[k] = a[a.length >> 1] / (4 * Math.LN2);
   }
   // Too few pixels at a brightness: take the nearest measured one (or, with
   // nothing measured, a clean photo's).
