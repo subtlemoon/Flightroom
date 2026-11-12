@@ -77,7 +77,25 @@ uniform vec2 uOutSize;
 uniform float uGlowGain;  // the exposure, as a factor
 uniform float uGlowMode;  // 0: weighted light (Bloom, Motion, Streak), 1: above a threshold (Halation), 2: the photo (Diffusion)
 uniform vec4 uGlowW;      // 0: e, n, strength; 1: threshold, steepness; w: box width (texels)
+uniform float uDcp;       // the profile's tone curve (uTone) is in use
+uniform sampler2D uTone;
+uniform float uContrast;  // the rendering's base contrast (FINAL's uContrast)
 out vec4 o;
+// How bright scene brightness y shows (display, linear), as FINAL's base
+// rendering draws it: the profile's tone curve (or the shoulder), then the
+// base contrast. The glow keys on what you see, as Lightroom's does.
+float shown(float y) {
+  float t;
+  if (uDcp > 0.5) {
+    int n = textureSize(uTone, 0).x;
+    float p = clamp(y, 0.0, 1.0) * float(n - 1);
+    int i = min(int(p), n - 2);
+    t = mix(texelFetch(uTone, ivec2(i, 0), 0).r, texelFetch(uTone, ivec2(i + 1, 0), 0).r, p - float(i));
+  } else t = y < 0.72 ? y : 0.72 + 0.28 * (1.0 - exp(-(y - 0.72) / 0.28));
+  float d = t <= 0.0031308 ? t * 12.92 : 1.055 * pow(t, 1.0 / 2.4) - 0.055;
+  d = clamp(d + uContrast * (d * d * (3.0 - 2.0 * d) - d), 0.0, 1.0);
+  return d <= 0.04045 ? d / 12.92 : pow((d + 0.055) / 1.055, 2.4);
+}
 void main() {
   vec2 cell = 1.0 / uOutSize;
   // Each pixel averages a box uGlowW.w texels wide: the slight pre-blur.
@@ -92,10 +110,11 @@ void main() {
     vec3 raw = max(texture(uSrc, uv).rgb, vec3(0.0));
     vec3 l = max(toLinear(raw) * uGlowGain, vec3(0.0));
     vec3 hue = max(uCam * min(raw * uWB, vec3(1.0)), vec3(0.0));
-    l = hue * (min(dot(l, W709), 1.0) / max(dot(hue, W709), 1e-5));
+    l = hue * (min(dot(l, W709), 4.0) / max(dot(hue, W709), 1e-5));
     sum += l;
   }
   vec3 c = sum / 36.0;
+  if (uGlowMode < 1.5) { float y = dot(c, W709); if (y > 1e-5) c *= (y > 1.0 ? y : shown(y)) / y; }
   if (uGlowMode < 0.5) {
     // Weighted by how near white it is: K (eY / (1 + e - Y))^n.
     float y = clamp(dot(c, W709), 0.0, 1.0);
@@ -745,7 +764,8 @@ void main() {
       // Bloom, Motion, Streak: added, with faint glow faded out (dim, small lights don't glow).
       gl *= glowAmt;
       float yg = max(dot(gl, W709), 0.0);
-      dl += gl * (1.0 - exp(-pow(yg / uGlowF.x, uGlowF.y)));
+      vec3 ga = gl * (1.0 - exp(-pow(yg / uGlowF.x, uGlowF.y)));
+      dl = 1.0 - (1.0 - clamp(dl, 0.0, 1.0)) * exp(-ga);
     } else {
       // Halation: red where weak, through orange to white where strong.
       float e = gl.r * glowAmt * uGlowF.x;

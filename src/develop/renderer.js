@@ -495,7 +495,7 @@ export class Renderer {
     };
     // The slight pre-blur widens what each glow pixel averages (a box that wide).
     const w = [plan.w[0], plan.w[1], plan.w[2], Math.max(1, plan.pre * edge * Math.sqrt(12))];
-    this.draw('glowSrc', levels[0].a, { uSrc: this.src.tex, uOutSize: [w0, h0], uGlowGain: plan.gain, uGlowMode: plan.mode, uGlowW: w, ...this.colorUniforms(info, s) });
+    this.draw('glowSrc', levels[0].a, { uSrc: this.src.tex, uOutSize: [w0, h0], uGlowGain: plan.gain, uGlowMode: plan.mode, uGlowW: w, uContrast: lookFor(info, s).contrast, ...this.colorUniforms(info, s) });
     // Down only as far as the widest blur needs.
     const levelFor = (px, per) => Math.max(0, Math.min(LEVELS - 1, Math.floor(Math.log2(px / per))));
     let need = 0;
