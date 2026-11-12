@@ -1329,8 +1329,16 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
     e.currentTarget.setPointerCapture(e.pointerId);
     drag.current = { x: e.clientX, y: e.clientY, moved: false, start: view };
   };
+  // Where the pointer is on the photo, for the Vectorscope's marker (frame units, -1..1).
+  const hoverScope = (e) => {
+    if (!frame || !canvasRef.current || cropMode) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const f = ap(outToFrame(W, H, frame, v), (e.clientX - rect.left) * dpr, H - (e.clientY - rect.top) * dpr);
+    window.dispatchEvent(new CustomEvent('develop:scope-hover', { detail: Math.abs(f[0]) <= 1 && Math.abs(f[1]) <= 1 ? f : null }));
+  };
   const onPointerMove = (e) => {
     const d = drag.current;
+    hoverScope(e);
     if (!d) return;
     const dx = e.clientX - d.x, dy = e.clientY - d.y;
     if (Math.abs(dx) + Math.abs(dy) > 4) d.moved = true;
@@ -1393,7 +1401,8 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
           style={rot ? { transform: `rotate(${rot}deg)`, maxWidth: rot % 180 ? size.h : undefined, maxHeight: rot % 180 ? size.w : undefined } : undefined} />
       )}
       <div ref={hostRef} style={{ width: size.w, height: size.h, opacity: ready ? 1 : 0 }}
-        onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} />
+        onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
+        onPointerLeave={() => window.dispatchEvent(new CustomEvent('develop:scope-hover', { detail: null }))} />
       <div className="stage-top">
         {!ready && !error && <span className="pill-mini">Loading RAW…</span>}
         {ready && <span className="pill-mini">{before ? 'Before' : 'RAW'} · {pct}%</span>}

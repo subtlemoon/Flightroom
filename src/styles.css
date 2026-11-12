@@ -492,6 +492,12 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .dev-scope-toggle { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 4px; background: transparent; border: 0; color: var(--text-2); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
 .dev-scope-toggle:hover, .dev-scope.open .dev-scope-toggle { color: var(--text); }
 .dev-scope-space { height: 22px; padding: 0 6px; gap: 4px; font-size: 12px; background: transparent; border-color: transparent; }
+.dev-scope-tools { display: flex; align-items: center; gap: 2px; }
+.dev-scope-zoom { display: flex; gap: 1px; }
+.dev-scope-zoom button { height: 20px; min-width: 24px; padding: 0 4px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--faint); font: inherit; font-size: 11px; font-variant-numeric: tabular-nums; cursor: pointer; }
+.dev-scope-zoom button:hover { color: var(--text-2); }
+.dev-scope-zoom button.on { background: var(--sel); color: var(--text); }
+.dev-scope-read { padding: 0 8px 6px; font-size: 11px; color: var(--text-2); font-variant-numeric: tabular-nums; text-align: center; min-height: 18px; }
 .dev-scope-canvas { width: 100%; aspect-ratio: 1 / 0.92; display: block; }
 .dev-shot { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .dev-shot span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
