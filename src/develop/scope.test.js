@@ -23,12 +23,12 @@ describe('vectorscope', () => {
 });
 
 describe('vectorscope reading', () => {
-  it('does not pile colours outside sRGB onto one edge', async () => {
+  it('clips colours outside the space to its edge, as Lightroom does', async () => {
     const { scopeAt } = await import('./scope.js');
-    // Two oranges past sRGB (Melissa RGB) that clipping would put on the same spot.
+    // Two oranges past sRGB (Melissa RGB) that differ only outside sRGB land together.
     const a = scopeAt(new Uint8Array([230, 120, 20, 255]), 1, 1, 0, 0, 'srgb');
-    const b = scopeAt(new Uint8Array([230, 120, 40, 255]), 1, 1, 0, 0, 'srgb');
-    expect(Math.hypot(a[0] - b[0], a[1] - b[1])).toBeGreaterThan(0.02);
+    const b = scopeAt(new Uint8Array([230, 120, 10, 255]), 1, 1, 0, 0, 'srgb');
+    expect(Math.hypot(a[0] - b[0], a[1] - b[1])).toBeLessThan(0.01);
   });
   it('reads a spot against the skin line', async () => {
     const { skinReading, SKIN_ANGLE } = await import('./scope.js');

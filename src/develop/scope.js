@@ -12,10 +12,11 @@ export const SCOPE_SPACES = [
   { id: 'prophoto', label: 'ProPhoto', m: [1, 0, 0, 0, 1, 0, 0, 0, 1], trc: 1.8 },
 ];
 
-// Rec. 709 chroma; scaled so the 75% colour targets sit where Lightroom puts
-// its tick marks (about 0.8 of the ring, 0.9 for green and magenta).
+// Rec. 709 chroma, scaled as Lightroom's: the space's pure (100%) colours
+// sit on the tick marks (about 0.8 of the ring, 0.9 for green and magenta),
+// so its gamut edge runs straight from tick to tick, as Lightroom's does.
 const KR = 0.2126, KB = 0.0722, KG = 1 - KR - KB;
-export const SCOPE_GAIN = 2.07;
+export const SCOPE_GAIN = 1.55;
 export function chroma(r, g, b) {
   const y = KR * r + KG * g + KB * b;
   return [((b - y) / (2 - 2 * KB)) * SCOPE_GAIN, ((r - y) / (2 - 2 * KR)) * SCOPE_GAIN];
@@ -34,7 +35,6 @@ function encoder(trc) {
       : (v) => v ** (1 / trc);
   const t = new Float32Array(ENC + 1);
   for (let i = 0; i <= ENC; i++) t[i] = f(i / ENC);
-  t.f = f;
   return (encoders[trc] = t);
 }
 let LIN = null;
@@ -42,16 +42,14 @@ const lin = () => {
   if (!LIN) { LIN = new Float32Array(256); for (let i = 0; i < 256; i++) LIN[i] = decodeS(i / 255); }
   return LIN;
 };
-// Encoded through the space's tone curve. Colours outside the space are not
-// clipped (that piled them up on a hard edge): below 0 is mirrored, above 1
-// follows the curve on, so they land where they really are, past the ring.
-const curveAt = (t, v) => (v >= 0 && v <= 1 ? t[Math.round(v * ENC)] : v < 0 ? -curveAt(t, -v) : t.f(v));
+// Encoded through the space's tone curve, clipped to the space as Lightroom's
+// scope is (colours outside it gather on the gamut's edge, as they do there).
 const clip = (t, v) => t[Math.round((v <= 0 ? 0 : v >= 1 ? 1 : v) * ENC)];
 
 /** Where one pixel (Melissa RGB bytes) lands on the scope: [x, y], ring = 1; plus its sRGB colour. */
 function place(sp, r8, g8, b8) {
   const L = lin(), r = L[r8], g = L[g8], b = L[b8], m = sp.m, enc = encoder(sp.trc);
-  return chroma(curveAt(enc, m[0] * r + m[1] * g + m[2] * b), curveAt(enc, m[3] * r + m[4] * g + m[5] * b), curveAt(enc, m[6] * r + m[7] * g + m[8] * b));
+  return chroma(clip(enc, m[0] * r + m[1] * g + m[2] * b), clip(enc, m[3] * r + m[4] * g + m[5] * b), clip(enc, m[6] * r + m[7] * g + m[8] * b));
 }
 const spaceOf = (id) => SCOPE_SPACES.find((x) => x.id === id) || SCOPE_SPACES[0];
 
@@ -108,11 +106,11 @@ export function skinReading([x, y]) {
   return { off: d, sat: sat * 100 };
 }
 
-/** The six colour targets: name, dot colour, angle, and the 75% target's distance from the centre. */
+/** The six colour targets: name, dot colour, angle, and the pure colour's distance from the centre (its tick). */
 export const TARGETS = [
   ['Red', '#e04848', [1, 0, 0]], ['Magenta', '#d84ad8', [1, 0, 1]], ['Blue', '#4040e0', [0, 0, 1]],
   ['Cyan', '#40d8d8', [0, 1, 1]], ['Green', '#40c840', [0, 1, 0]], ['Yellow', '#dede40', [1, 1, 0]],
 ].map(([name, dot, rgb]) => {
-  const [x, y] = chroma(...rgb.map((v) => v * 0.75));
+  const [x, y] = chroma(...rgb);
   return { name, dot, angle: Math.atan2(y, x), tick: Math.hypot(x, y) };
 });
