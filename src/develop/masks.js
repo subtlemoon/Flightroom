@@ -15,7 +15,8 @@ export const MASK_EDGE = 2048; // long edge of the mask images the renderer uses
 
 const L = (key, label, crs, min, max, step = 1, extra = {}) => ({ key, label, crs, min, max, step, def: 0, ...extra });
 // Lightroom's mask sliders, in its sections. `crs` values are the slider / 100
-// (exposure: stops), like Lightroom's own local corrections; sliders without
+// (exposure: stops / 4, so 0.25 is +1 stop: Lightroom read -0.24 as -0.96 on
+// JWL_7530), like Lightroom's own local corrections; sliders without
 // one have no Lightroom equivalent in the sidecar.
 export const LOCAL_SECTIONS = [
   { id: 'tone', title: 'Tone', sliders: [
@@ -400,7 +401,7 @@ export function masksToCrs(masks) {
     for (const sl of LOCAL_SLIDERS) {
       if (!sl.crs) continue;
       const v = adjOf(m, sl.key);
-      local[sl.crs] = f6(sl.key === 'exposure' ? v : v / 100);
+      local[sl.crs] = f6(sl.key === 'exposure' ? v / 4 : v / 100);
     }
     if (m.tint && !m.off?.color) Object.assign(local, { LocalToningHue: f6(m.tint.hue), LocalToningSaturation: f6(m.tint.sat / 100) });
     const entries = [];

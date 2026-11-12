@@ -47,7 +47,7 @@ describe('develop settings in the sidecar', () => {
     m.parts.push({ ...newPart('brush', 'subtract'), strokes: [{ erase: false, size: 0.02, feather: 50, flow: 100, pts: [[0.123456789, 0.5], [0.2, 0.5]] }] });
     m.adj = { exposure: -1.5, clarity: 20 };
     const out = toXmp({ ...defaults(asShot), masks: [m] });
-    expect(out.xml.GradientBasedCorrections).toContain('crs:LocalExposure2012="-1.500000"');
+    expect(out.xml.GradientBasedCorrections).toContain('crs:LocalExposure2012="-0.375000"');
     expect(out.xml.GradientBasedCorrections).toContain('crs:LocalClarity2012="0.200000"');
     expect(out.xml.MaskGroupBasedCorrections).toBe('');
     const back = fromXmp(out.set, out.seqs, asShot, out.own);
