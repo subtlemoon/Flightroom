@@ -1,12 +1,12 @@
 // Every shader program the Develop and Retouch renderers draw with, by name:
 // [vertex, fragment] GLSL. WebGL2 compiles these as they are; WebGPU runs the
 // WGSL made from them (tools/wgsl.mjs writes wgsl.gen.js).
-import { VERT, GUIDE_DOWN, BLUR, FINAL, DISPLAY, COPY, RESAMPLE, GLOW_SRC, GLOW_DOWN, GLOW_LINE, GLOW_MIX } from '../shaders.js';
+import { VERT, GUIDE_DOWN, BLUR, CNR_DOWN, CNR_BLUR, FINAL, DISPLAY, COPY, RESAMPLE, GLOW_SRC, GLOW_DOWN, GLOW_LINE, GLOW_MIX } from '../shaders.js';
 import { DAB_VERT, DAB_FRAG, OP, COVSEL, INSIDE, STRETCH, HEAL_L0, PULL, PUSH, ADJ, SHADE, INNER, STYLE, CLIPA, COMP } from '../compose-shaders.js';
 import { BLUR_FRAG, FX_FRAG } from '../filters.js';
 
 export const PROGRAMS = {
-  down: [VERT, GUIDE_DOWN], blur: [VERT, BLUR], final: [VERT, FINAL], copy: [VERT, COPY], resample: [VERT, RESAMPLE], display: [VERT, DISPLAY],
+  down: [VERT, GUIDE_DOWN], blur: [VERT, BLUR], cnrDown: [VERT, CNR_DOWN], cnrBlur: [VERT, CNR_BLUR], final: [VERT, FINAL], copy: [VERT, COPY], resample: [VERT, RESAMPLE], display: [VERT, DISPLAY],
   glowSrc: [VERT, GLOW_SRC], glowDown: [VERT, GLOW_DOWN], glowLine: [VERT, GLOW_LINE], glowMix: [VERT, GLOW_MIX],
   dab: [DAB_VERT, DAB_FRAG], op: [VERT, OP], covsel: [VERT, COVSEL], inside: [VERT, INSIDE], healL0: [VERT, HEAL_L0], pull: [VERT, PULL],
   push: [VERT, PUSH], comp: [VERT, COMP], adj: [VERT, ADJ], fxBlur: [VERT, BLUR_FRAG], fx: [VERT, FX_FRAG], shade: [VERT, SHADE],
