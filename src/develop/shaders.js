@@ -358,7 +358,7 @@ vec3 gamutIn(vec3 d) {
 // Display colour <-> OKLab (sRGB curve, signed so colours past the gamut edge
 // keep going), for colour grading.
 const float MIX_HUE = 37.97, MIX_SAT_UP = 0.211, MIX_SAT_DOWN = 0.692, MIX_LUM_UP = 0.929, MIX_LUM_DOWN = 0.834, MIX_LUM_SAT = 0.127, MIX_S = 0.0615;
-const float GRADE_C = 0.6302, GRADE_OFF = 0.1036, GRADE_W = 0.1369, GRADE_P = 0.4672;
+const float GRADE_C = 0.6257, GRADE_OFF = 0.1045, GRADE_W = 0.1302, GRADE_P = 0.4262;
 vec3 srgbToLin(vec3 c) {
   vec3 a = abs(c);
   return sign(c) * mix(pow((a + 0.055) / 1.055, vec3(2.4)), a / 12.92, step(a, vec3(0.04045)));
@@ -621,10 +621,6 @@ void main() {
   float base = g.r + dEdge * (1.0 - exp(-dEdge * dEdge / 0.1));
   float detail = l0 - base;
   base += exposure;
-  // Colour grading's regions follow how bright the pixel is before the tone
-  // sliders and curves (Lightroom's do: JWL_7530, Shadows/Blacks +90, kept its
-  // shadow tint on everything that started dark).
-  float gradeL = pow(srgbToLin(vec3(disp(y0 * exp2(exposure)))).r, 1.0 / 3.0);
 
   float bd = disp(exp2(base));
   // How much Highlights and Shadows act comes from a wider neighbourhood that
@@ -870,7 +866,7 @@ void main() {
   // tint (luts.js gradeTints) to the display colour, most in the middle of each
   // channel's range and fading toward black and white, as a soft-light blend does.
   if (uGradeOn > 0.0) {
-    float lk = gradeL;
+    float lk = toOklab(d).x;
     // Blending past 50 widens the regions and strengthens them (chart at 100).
     float bl = uGradeShape.x, up = max(bl - 0.5, 0.0);
     float c = GRADE_C - uGradeShape.y * 0.3, w = GRADE_W * (bl >= 0.5 ? 1.0 + up * 4.0 : (0.1 + bl * 0.4) / 0.3);

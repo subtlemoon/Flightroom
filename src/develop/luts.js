@@ -83,8 +83,8 @@ export function hueTable(s) {
 // each region adds the wheel's hue (turned 12.5 degrees) as a display-RGB tint
 // around zero, leaning so warm tints brighten and blue ones darken as
 // Lightroom's do, scaled by the region's strength and the wheel's amount.
-const GRADE_HUE = -12.81, GRADE_LUMA = -0.778;
-const GRADE_K = [0.3014, 0.792, 0.5005, 0.3057]; // shadows, midtones, highlights, global
+const GRADE_HUE = -13.55, GRADE_LUMA = -0.394;
+const GRADE_K = [0.3108, 0.7623, 0.4859, 0.3055]; // shadows, midtones, highlights, global
 /** Colour grading per region (shadows, midtones, highlights, global): the RGB tint the shader adds. */
 export function gradeTints(s) {
   return ['gShadow', 'gMid', 'gHigh', 'gGlobal'].map((k, r) => {
