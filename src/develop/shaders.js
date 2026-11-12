@@ -888,16 +888,20 @@ void main() {
     vec2 qs = q * (r > 0.0 ? vec2(mix(1.0, uCropAspect, r), 1.0) / mix(1.0, max(uCropAspect, 1.0), r) : vec2(1.0));
     float pw = 2.0 + max(-r, 0.0) * 6.0;
     float dist = pow(pow(abs(qs.x), pw) + pow(abs(qs.y), pw), 1.0 / pw);
-    float m0 = 1.45 - uVigMid * 0.9;
-    float f = 0.08 + uVigFeather * 0.9;
+    // Reach and strength fitted on Lightroom's -15 (midpoint and feather 50) on
+    // IMG_9251: it starts about a third of the way out and takes the corners'
+    // mid tones down 11 L* (was 0.9 strength from halfway out: about half that).
+    float m0 = 1.374 - uVigMid * 0.9;
+    float f = 0.08 + uVigFeather * 1.476;
     float mask = smoothstep(m0 - f * 0.5, m0 + f * 0.5, dist);
-    float amt = abs(uVignette) * mask * 0.9;
+    float amt = abs(uVignette) * mask * 1.58;
     if (uVigStyle > 2.5) d = mix(d, uVignette > 0.0 ? vec3(1.0) : vec3(0.0), amt);
     else {
       vec3 d0 = d;
       // Highlight and Color Priority scale the light (keeping colours); Highlights lets bright parts through.
       d = uVignette > 0.0 ? 1.0 - (1.0 - d) * (1.0 - amt) : d * (1.0 - amt);
-      if (uVigStyle < 1.5) d = mix(d, d0, uVigHighlights * smoothstep(0.55, 1.0, max(d0.r, max(d0.g, d0.b))));
+      // Highlight Priority spares bright parts even with its Highlights at 0 (IMG_9251).
+      if (uVigStyle < 1.5) d = mix(d, d0, (0.83 + 0.17 * uVigHighlights) * smoothstep(mix(0.68, 0.55, uVigHighlights), 1.0, max(d0.r, max(d0.g, d0.b))));
       else d = mix(d, d0, uVigHighlights * 0.5 * smoothstep(0.7, 1.0, max(d0.r, max(d0.g, d0.b))));
     }
   }
