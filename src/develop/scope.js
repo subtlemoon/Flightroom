@@ -34,7 +34,6 @@ function encoder(trc) {
       : (v) => v ** (1 / trc);
   const t = new Float32Array(ENC + 1);
   for (let i = 0; i <= ENC; i++) t[i] = f(i / ENC);
-  t.f = f;
   return (encoders[trc] = t);
 }
 let LIN = null;
@@ -42,16 +41,14 @@ const lin = () => {
   if (!LIN) { LIN = new Float32Array(256); for (let i = 0; i < 256; i++) LIN[i] = decodeS(i / 255); }
   return LIN;
 };
-// Encoded through the space's tone curve. Colours outside the space are not
-// clipped (that piled them up on a hard edge): below 0 is mirrored, above 1
-// follows the curve on, so they land where they really are, past the ring.
-const curveAt = (t, v) => (v >= 0 && v <= 1 ? t[Math.round(v * ENC)] : v < 0 ? -curveAt(t, -v) : t.f(v));
+// Encoded through the space's tone curve, clipped to the space as Lightroom's
+// scope is (colours outside it gather on the gamut's edge, as they do there).
 const clip = (t, v) => t[Math.round((v <= 0 ? 0 : v >= 1 ? 1 : v) * ENC)];
 
 /** Where one pixel (Melissa RGB bytes) lands on the scope: [x, y], ring = 1; plus its sRGB colour. */
 function place(sp, r8, g8, b8) {
   const L = lin(), r = L[r8], g = L[g8], b = L[b8], m = sp.m, enc = encoder(sp.trc);
-  return chroma(curveAt(enc, m[0] * r + m[1] * g + m[2] * b), curveAt(enc, m[3] * r + m[4] * g + m[5] * b), curveAt(enc, m[6] * r + m[7] * g + m[8] * b));
+  return chroma(clip(enc, m[0] * r + m[1] * g + m[2] * b), clip(enc, m[3] * r + m[4] * g + m[5] * b), clip(enc, m[6] * r + m[7] * g + m[8] * b));
 }
 const spaceOf = (id) => SCOPE_SPACES.find((x) => x.id === id) || SCOPE_SPACES[0];
 
