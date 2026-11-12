@@ -621,6 +621,10 @@ void main() {
   float base = g.r + dEdge * (1.0 - exp(-dEdge * dEdge / 0.1));
   float detail = l0 - base;
   base += exposure;
+  // Colour grading's regions follow how bright the pixel is before the tone
+  // sliders and curves (Lightroom's do: JWL_7530, Shadows/Blacks +90, kept its
+  // shadow tint on everything that started dark).
+  float gradeL = pow(srgbToLin(vec3(disp(y0 * exp2(exposure)))).r, 1.0 / 3.0);
 
   float bd = disp(exp2(base));
   // How much Highlights and Shadows act comes from a wider neighbourhood that
@@ -866,7 +870,7 @@ void main() {
   // tint (luts.js gradeTints) to the display colour, most in the middle of each
   // channel's range and fading toward black and white, as a soft-light blend does.
   if (uGradeOn > 0.0) {
-    float lk = toOklab(d).x;
+    float lk = gradeL;
     // Blending past 50 widens the regions and strengthens them (chart at 100).
     float bl = uGradeShape.x, up = max(bl - 0.5, 0.0);
     float c = GRADE_C - uGradeShape.y * 0.3, w = GRADE_W * (bl >= 0.5 ? 1.0 + up * 4.0 : (0.1 + bl * 0.4) / 0.3);
