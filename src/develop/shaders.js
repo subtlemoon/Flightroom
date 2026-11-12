@@ -15,9 +15,13 @@ uniform mat3 uCam;
 // channel (usually green) stops while the others keep rising, which tints
 // bright skies and white clothes pink; as any channel nears clipping the
 // colour eases to neutral white, as raw converters' highlight handling does.
+// Below-black noise stays negative here: cutting each camera channel at 0
+// before the white balance raised dark noise unevenly (blue and red more than
+// green), so high-ISO shadows came out purple. It averages out in noise
+// reduction and downsizing, and intoRange() makes what is left black.
 vec3 toLinear(vec3 cam) {
   vec3 c = max(cam, vec3(0.0));
-  vec3 bal = min(c * uWB, vec3(1.0));
+  vec3 bal = min(cam * uWB, vec3(1.0));
   float clip = smoothstep(0.88, 0.97, max(c.r, max(c.g, c.b)));
   bal = mix(bal, vec3(max(bal.r, max(bal.g, bal.b))), clip);
   return uCam * bal;
@@ -61,6 +65,73 @@ void main() {
     float w = exp(-float(i * i) / (2.0 * uSigma * uSigma));
     sum += texture(uTex, uv + uStep * float(i)) * w;
     wsum += w;
+  }
+  o = sum / wsum;
+}`;
+
+// Colour noise reduction's wide part (renderer.js updateChroma): the photo at
+// half the overview's size as its red and blue offsets from grey and its
+// brightness, then blurred only among pixels of similar brightness and colour
+// as far as the photo's noise allows (CNR_BLUR, noise.js), so dark noise is
+// averaged over a wide area, as in Lightroom, without colour running across
+// edges such as a lit plane against the night sky or into small coloured lights. Offsets and brightness are averaged apart
+// and divided afterwards: averaging colour already divided by each noisy
+// pixel's brightness leans dark noise purple.
+export const CNR_DOWN = `${COMMON}
+uniform sampler2D uSrc;
+uniform vec2 uOutSize;
+out vec4 o;
+void main() {
+  vec2 cell = 1.0 / uOutSize;
+  vec2 base = (gl_FragCoord.xy - 0.5) * cell;
+  vec4 acc = vec4(0.0);
+  for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) {
+    vec3 lin = toLinear(texture(uSrc, base + (vec2(float(i), float(j)) + 0.5) * cell * 0.5).rgb);
+    float y = dot(lin, W709);
+    vec2 c = lin.rb - y;
+    acc += vec4(c, y, dot(c, c));
+  }
+  o = vec4(acc.rgb * 0.25, 1.0);
+}`;
+
+// The photo's colour noise (variance of an overview pixel's offset parts) at brightness y (noise.js).
+const NOISE_AT = `
+uniform vec4 uNoise[3]; // 8 bins (the rest unused: arrays of vec4 are set as more than 9 numbers)
+float noiseAt(float y) {
+  float t = clamp((log2(max(y, 1e-4)) + 10.0) / 1.25, 0.0, 7.0);
+  int i = int(floor(t)); float f = t - float(i);
+  float a = i < 4 ? uNoise[0][i] : uNoise[1][i - 4];
+  int j = min(i + 1, 7);
+  float b = j < 4 ? uNoise[0][j] : uNoise[1][j - 4];
+  return mix(a, b, f);
+}`;
+
+export const CNR_BLUR = `#version 300 es
+precision highp float;
+${NOISE_AT}
+uniform sampler2D uTex;
+uniform vec2 uStep;   // one texel along the blur direction
+uniform float uSigma; // in texels
+uniform float uRange; // brightness difference (stops) that still counts as alike
+// Brightness is compared in stops above this, so near-black noise all counts as alike.
+const float CNR_EPS = 0.02;
+uniform float uNoiseDiv; // how many overview pixels a texel here averages (noise variance divides by it)
+const float CNR_TB = 25.0;
+out vec4 o;
+void main() {
+  vec2 uv = gl_FragCoord.xy / vec2(textureSize(uTex, 0));
+  vec4 c0 = texture(uTex, uv);
+  vec4 sum = vec4(0.0); float wsum = 0.0;
+  int r = int(ceil(uSigma * 2.5));
+  for (int i = -24; i <= 24; i++) {
+    if (i < -r || i > r) continue;
+    vec4 t = texture(uTex, uv + uStep * float(i));
+    float d = log2(max(t.b, 0.0) + CNR_EPS) - log2(max(c0.b, 0.0) + CNR_EPS);
+    // Colours further apart than the noise explains are different things.
+    vec2 dc = t.rg / max(t.b, 0.004) - c0.rg / max(c0.b, 0.004);
+    float nv = noiseAt(c0.b) / (uNoiseDiv * max(c0.b * c0.b, 0.004 * 0.004));
+    float w = exp(-float(i * i) / (2.0 * uSigma * uSigma) - d * d / (2.0 * uRange * uRange) - dot(dc, dc) / (2.0 * CNR_TB * nv));
+    sum += t * w; wsum += w;
   }
   o = sum / wsum;
 }`;
@@ -175,15 +246,18 @@ void main() {
 }`;
 
 export const FINAL = `${COMMON}
+${NOISE_AT}
 uniform sampler2D uSrc;   // whole photo (overview)
 uniform sampler2D uHi;    // a sharper part of it, when zoomed or exporting
 uniform vec4 uHiRect;     // where uHi sits, in photo coordinates (0-1); w = 0 when unused
 uniform vec4 uHiSafe;     // the part of uHiRect that is safe to use
 uniform sampler2D uGuide;
+uniform sampler2D uChroma; // colour noise reduction's wide part (CNR_DOWN, CNR_BLUR)
+uniform vec2 uChromaPx;    // one of its texels, in photo coordinates
 uniform sampler2D uGlow;   // the glow (GLOW_MIX), in photo coordinates
 uniform vec4 uGlowMix;    // amount, mode (GLOW_SRC's), -, on
 uniform vec4 uGlowF, uGlowF2; // per mode (renderer.js updateGlow, glow.js glowPlan final / final2)
-uniform sampler2D uCurve;
+uniform sampler2D uCurve; // the tone curve (row 0), then each mask's own curve (rows 1-16)
 uniform sampler2D uHue;
 uniform mat3 uOut2Ori;    // output pixel -> oriented pixel of the transformed photo
 uniform mat3 uOri2Photo;  // oriented pixel -> photo coordinates (sensor orientation, 0-1)
@@ -229,6 +303,12 @@ const float CON_LOCAL = 0.45, WB_LOCAL = 0.45, WH_NEG = 0.24, WH_POS = 0.3, BL_N
 uniform float uTexture, uClarity, uDehaze, uVibrance, uSaturation;
 uniform float uAirY;
 uniform float uSharpen, uSharpenRadius, uSharpenDetail, uSharpenMasking;
+uniform float uChromaOn;
+const float CNR_RANGE = 0.8, CNR_T = 30.0, CNR_EPS = 0.02;
+// The noise of a pixel's locally smoothed colour, as a share of one pixel's; and how far
+// (in noise) a neighbour's colour may differ and still count as the same colour.
+const float CNR_LOCAL = 0.11, CNR_TL = 9.0;
+uniform float uNoiseFull; // a photo pixel's colour noise in overview pixels' (noise.js): more at full size
 uniform float uNrLum, uNrColor, uNrLumDetail, uNrLumContrast, uNrColorDetail, uNrColorSmooth;
 uniform float uVignette, uVigMid, uVigRound, uVigFeather, uVigStyle, uVigHighlights;
 uniform float uRefineSat;
@@ -255,7 +335,6 @@ uniform vec4 uMF[16]; // defringe, colour tint (rgb, no brightness)
 uniform vec4 uMP[16]; // point colour: hue (degrees), saturation, brightness, on
 uniform vec4 uMQ[16]; // point colour shifts: hue (degrees), saturation, luminance; range
 uniform vec4 uMS[16]; // point colour softness, own curve on, its refine saturation, glow
-uniform sampler2D uMaskCurve; // each mask's curve, a row each (as uCurve)
 // Lightroom's camera profile (adobe.js), when it renders: its hue/sat map, its
 // look table and a look's (Adobe Color), and its tone curve. Dims: hue, sat
 // and value divisions, and 1 if sRGB-encoded; no hue divisions means none.
@@ -295,6 +374,7 @@ vec3 shoulder(vec3 x) {
   return mix(x, over, step(k, x));
 }
 float shoulder1(float x) { return shoulder(vec3(x)).r; }
+const float CURVE_ROW0 = 0.5 / 17.0;
 const float CHROMA_FLOOR = 0.004;
 vec3 chroma(vec3 c) { float y = dot(c, W709); return (c - y) / max(y, CHROMA_FLOOR); }
 vec3 encode(vec3 x) {
@@ -611,7 +691,12 @@ void main() {
     // Colour as an offset from grey relative to brightness, but never divided by
     // less than CHROMA_FLOOR: in near-black noise brightness is about 0 (or below),
     // and dividing by it turned the noise into bright purple and blue speckles.
-    vec3 csum = chroma(lin); float cw = 1.0;
+    vec4 csum = vec4(lin - dot(lin, W709), dot(lin, W709)); float cw = 1.0;
+    // Neighbours whose colour differs by more than this pixel's noise explains
+    // are something else (a small coloured light next to the dark): left out.
+    vec3 c0 = chroma(lin);
+    float yn0 = max(dot(lin, W709), CHROMA_FLOOR);
+    float nv0 = 2.0 * CNR_TL * noiseAt(max(dot(lin, W709), 0.0)) * uNoiseFull / (yn0 * yn0) + 1e-7;
     float sigma = (0.02 + nrLum * 0.25) * (1.5 - uNrLumDetail);
     float cr = 4.0 * (1.5 - uNrColorDetail);
     for (int i = 0; i < 8; i++) {
@@ -624,21 +709,60 @@ void main() {
       lsum += n1 * w; lw += w;
       if (nrColor > 0.0) {
         vec3 n2 = toLinear(cam(p + dir * uPhotoPx * cr));
-        csum += chroma(n2) * nrColor; cw += nrColor;
+        vec3 e2 = chroma(n2) - c0;
+        float g2 = nrColor * exp(-dot(e2, e2) / nv0);
+        csum += vec4(n2 - dot(n2, W709), dot(n2, W709)) * g2; cw += g2;
         if (uNrColorSmooth > 0.0) {
           vec3 n3 = toLinear(cam(p + dir * uPhotoPx * cr * 2.5));
-          csum += chroma(n3) * nrColor * uNrColorSmooth; cw += nrColor * uNrColorSmooth;
+          vec3 e3 = chroma(n3) - c0;
+          float g3 = nrColor * uNrColorSmooth * exp(-dot(e3, e3) / nv0);
+          csum += vec4(n3 - dot(n3, W709), dot(n3, W709)) * g3; cw += g3;
         }
       }
     }
     lin = lsum / lw;
     // Contrast brings back some of the local contrast the smoothing took.
     if (uNrLumContrast > 0.0) lin *= exp2((log2(y0) - log2(max(dot(lin, W709), 1e-5))) * uNrLumContrast * 0.6);
-    if (nrColor > 0.0) { float yl = dot(lin, W709); lin = yl + (csum / cw) * max(yl, CHROMA_FLOOR); }
+    if (nrColor > 0.0) {
+      float yl = dot(lin, W709);
+      vec3 co = csum.rgb / max(csum.a / cw, CHROMA_FLOOR) / cw;
+      // The wide part: colour averaged over similar-brightness pixels around,
+      // taken over where this pixel's colour differs from it by no more than
+      // the noise there; a real coloured thing (a small light) keeps its own.
+      float ll = log2(max(yl, 0.0) + CNR_EPS);
+      vec2 ct = vec2(0.0); float yt = 0.0, ws = 1e-4;
+      for (int k = 0; k < 5; k++) {
+        vec2 off = k == 0 ? vec2(0.0) : vec2(k == 1 ? 1.0 : k == 2 ? -1.0 : 0.0, k == 3 ? 1.0 : k == 4 ? -1.0 : 0.0) * 1.5;
+        vec4 t = texture(uChroma, p + off * uChromaPx);
+        float d = log2(max(t.b, 0.0) + CNR_EPS) - ll;
+        float w = exp(-d * d / (2.0 * CNR_RANGE * CNR_RANGE));
+        ct += t.rg * w; yt += t.b * w; ws += w;
+      }
+      ct /= ws; yt = max(yt / ws, CHROMA_FLOOR);
+      ct /= yt;
+      // The noise expected in this pixel's own (locally smoothed) colour at its
+      // brightness: a colour clearly beyond it (a small light) is kept.
+      float yn = max(yl, CHROMA_FLOOR);
+      float noise = noiseAt(max(yl, 0.0)) * uNoiseFull * CNR_LOCAL / (yn * yn) + 1e-7;
+      vec2 dc = co.rb - ct;
+      float x = dot(dc, dc) / (noise * CNR_T * (2.0 - uNrColorDetail * 2.0 + 0.25));
+      // Where the wide copy's brightness differs from this pixel's (a small light,
+      // averaged in with the dark around it there), it says little: keep own.
+      float conf = smoothstep(0.1, 0.5, ws / 5.0);
+            float take = smoothstep(0.0, 0.25, nrColor) * (1.0 - x * x / (1.0 + x * x)) * conf * step(0.5, uChromaOn);
+      vec2 rb = mix(co.rb, ct, take);
+      co = vec3(rb.x, -(0.2126 * rb.x + 0.0722 * rb.y) / 0.7152, rb.y);
+      lin = yl + co * max(yl, CHROMA_FLOOR);
+    }
   }
 
   // Lightroom's profile: its hue/saturation map, before exposure.
-  if (uDcp > 0.5 && uHsmDims.x > 0.0) lin = uP2S * hueSatMap(uHsm, uHsmDims, max(uS2P * lin, vec3(0.0)));
+  if (uDcp > 0.5 && uHsmDims.x > 0.0) {
+    // The map works on colours, so it gets the part above 0; what noise left
+    // below 0 is added back rather than cut off (cutting tinted dark noise).
+    vec3 pp = uS2P * lin, pos = max(pp, vec3(0.0));
+    lin = uP2S * (hueSatMap(uHsm, uHsmDims, pos) + (pp - pos));
+  }
   // Lightroom's base saturation belongs to the rendering, before the sliders
   // and curves (a steep curve then strengthens it as it does in Lightroom).
   if (uBaseSat != 1.0) { float yb = dot(lin, W709); lin = yb + (lin - yb) * uBaseSat; }
@@ -833,16 +957,16 @@ void main() {
   vec3 dc;
   {
     float hi = max(d.r, max(d.g, d.b)), lo = min(d.r, min(d.g, d.b));
-    float hi2 = texture(uCurve, vec2(hi, 0.5)).r, lo2 = texture(uCurve, vec2(lo, 0.5)).r;
+    float hi2 = texture(uCurve, vec2(hi, CURVE_ROW0)).r, lo2 = texture(uCurve, vec2(lo, CURVE_ROW0)).r;
     dc = hi - lo > 1e-5 ? lo2 + (d - lo) * ((hi2 - lo2) / (hi - lo)) : vec3(hi2);
   }
   if (uRefineSat < 1.0) {
     float yc0 = dot(d, W709);
-    float yc = texture(uCurve, vec2(yc0, 0.5)).r;
+    float yc = texture(uCurve, vec2(yc0, CURVE_ROW0)).r;
     d = mix(yc + (d - yc0) * (yc / max(yc0, 1e-3)), dc, uRefineSat);
   } else d = dc;
   d = clamp(d, 0.0, 1.0);
-  d = vec3(texture(uCurve, vec2(d.r, 0.5)).g, texture(uCurve, vec2(d.g, 0.5)).b, texture(uCurve, vec2(d.b, 0.5)).a);
+  d = vec3(texture(uCurve, vec2(d.r, CURVE_ROW0)).g, texture(uCurve, vec2(d.g, CURVE_ROW0)).b, texture(uCurve, vec2(d.b, CURVE_ROW0)).a);
   // Back to sRGB unclipped: ProPhoto colours past sRGB are eased in at the end
   // (gamutIn), so strong reds don't all land on one value.
   d = encode(PP_TO_SRGB * decodeS(d));
@@ -851,12 +975,12 @@ void main() {
     for (int i = 0; i < 16; i++) {
       if (float(i) >= uMaskN) break;
       if (uMS[i].y < 0.5 || mw[i] <= 0.0) continue;
-      float row = (float(i) + 0.5) / 16.0;
-      vec3 c = vec3(texture(uMaskCurve, vec2(d.r, row)).r, texture(uMaskCurve, vec2(d.g, row)).r, texture(uMaskCurve, vec2(d.b, row)).r);
-      float yc0 = dot(d, W709), yc = texture(uMaskCurve, vec2(yc0, row)).r;
+      float row = (float(i) + 1.5) / 17.0;
+      vec3 c = vec3(texture(uCurve, vec2(d.r, row)).r, texture(uCurve, vec2(d.g, row)).r, texture(uCurve, vec2(d.b, row)).r);
+      float yc0 = dot(d, W709), yc = texture(uCurve, vec2(yc0, row)).r;
       c = mix(yc + (d - yc0) * (yc / max(yc0, 1e-3)), c, uMS[i].z);
       c = clamp(c, 0.0, 1.0);
-      c = vec3(texture(uMaskCurve, vec2(c.r, row)).g, texture(uMaskCurve, vec2(c.g, row)).b, texture(uMaskCurve, vec2(c.b, row)).a);
+      c = vec3(texture(uCurve, vec2(c.r, row)).g, texture(uCurve, vec2(c.g, row)).b, texture(uCurve, vec2(c.b, row)).a);
       d = mix(d, c, min(mw[i], 1.0));
     }
   }

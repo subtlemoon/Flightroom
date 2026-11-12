@@ -9,12 +9,16 @@ import { BASELINE_EXPOSURE, PP_TO_SRGB, SRGB_TO_PP, TONE_SIZE, adobeRendering, d
 import { CURVE_SIZE, HUE_SIZE, calibrationMatrix, curveTable, gradeTints, hueTable } from './luts.js';
 import { MAX_MASKS, POINT_DEFAULT, adjOf, lumRange, maskRaster, rasterChange } from './masks.js';
 import { tonemapUniforms } from './tonemap.js';
+import { noiseModel } from './noise.js';
 import { Composer } from './compose.js';
 import { renderLayers } from './retouch.js';
 import { GLOW_EDGE, LEVELS, glowPlan, glowUsed } from './glow.js';
 import { ROTATION } from '../cull/rotation.js';
 
 const GUIDE_EDGE = 320;
+// Colour noise reduction's wide blur: sigma = the half-size overview's long side / this (about 27 full-size pixels on 6000).
+const CNR_DIV = 110;
+const ZERO8 = new Float32Array(12);
 export { setGentleGraphics, gentleGraphics } from './gpu/engine.js';
 // Mask textures left undrawn this long (ms) are freed (see updateMasks).
 const MASK_TEX_IDLE = 20000;
@@ -345,7 +349,8 @@ export class Renderer {
     this.guide = null;
     this.guideKey = '';
     this.guideGen = 0;
-    this.curveTex = dev.texture('rgba16f', CURVE_SIZE, 1, new Float32Array(CURVE_SIZE * 4));
+    // The tone curve in row 0 and each mask's own curve in the rows after (one texture: the develop pass has none to spare).
+    this.curveTex = dev.texture('rgba16f', CURVE_SIZE, 1 + MAX_MASKS, new Float32Array(CURVE_SIZE * (1 + MAX_MASKS) * 4));
     this.hueTex = dev.texture('rgba16f', HUE_SIZE, 1, new Float32Array(HUE_SIZE * 4), { wrap: 'repeat' });
     this.blank = dev.texture('rgb16f', 1, 1, new Float32Array(3));
     /** Called when something only known after a read-back arrived and the picture should be drawn again (WebGPU). */
@@ -363,6 +368,7 @@ export class Renderer {
   setSource(frame) {
     this.free(this.src);
     this.src = { tex: this.dev.texture('rgb16f', frame.w, frame.h, frame.data), w: frame.w, h: frame.h };
+    this.srcFrame = frame; // kept for noise.js (measured on the processor)
     this.guideKey = '';
     this.clearHi();
     this.setOpHi(null);
@@ -389,7 +395,7 @@ export class Renderer {
   dispose() {
     this.disposed = true;
     this.free(this.src); this.clearHi(); this.free(this.histTarget); this.free(this.prevTarget); this.free(this.thumbTarget); this.free(this.lightTarget); this.setDisplay(null);
-    for (const t of this.guide || []) this.free(t);
+    for (const t of [...(this.guide || []), ...(this.chroma || [])]) this.free(t);
     this.freeGlow();
     this.free(this.curveTex); this.free(this.hueTex); this.free(this.blank);
     for (const t of [this.prof?.tone, this.prof?.hsm, this.prof?.laTex, this.prof?.lbTex]) if (t) this.free(t);
@@ -397,7 +403,6 @@ export class Renderer {
     for (const t of this.maskTex || []) if (t) this.free(t.tex);
     this.composer?.dispose();
     this.setOpHi(null);
-    if (this.maskCurveTex) this.free(this.maskCurveTex);
     this.dev.dispose();
   }
 
@@ -467,6 +472,42 @@ export class Renderer {
     this.lumWait = null;
     this.guideGen++;
     this.guideKey = key;
+    this.chromaKey = '';
+  }
+
+  /**
+   * Colour noise reduction's wide part (shaders.js CNR_DOWN, CNR_BLUR): the
+   * overview's colour at half its size, blurred among pixels of similar
+   * brightness. Made when Color noise reduction (or a mask's Moire) is on, and
+   * again only when the photo or its white balance and profile change.
+   */
+  updateChroma(info, s) {
+    if (!(s.nrColor > 0 || this.masks?.some((m) => adjOf(m, 'moire') > 0))) { this.chromaOn = false; return; }
+    this.chromaOn = true;
+    // The noise is measured on the processor (noise.js, ~10 ms): while Temp or
+    // Tint is dragged, at most a few times a second; the old one is close.
+    const now = performance.now();
+    const fresh = this.noiseSrc === this.src && this.noiseKey === this.guideKey;
+    const remeasure = !fresh && (this.noiseSrc !== this.src || now - this.noiseAt > 300);
+    if (this.chroma && this.chromaKey === this.guideKey && !remeasure) return;
+    const cw = Math.max(8, Math.round(this.src.w / 2)), ch = Math.max(8, Math.round(this.src.h / 2));
+    if (!this.chroma || this.chroma[0].w !== cw || this.chroma[0].h !== ch) {
+      for (const t of this.chroma || []) this.free(t);
+      this.chroma = [this.target(cw, ch), this.target(cw, ch)];
+    }
+    const [a, b] = this.chroma;
+    const col = this.colorUniforms(info, s);
+    if (remeasure || !this.noise) {
+      this.noise = noiseModel(this.srcFrame, col.uWB, col.uCam);
+      this.noiseSrc = this.src; this.noiseKey = this.guideKey; this.noiseAt = now;
+    }
+    // Sigma about 14 full-size pixels on a 6000 px photo, as wide as Lightroom's at 25.
+    const sigma = Math.max(1.5, Math.max(cw, ch) / CNR_DIV);
+    this.draw('cnrDown', a, { uSrc: this.src.tex, uOutSize: [cw, ch], ...col });
+    const blur = { uSigma: sigma, uRange: 1, uNoise: this.noise, uNoiseDiv: (this.src.w / cw) * (this.src.h / ch) };
+    this.draw('cnrBlur', b, { uTex: a.tex, uStep: [1 / cw, 0], ...blur });
+    this.draw('cnrBlur', a, { uTex: b.tex, uStep: [0, 1 / ch], ...blur });
+    this.chromaKey = this.guideKey;
   }
 
   /**
@@ -679,8 +720,7 @@ export class Renderer {
     const key = this.masks.map((m) => (m.curve && !m.off?.curve ? m.curve : null));
     if (this.maskCurveKey && key.length === this.maskCurveKey.length && key.every((c, i) => c === this.maskCurveKey[i])) return;
     this.maskCurveKey = key;
-    this.maskCurveTex ||= this.dev.texture('rgba16f', CURVE_SIZE, MAX_MASKS, new Float32Array(CURVE_SIZE * MAX_MASKS * 4));
-    key.forEach((c, i) => { if (c) this.dev.upload(this.maskCurveTex, 0, i, CURVE_SIZE, 1, curveTable(c)); });
+    key.forEach((c, i) => { if (c) this.dev.upload(this.curveTex, 0, i + 1, CURVE_SIZE, 1, curveTable(c)); });
   }
 
   maskUniforms(view, geo) {
@@ -713,7 +753,6 @@ export class Renderer {
     const tex = this.maskTex || [];
     return {
       uME: E, uMF: F, uMP: P, uMQ: Q, uMS: S,
-      uMaskCurve: this.maskCurveTex || this.blank,
       uPointView: view?.point ? sel : -1,
       uMaskN: masks.length,
       uMask0: masks.length ? tex[0].tex : this.blank,
@@ -744,6 +783,7 @@ export class Renderer {
     this.updateLuts(s, info);
     this.updateMasks(s, geo);
     this.updateGlow(info, s, geo);
+    this.updateChroma(info, s);
     if (this.masks.length) this.updateMaskCurves();
     this.measure(s);
     const out2ori = mm(geo.frameToOriented(frame), out2frame);
@@ -832,6 +872,12 @@ export class Renderer {
       uHiRect: hi ? hi.rect : [0, 0, 0, 0],
       uHiSafe: hi ? hi.safe : [0, 0, 0, 0],
       uGuide: this.guide[2].tex,
+      uChroma: this.chromaOn ? this.chroma[0].tex : this.blank,
+      uChromaPx: this.chromaOn ? [1 / this.chroma[0].w, 1 / this.chroma[0].h] : [0, 0],
+      uChromaOn: this.chromaOn ? 1 : 0,
+      uNoise: this.noise || ZERO8,
+      // Read at full size (exporting, zoomed in) a pixel holds less light than an overview pixel, so more noise.
+      uNoiseFull: hi ? Math.max(1, (geo.sw / this.src.w) * (geo.sh / this.src.h)) : 1,
       uGlow: this.glowOn ? this.glow.out.tex : this.blank,
       uGlowMix: this.glowOn ? [this.glowPlan.amount, this.glowPlan.mode, 0, 1] : [0, 0, 0, 0],
       uGlowF: this.glowOn ? this.glowPlan.final : [0, 0, 0, 0],
