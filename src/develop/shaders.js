@@ -77,7 +77,25 @@ uniform vec2 uOutSize;
 uniform float uGlowGain;  // the exposure, as a factor
 uniform float uGlowMode;  // 0: weighted light (Bloom, Motion, Streak), 1: above a threshold (Halation), 2: the photo (Diffusion)
 uniform vec4 uGlowW;      // 0: e, n, strength; 1: threshold, steepness; w: box width (texels)
+uniform float uDcp;       // the profile's tone curve (uTone) is in use
+uniform sampler2D uTone;
+uniform float uContrast;  // the rendering's base contrast (FINAL's uContrast)
 out vec4 o;
+// How bright scene brightness y shows (display, linear), as FINAL's base
+// rendering draws it: the profile's tone curve (or the shoulder), then the
+// base contrast. The glow keys on what you see, as Lightroom's does.
+float shown(float y) {
+  float t;
+  if (uDcp > 0.5) {
+    int n = textureSize(uTone, 0).x;
+    float p = clamp(y, 0.0, 1.0) * float(n - 1);
+    int i = min(int(p), n - 2);
+    t = mix(texelFetch(uTone, ivec2(i, 0), 0).r, texelFetch(uTone, ivec2(i + 1, 0), 0).r, p - float(i));
+  } else t = y < 0.72 ? y : 0.72 + 0.28 * (1.0 - exp(-(y - 0.72) / 0.28));
+  float d = t <= 0.0031308 ? t * 12.92 : 1.055 * pow(t, 1.0 / 2.4) - 0.055;
+  d = clamp(d + uContrast * (d * d * (3.0 - 2.0 * d) - d), 0.0, 1.0);
+  return d <= 0.04045 ? d / 12.92 : pow((d + 0.055) / 1.055, 2.4);
+}
 void main() {
   vec2 cell = 1.0 / uOutSize;
   // Each pixel averages a box uGlowW.w texels wide: the slight pre-blur.
@@ -85,9 +103,15 @@ void main() {
   vec3 sum = vec3(0.0);
   for (int j = 0; j < 6; j++) for (int i = 0; i < 6; i++) {
     vec2 uv = (gl_FragCoord.xy + ((vec2(float(i), float(j)) + 0.5) / 6.0 - 0.5) * foot) * cell;
-    sum += clamp(toLinear(texture(uSrc, uv).rgb) * uGlowGain, vec3(0.0), vec3(4.0));
+    // Scene light in the light's own colour (not eased to white near
+    // clipping, as the photo is), at most as bright as white: a raw's lights
+    // are far brighter, and uncapped they made solid white blobs.
+    vec3 l = max(uCam * min(max(texture(uSrc, uv).rgb, vec3(0.0)) * uWB, vec3(1.0)) * uGlowGain, vec3(0.0));
+    l *= min(1.0, 1.0 / max(dot(l, W709), 1e-5));
+    sum += l;
   }
   vec3 c = sum / 36.0;
+  if (uGlowMode < 1.5) { float y = dot(c, W709); if (y > 1e-5) c *= shown(y) / y; }
   if (uGlowMode < 0.5) {
     // Weighted by how near white it is: K (eY / (1 + e - Y))^n.
     float y = clamp(dot(c, W709), 0.0, 1.0);
@@ -707,26 +731,16 @@ void main() {
     }
   }
 
-  // Glow: the light spilling from bright parts, on scene light (before the tone curve), so it rolls off as light does.
-  float glowAmt = clamp(uGlowMix.x + LG, 0.0, 1.0);
-  if (uGlowMix.w > 0.5 && glowAmt > 0.0) {
-    vec3 gl = texture(uGlow, p).rgb;
-    if (uGlowMix.y < 0.5) {
-      // Bloom, Motion, Streak: added, with faint glow faded out (dim, small lights don't glow).
-      gl *= glowAmt;
-      float yg = max(dot(gl, W709), 0.0);
-      lin += gl * (1.0 - exp(-pow(yg / uGlowF.x, uGlowF.y)));
-    } else if (uGlowMix.y < 1.5) {
-      // Halation: red where weak, through orange to white where strong.
-      float e = gl.r * glowAmt * uGlowF.x;
-      vec3 spill = vec3(0.0, uGlowF2.x, uGlowF2.y) * max(e - uGlowF2.z, 0.0);
-      lin += vec3(e, uGlowF.y * e, uGlowF.z * e) + spill;
-    } else {
-      // Diffusion: inside bright areas only, toward the blurred photo and lifted.
-      vec3 lc = clamp(lin, 0.0, 1.0);
-      float w = smoothstep(uGlowF.z, uGlowF.w, dot(lc, W709));
-      lin += glowAmt * w * (uGlowF.x * (gl - lin) + uGlowF.y * lc * (1.0 - lc));
-    }
+  // Glow. Diffusion works on scene light; the others add light after the tone
+  // curve (below), as on a photo you look at: a raw's bright lights then glow
+  // as Lightroom's do, instead of the curve blowing the glow up into white blobs.
+  float glowAmt = uGlowMix.w > 0.5 ? clamp(uGlowMix.x + LG, 0.0, 1.0) : 0.0;
+  vec3 gl = glowAmt > 0.0 ? texture(uGlow, p).rgb : vec3(0.0);
+  if (glowAmt > 0.0 && uGlowMix.y > 1.5) {
+    // Diffusion: inside bright areas only, toward the blurred photo and lifted.
+    vec3 lc = clamp(lin, 0.0, 1.0);
+    float w = smoothstep(uGlowF.z, uGlowF.w, dot(lc, W709));
+    lin += glowAmt * w * (uGlowF.x * (gl - lin) + uGlowF.y * lc * (1.0 - lc));
   }
 
   vec3 mapped;
@@ -741,6 +755,22 @@ void main() {
     mapped = uToneMap < 0.5 ? shoulder(lin) : uToneMap < 1.5 ? sigmoidMap(lin) : uToneMap < 2.5 ? agxMap(lin) : filmicMap(lin);
   }
   vec3 d = encode(mapped);
+  if (glowAmt > 0.0 && uGlowMix.y < 1.5) {
+    vec3 dl = decodeS(d);
+    if (uGlowMix.y < 0.5) {
+      // Bloom, Motion, Streak: added, with faint glow faded out (dim, small lights don't glow).
+      gl *= glowAmt;
+      float yg = max(dot(gl, W709), 0.0);
+      vec3 ga = gl * (1.0 - exp(-pow(yg / uGlowF.x, uGlowF.y)));
+      dl = 1.0 - (1.0 - clamp(dl, 0.0, 1.0)) * exp(-ga);
+    } else {
+      // Halation: red where weak, through orange to white where strong.
+      float e = gl.r * glowAmt * uGlowF.x;
+      vec3 spill = vec3(0.0, uGlowF2.x, uGlowF2.y) * max(e - uGlowF2.z, 0.0);
+      dl += vec3(e, uGlowF.y * e, uGlowF.z * e) + spill;
+    }
+    d = encode(dl);
+  }
   // Whites and Blacks act on the screen values, as in Lightroom, fitted to its
   // measured change per L* band at -100 (see tools/lr-tone.md). Brightness
   // only (colours scale with it), so saturation stays.
