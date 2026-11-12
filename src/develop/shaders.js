@@ -103,18 +103,15 @@ void main() {
   vec3 sum = vec3(0.0);
   for (int j = 0; j < 6; j++) for (int i = 0; i < 6; i++) {
     vec2 uv = (gl_FragCoord.xy + ((vec2(float(i), float(j)) + 0.5) / 6.0 - 0.5) * foot) * cell;
-    // As bright as the photo shows it, up to white (a raw's lights are far
-    // brighter; uncapped, they made solid white blobs), in the light's own
-    // colour (the photo eases colours to white as they near clipping; a green
-    // light should glow green).
-    vec3 raw = max(texture(uSrc, uv).rgb, vec3(0.0));
-    vec3 l = max(toLinear(raw) * uGlowGain, vec3(0.0));
-    vec3 hue = max(uCam * min(raw * uWB, vec3(1.0)), vec3(0.0));
-    l = hue * (min(dot(l, W709), 4.0) / max(dot(hue, W709), 1e-5));
+    // Scene light in the light's own colour (not eased to white near
+    // clipping, as the photo is), at most as bright as white: a raw's lights
+    // are far brighter, and uncapped they made solid white blobs.
+    vec3 l = max(uCam * min(max(texture(uSrc, uv).rgb, vec3(0.0)) * uWB, vec3(1.0)) * uGlowGain, vec3(0.0));
+    l *= min(1.0, 1.0 / max(dot(l, W709), 1e-5));
     sum += l;
   }
   vec3 c = sum / 36.0;
-  if (uGlowMode < 1.5) { float y = dot(c, W709); if (y > 1e-5) c *= (y > 1.0 ? y : shown(y)) / y; }
+  if (uGlowMode < 1.5) { float y = dot(c, W709); if (y > 1e-5) c *= shown(y) / y; }
   if (uGlowMode < 0.5) {
     // Weighted by how near white it is: K (eY / (1 + e - Y))^n.
     float y = clamp(dot(c, W709), 0.0, 1.0);

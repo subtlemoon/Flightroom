@@ -30,8 +30,9 @@ solid white blobs. Now the glow's source is capped at white (luminance, keeping 
 light's own colour before the photo eases near-clipped colours to white), and Bloom,
 Halation, Motion and Streak are added after the tone curve, as on the TIFF chart where
 Lightroom's rendering is the identity. Diffusion stays on scene light. The glow keys on how bright
-things show (the profile's tone curve and base contrast, GLOW_SRC shown()), lights
-brighter than white add more (up to 4x), and the glow is blended softly
-(1 - (1 - photo) e^-glow), so it never clips to flat white next to a light. Brightness
-by region matches Lightroom's export within about 10%; Lightroom's glow around the
-yellow lights is a little more orange.
+things show (the profile's tone curve and base contrast, GLOW_SRC shown()), and the glow is blended softly
+(1 - (1 - photo) e^-glow), so it never clips to flat white next to a light. On IMG_0977 the
+added brightness matches Lightroom's export overall (0.058 vs 0.059 encoded) and near
+each light; Flightroom's coloured streak lights glow a little more than Lightroom's.
+The WebGL rig's chart check no longer applies as is: its rendering's shoulder shows
+the chart's white at 0.9, not 1.0, and the near-white weighting is steep.
