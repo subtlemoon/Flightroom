@@ -11,7 +11,7 @@ import { AI_TYPES, aiName, newAiPart } from '../develop/masks.js';
 
 // Which download each AI tool needs (names from the models' manifest).
 const FEATURE = { subject: 'subject', background: 'subject', sky: 'landscape', landscape: 'landscape', people: 'people', skin: 'people', denoise: 'denoise' };
-const FEATURE_LABEL = { subject: 'Subject and Background', landscape: 'Sky and Landscape', people: 'People', denoise: 'AI Denoise' };
+const FEATURE_LABEL = { subject: 'Subject and Background', landscape: 'Sky and Landscape', people: 'People', denoise: 'AI Denoise', grade: 'AI grade vision' };
 const TASK = Object.fromEntries(AI_TYPES.map(([k, , task]) => [k, task]));
 const mb = (n) => `${Math.max(1, Math.round(n / 1e6))} MB`;
 

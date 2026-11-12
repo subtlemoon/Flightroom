@@ -450,7 +450,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const acts = maskActions(s, update, sel, setSel, maskOptions);
   const [ensureAi, aiDialog] = useAiInstall();
   const aiMasks = useAiMasks({ photo, picture: () => stageApi.current.aiPicture?.(), acts, ensure: ensureAi, toast: setToast });
-  const mood = useMoodGrade({ photo, s, update, stage: stageApi, aiMasks, toast: setToast });
+  const mood = useMoodGrade({ photo, s, update, stage: stageApi, aiMasks, ensure: ensureAi, toast: setToast });
   const editing = selMask && !before && !crop;
   const picker = picking === 'wb' ? { tip: 'Click something white or grey to set the white balance (Esc to cancel)', fn: pick }
     : picking === 'point' && selMask ? { tip: 'Click a colour in the photo to change it with Point Color (Esc to cancel)', shown: true, fn: pickPoint } : null;

@@ -17,12 +17,14 @@ use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 // gcimg://localhost/photo/{preview,thumb}?p=<file>   embedded JPEG previews
 // gcimg://localhost/develop/...                      decoded RAW data (see develop.rs)
+// gcimg://localhost/ai/...                           the AI grade's vision model files (ai.rs serve)
 fn handle(app: &tauri::AppHandle, req: &tauri::http::Request<Vec<u8>>) -> photos::HttpResponse {
     let q = photos::query(req.uri());
     let path = req.uri().path().trim_start_matches('/');
     match path.split_once('/') {
         Some(("photo", kind)) => photos::handle_photo(app, kind, &q),
         Some(("develop", kind)) => develop::handle(app, kind, &q),
+        Some(("ai", rest)) => ai::serve(app, rest),
         _ => photos::not_found(),
     }
 }

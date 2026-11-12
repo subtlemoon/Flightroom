@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { lookSettings, maskWeights, measure, MOOD_KEYS, parseMood, recipeFor, solveGrade, subjectAdjust, targets } from './mood.js';
+import { lookSettings, maskWeights, measure, MOOD_KEYS, parseMood, recipeFor, solveGrade, subjectAdjust, targets, readScene, autoMood, sceneRecipe } from './mood.js';
 import { defaults, SLIDER } from './params.js';
 
 const base = { ...defaults({ temp: 5500, tint: 0 }) };
@@ -99,5 +99,54 @@ describe('subject', () => {
     expect(adj.exposure).toBeGreaterThan(0);
     expect(adj.saturation).toBeGreaterThan(0);
     expect(subjectAdjust({ L50: 0.4, area: 0.001 }, { L50: 0.4 }, r)).toBeNull();
+  });
+});
+
+describe('what the vision model saw', () => {
+  it('reads the scene from a description', () => {
+    const sc = readScene('A man walks down a city street at night, lit by neon lights and street lamps.');
+    expect([...sc].sort()).toEqual(['city', 'lights', 'night', 'person']);
+    expect(readScene('The sun is setting over a calm sea with waves on the sand.').has('sunset')).toBe(true);
+    expect(readScene('A golden hour photo of a beach with waves.').has('sunset')).toBe(true);
+    expect(readScene('')).toEqual(new Set());
+    // "she" and "the" don't count as parts of other words.
+    expect(readScene('Shelves in a theatre').has('person')).toBe(false);
+  });
+
+  it('picks a mood when none is typed', () => {
+    // The subject of the first sentence counts before trees and people in the background.
+    expect(autoMood('A go-kart race with number 89. Trees and people watch from the road. The sun is shining.').name).toBe('sporty');
+    expect(autoMood('A couple on a beach at sunset.').name).toBe('golden natural');
+    expect(autoMood('A city street at night with neon lights.').name).toBe('neon cinematic');
+    expect(autoMood('A close-up of a red tire with a sticker.').name).toBe('vivid');
+    expect(autoMood('').name).toBe('vivid');
+  });
+
+  it('keeps skin natural and frames people', () => {
+    const { r, notes } = sceneRecipe(recipeFor(parseMood('very vivid gritty'), 1), new Set(['person']));
+    expect(r.chroma).toBeLessThanOrEqual(0.12);
+    expect(r.set.clarity).toBeLessThanOrEqual(5);
+    expect(r.sub.texture).toBeLessThan(0);
+    expect(r.set.vignette).toBeLessThan(0);
+    expect(notes).toContain('skin kept natural');
+  });
+
+  it('puts glow where there is light', () => {
+    const night = sceneRecipe(recipeFor(parseMood('moody'), 1), new Set(['night', 'lights', 'city'])).r;
+    expect(night.glow.style).toBe(3);
+    expect(night.dKey).toBeLessThanOrEqual(0.015);
+    const sun = sceneRecipe(recipeFor(parseMood('warm'), 1), new Set(['sunset'])).r;
+    expect(sun.glow.style).toBe(2);
+    expect(lookSettings({}, sun).glow).toBeGreaterThan(0);
+    const plain = sceneRecipe(recipeFor(parseMood('warm'), 1), new Set(['indoor'])).r;
+    expect(plain.glow).toBeNull();
+  });
+
+  it('knows effects by name', () => {
+    const v = lookSettings({}, recipeFor(parseMood('warm vignette'), 1));
+    expect(v.vignette).toBeLessThan(0);
+    const h = lookSettings({}, recipeFor(parseMood('halation'), 1));
+    expect(h.glowStyle).toBe(3);
+    expect(h.glow).toBeGreaterThan(0);
   });
 });

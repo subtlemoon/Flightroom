@@ -1,0 +1,39 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>AI grade vision try</title>
+<script type="module">
+  // Runs the AI grade's vision model on photos, in the browser, the way the app does.
+  import { lookAt, setVisionBase, visionBlocked, VISION_EDGE } from '/src/develop/vision.js';
+  import { autoMood, readScene, recipeFor, sceneRecipe } from '/src/develop/mood.js';
+
+  setVisionBase('/ai/');
+  async function picture(url) {
+    const bmp = await createImageBitmap(await (await fetch(url)).blob());
+    const k = VISION_EDGE / Math.max(bmp.width, bmp.height);
+    const w = Math.round(bmp.width * k), h = Math.round(bmp.height * k);
+    const c = new OffscreenCanvas(w, h), g = c.getContext('2d');
+    // Bottom row first, as the app's renderer gives it.
+    g.translate(0, h); g.scale(1, -1); g.drawImage(bmp, 0, 0, w, h);
+    return { w, h, rgba: g.getImageData(0, 0, w, h).data };
+  }
+  window.tryPhotos = async (names) => {
+    const blocked = await visionBlocked();
+    if (blocked) return { blocked };
+    const out = [];
+    let t = performance.now();
+    await (await import('/src/develop/vision.js')).loadVision();
+    out.push({ load: Math.round(performance.now() - t) });
+    for (const n of names) {
+      t = performance.now();
+      try {
+        const saw = await lookAt(await picture(`/photos/${encodeURIComponent(n)}`));
+        const scene = readScene(saw);
+        const mood = autoMood(saw);
+        const { notes } = sceneRecipe(recipeFor(mood, 1), scene, 1);
+        out.push({ photo: n, ms: Math.round(performance.now() - t), saw, scene: [...scene], mood: mood.name, notes });
+      } catch (e) { out.push({ photo: n, error: String(e?.stack || e) }); }
+    }
+    return out;
+  };
+  window.ready = true;
+</script>

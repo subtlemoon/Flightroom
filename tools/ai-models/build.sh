@@ -8,6 +8,7 @@
 #   ade20k.onnx             Sky, landscape and where people are (DeepLab v3+ Xception, ADE20K)
 #   selfie_multiclass.onnx  People's parts: face and body skin, hair, clothes (MediaPipe)
 #   scunet.onnx             AI Denoise (SCUNet, real-noise PSNR weights)
+#   smolvlm--*              AI grade's vision model (SmolVLM 500M Instruct, Apache-2.0, ONNX as published)
 #
 # usage: build.sh out-folder   (needs python with the packages in requirements.txt)
 set -euo pipefail
@@ -42,6 +43,14 @@ python "$HERE/scunet_export.py" "$SRC/scunet.pth" "$SRC/scunet.onnx" 256
 for m in birefnet ade20k scunet; do
   python "$HERE/halve.py" "$SRC/$m.onnx" "$OUT/$m.onnx"
   python "$HERE/check.py" "$SRC/$m.onnx" "$OUT/$m.onnx"
+done
+
+# The vision model as Hugging Face publishes it for transformers.js; it runs in the window, so no conversion.
+VLM=https://huggingface.co/HuggingFaceTB/SmolVLM-500M-Instruct/resolve/main
+for f in config.json generation_config.json preprocessor_config.json processor_config.json chat_template.json \
+  tokenizer.json tokenizer_config.json special_tokens_map.json added_tokens.json \
+  onnx/vision_encoder_q4f16.onnx onnx/embed_tokens_q4f16.onnx onnx/decoder_model_merged_q4f16.onnx; do
+  curl -fsSL --retry 4 -o "$OUT/smolvlm--${f//\//--}" "$VLM/$f"
 done
 
 python "$HERE/manifest.py" "$OUT"

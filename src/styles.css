@@ -948,4 +948,6 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .mood-chips .chip:hover:not(:disabled) { color: var(--text); border-color: rgba(255, 255, 255, 0.3); }
 .mood .ai-progress { margin: 0; height: 24px; }
 .mood .ai-progress em { line-height: 24px; }
-.mood-note { margin: 0; }
+.mood-note { margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.mood-note p { margin: 0; }
+.mood-saw { font-style: italic; }

@@ -134,8 +134,10 @@ impl Ai {
     }
 
     /// Files a feature needs: the runtime for this system, then its models.
+    /// The AI grade's vision model runs in the window (WebGPU), so it needs no runtime.
     fn needs(m: &Manifest, feature: &str) -> Result<Vec<FileInfo>, String> {
-        let names = m.runtime.get(std::env::consts::OS).ok_or("AI isn't available on this system")?;
+        let none = Vec::new();
+        let names = if feature == "grade" { &none } else { m.runtime.get(std::env::consts::OS).ok_or("AI isn't available on this system")? };
         let models = m.features.get(feature).ok_or_else(|| format!("unknown AI feature {feature}"))?;
         names.iter().chain(models).map(|n| m.files.iter().find(|f| &f.name == n).cloned().ok_or_else(|| format!("{n} missing from the manifest"))).collect()
     }
@@ -1341,6 +1343,29 @@ pub async fn gpu_info() -> GpuInfo {
     tauri::async_runtime::spawn_blocking(|| GpuInfo { adapters: gpu::adapters().to_vec(), integrated: cfg!(windows) && !gpu::dedicated() })
         .await
         .unwrap_or(GpuInfo { adapters: vec![], integrated: false })
+}
+
+/// gcimg://localhost/ai/<path>: a downloaded file of the AI grade's vision
+/// model, for the window (it runs that model itself, on WebGPU). The path's
+/// folders are joined with "--" into the file's name, as it is in the release;
+/// only files the manifest lists are served.
+pub fn serve(app: &AppHandle, path: &str) -> crate::photos::HttpResponse {
+    let ai = app.state::<Ai>();
+    let name = path.replace('/', "--");
+    let listed = ai.manifest().map(|m| m.files.iter().any(|f| f.name == name)).unwrap_or(false);
+    if !listed || name.contains("..") || name.contains('\\') {
+        return crate::photos::not_found();
+    }
+    let ctype = match name.rsplit('.').next() {
+        Some("json") => "application/json",
+        Some("wasm") => "application/wasm",
+        Some("txt") => "text/plain",
+        _ => "application/octet-stream",
+    };
+    match std::fs::read(ai.dir.join(&name)) {
+        Ok(b) => crate::photos::respond(200, ctype, b),
+        Err(_) => crate::photos::not_found(),
+    }
 }
 
 pub fn models_dir(app: &AppHandle) -> PathBuf {
