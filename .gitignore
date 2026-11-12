@@ -4,3 +4,4 @@ release/
 out/
 src-tauri/target/
 src-tauri/gen/
+graphify-out/
