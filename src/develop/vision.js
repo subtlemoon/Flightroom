@@ -81,17 +81,12 @@ async function ask({ processor, model }, image, question, maxTokens) {
 }
 
 export const DESCRIBE = 'Describe this photo in two sentences: what and where it is, the light and time of day, and the main subject.';
-export const PICK = 'Which editing style suits this photo best: warm, cold, dreamy, moody, cinematic, vintage, airy, vivid, golden, natural or noir? Answer with one word.';
 
 /**
  * What the model sees in `pic` ({ w, h, rgba } bottom row first, about
- * VISION_EDGE on the long edge): { description, pick } where `pick` (a
- * style word) is only asked for when `wantPick`.
+ * VISION_EDGE on the long edge), as a short description.
  */
-export async function lookAt(pic, { wantPick = false, onProgress } = {}) {
+export async function lookAt(pic, { onProgress } = {}) {
   const vlm = await loadVision(onProgress);
-  const image = toImage(pic);
-  const description = await ask(vlm, image, DESCRIBE, 80);
-  const pick = wantPick ? await ask(vlm, image, PICK, 4) : '';
-  return { description, pick };
+  return ask(vlm, toImage(pic), DESCRIBE, 80);
 }

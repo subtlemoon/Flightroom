@@ -114,10 +114,12 @@ describe('what the vision model saw', () => {
   });
 
   it('picks a mood when none is typed', () => {
-    expect(autoMood(new Set(), 'Cinematic.').looks[0][0]).toBe('cinematic');
-    expect(autoMood(new Set(['sunset', 'beach']), 'I think').looks[0][0]).toBe('golden');
-    expect(autoMood(new Set(['night', 'lights', 'city'])).looks[0][0]).toBe('cinematic');
-    expect(autoMood(new Set()).looks[0][0]).toBe('vivid');
+    // The subject of the first sentence counts before trees and people in the background.
+    expect(autoMood('A go-kart race with number 89. Trees and people watch from the road. The sun is shining.').name).toBe('sporty');
+    expect(autoMood('A couple on a beach at sunset.').name).toBe('golden natural');
+    expect(autoMood('A city street at night with neon lights.').name).toBe('neon cinematic');
+    expect(autoMood('A close-up of a red tire with a sticker.').name).toBe('vivid');
+    expect(autoMood('').name).toBe('vivid');
   });
 
   it('keeps skin natural and frames people', () => {

@@ -26,11 +26,11 @@
     for (const n of names) {
       t = performance.now();
       try {
-        const saw = await lookAt(await picture(`/photos/${encodeURIComponent(n)}`), { wantPick: true });
-        const scene = readScene(saw.description);
-        const mood = autoMood(scene, saw.pick);
+        const saw = await lookAt(await picture(`/photos/${encodeURIComponent(n)}`));
+        const scene = readScene(saw);
+        const mood = autoMood(saw);
         const { notes } = sceneRecipe(recipeFor(mood, 1), scene, 1);
-        out.push({ photo: n, ms: Math.round(performance.now() - t), ...saw, scene: [...scene], mood: mood.name, notes });
+        out.push({ photo: n, ms: Math.round(performance.now() - t), saw, scene: [...scene], mood: mood.name, notes });
       } catch (e) { out.push({ photo: n, error: String(e?.stack || e) }); }
     }
     return out;

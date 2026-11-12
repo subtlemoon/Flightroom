@@ -261,14 +261,27 @@ export function readScene(text) {
   return seen;
 }
 
-/** A mood for a photo the user gave no words for: the model's pick, else one that suits the scene. */
-export function autoMood(scene, pick = '') {
-  const picked = parseMood(pick);
-  if (picked && picked.looks.length) return { ...picked, unknown: [] };
-  const id = scene.has('sunset') ? 'golden' : scene.has('night') && scene.has('lights') ? 'cinematic' : scene.has('night') ? 'moody'
-    : scene.has('fog') ? 'moody' : scene.has('snow') ? 'airy' : scene.has('beach') ? 'summer' : scene.has('forest') ? 'earthy'
-      : scene.has('food') ? 'warm' : scene.has('flower') ? 'airy' : scene.has('city') ? 'cinematic' : scene.has('person') ? 'natural' : 'vivid';
-  return { looks: [[id, 1]], colors: [], name: id, unknown: [] };
+// Moods that suit a kind of light, and a kind of subject.
+const LIGHT_MOOD = [['sunset', 'golden'], ['fog', 'dreamy'], ['snow', 'airy'], ['overcast', 'moody']];
+const SUBJECT_MOOD = [['vehicle', 'sporty'], ['food', 'warm'], ['flower', 'airy'], ['animal', 'natural'], ['person', 'natural'],
+  ['beach', 'summer'], ['forest', 'earthy'], ['mountain', 'cinematic'], ['city', 'cinematic']];
+
+/**
+ * A mood for a photo the user gave no words for, from the model's description:
+ * one for its light (sunset, night, fog…) and one for its subject, with what
+ * the first sentence is about (the main subject) counting before the rest.
+ * (Asked to pick a style itself, the small model nearly always said the first or last one offered.)
+ */
+export function autoMood(description) {
+  const all = readScene(description), main = readScene(String(description || '').split(/[.!?]/)[0]);
+  const looks = [];
+  const night = all.has('night') ? (all.has('lights') ? 'neon' : 'moody') : null;
+  const light = night || LIGHT_MOOD.find(([k]) => all.has(k))?.[1];
+  if (light) looks.push([light, 1]);
+  const subject = SUBJECT_MOOD.find(([k]) => main.has(k))?.[1] || SUBJECT_MOOD.find(([k]) => all.has(k))?.[1];
+  if (subject && subject !== light) looks.push([subject, 1]);
+  if (!looks.length) looks.push([all.has('indoor') ? 'cozy' : 'vivid', 1]);
+  return { looks, colors: [], name: looks.map(([id]) => id).join(' '), unknown: [] };
 }
 
 /**

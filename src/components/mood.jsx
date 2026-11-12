@@ -33,7 +33,7 @@ export function useMoodGrade({ photo, s, update, stage, aiMasks, ensure, toast }
   const setOpts = (patch) => setOptsState((o) => { const n = { ...o, ...patch }; try { localStorage.setItem(OPTS_KEY, JSON.stringify(n)); } catch {} return n; });
 
   // The vision model's look at the photo, or null when it's off, declined or can't run here (then words alone grade).
-  const see = async (base, wantPick, id) => {
+  const see = async (base, id) => {
     if (!opts.look) return null;
     const why = await visionBlocked();
     if (why) { if (!warned) toast(`AI grade can't look at photos on this computer (${why}), so it grades from your words.`); warned = true; return null; }
@@ -42,7 +42,7 @@ export function useMoodGrade({ photo, s, update, stage, aiMasks, ensure, toast }
     setBusy({ label: 'Looking at the photo', at: 0.03 });
     const pic = await stage.current.renderFlat?.(lookSettings(base, recipeFor({ looks: [], colors: [] }, 0)), VISION_EDGE);
     if (!pic) throw new Error('The photo isn\'t ready yet');
-    return lookAt(pic, { wantPick, onProgress: (f) => setBusy({ label: 'Starting the vision model', at: 0.03 * f }) });
+    return lookAt(pic, { onProgress: (f) => setBusy({ label: 'Starting the vision model', at: 0.03 * f }) });
   };
 
   const grade = async (text) => {
@@ -61,13 +61,13 @@ export function useMoodGrade({ photo, s, update, stage, aiMasks, ensure, toast }
     try {
       setBusy({ label: 'Reading the photo', at: 0.02 });
       let saw = null;
-      try { saw = await see(base, !typed, id); } catch (err) {
+      try { saw = await see(base, id); } catch (err) {
         if (err.message === 'cancelled') throw err;
         toast(`The vision model didn't run (${err.message || err}), so this grade is from your words only.`);
       }
       if (!typed && !saw) { toast('Type a mood, or turn on Look at the photo so AI can pick one.'); return; }
-      const scene = readScene(saw?.description);
-      const mood = typed || autoMood(scene, saw?.pick);
+      const scene = readScene(saw);
+      const mood = typed || autoMood(saw);
       const { r, notes } = sceneRecipe(recipeFor(mood, opts.strength), scene, opts.strength);
       const render = async (st) => {
         if (live.current !== id) throw new Error('cancelled');
@@ -106,7 +106,7 @@ export function useMoodGrade({ photo, s, update, stage, aiMasks, ensure, toast }
         return { ...old, ...patch, masks, ...(mask ? { masksOwned: true } : {}) };
       }, `AI grade: ${mood.name}`);
       startedFrom.set(id, { from, set: { exposure: patch.exposure, temp: patch.temp, tint: patch.tint } });
-      setLast({ name: mood.name, unknown: mood.unknown, subject: subjectNote, saw: saw?.description || null, notes, picked: !typed });
+      setLast({ name: mood.name, unknown: mood.unknown, subject: subjectNote, saw: saw || null, notes, picked: !typed });
       aiDone('AI grade is done', `Graded “${mood.name}”`);
     } catch (err) {
       if (err.message !== 'cancelled') { toast(`AI grade didn't work: ${err.message || err}`); aiDone('AI grade didn\'t work', String(err.message || err)); }
