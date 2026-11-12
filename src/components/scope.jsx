@@ -3,13 +3,13 @@
 // Collapsible; the colour space it measures in is remembered (sRGB first).
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Dropdown, Icon } from './ui.jsx';
-import { SCOPE_SPACES, SKIN_ANGLE, TARGETS, chroma, scopeGrid } from '../develop/scope.js';
+import { SCOPE_SPACES, SKIN_ANGLE, TARGETS, chroma, scopeAt, scopeGrid, skinReading } from '../develop/scope.js';
 
 const KEY = 'flightroom-scope';
-const load = () => { try { return { open: true, space: 'srgb', ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch { return { open: true, space: 'srgb' }; } };
+const load = () => { try { return { open: true, space: 'srgb', zoom: 1, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch { return { open: true, space: 'srgb' }; } };
 
-let lastPx = null;
-if (typeof window !== 'undefined') window.addEventListener('develop:hist', (e) => { lastPx = e.detail?.px || null; });
+let lastHist = null;
+if (typeof window !== 'undefined') window.addEventListener('develop:hist', (e) => { lastHist = e.detail?.px ? e.detail : null; });
 
 // The ring's colours: each angle's hue at mid grey, a little muted, as Lightroom's ring is.
 let RING = null;
@@ -26,17 +26,55 @@ function ring() {
   return RING;
 }
 
+// The pixels are binned over a square a little past the ring, so colours
+// outside the colour space still show (just beyond the ring).
+const EXTENT = 1.2;
+const ZOOMS = [1, 2, 4];
+
+// The pixels as a small picture: each cell in its own colour, lighter where many pixels fall.
+function pointsImage(grid) {
+  const { n, count, col, max } = grid;
+  const img = new ImageData(n, n), lmax = Math.log1p(max);
+  for (let k = 0; k < n * n; k++) {
+    const m = count[k];
+    if (m < 0.05) continue;
+    const t = Math.max(0, Math.log1p(m) / lmax), lift = 0.3 + 0.45 * t;
+    for (let j = 0; j < 3; j++) img.data[k * 4 + j] = Math.round(((col[k * 3 + j] / m) * (1 - lift) + lift) * 255);
+    img.data[k * 4 + 3] = Math.round(Math.min(1, 0.25 + 0.75 * t + m * 0.5) * 255);
+  }
+  const off = new OffscreenCanvas(n, n);
+  off.getContext('2d').putImageData(img, 0, 0);
+  return off;
+}
+
+const skinText = ({ off, sat }) => {
+  const a = Math.abs(off);
+  if (sat < 3) return 'Neutral (no colour to read)';
+  if (a > 60) return `Sat ${Math.round(sat)}%`;
+  return `${a < 1.5 ? 'On the skin line' : `${Math.round(a)}° toward ${off > 0 ? 'yellow' : 'red'}`} · Sat ${Math.round(sat)}%`;
+};
+
 export function Vectorscope() {
   const [cfg, setCfg] = useState(load);
-  const [px, setPx] = useState(lastPx);
+  const [hist, setHistData] = useState(lastHist);
+  const [hover, setHover] = useState(null);
   const ref = useRef();
   const save = (c) => { setCfg(c); try { localStorage.setItem(KEY, JSON.stringify(c)); } catch {} };
+  const zoom = ZOOMS.includes(cfg.zoom) ? cfg.zoom : 1;
   useEffect(() => {
-    const on = (e) => setPx(e.detail?.px || null);
+    const on = (e) => setHistData(e.detail?.px ? e.detail : null);
+    // Pointer moves come in fast: one redraw per frame at most.
+    let raf = 0, next = null;
+    const onHover = (e) => {
+      next = e.detail;
+      if (!raf) raf = requestAnimationFrame(() => { raf = 0; setHover(next); });
+    };
     window.addEventListener('develop:hist', on);
-    return () => window.removeEventListener('develop:hist', on);
+    window.addEventListener('develop:scope-hover', onHover);
+    return () => { window.removeEventListener('develop:hist', on); window.removeEventListener('develop:scope-hover', onHover); cancelAnimationFrame(raf); };
   }, []);
-  const grid = useMemo(() => (cfg.open && px ? scopeGrid(px, cfg.space) : null), [px, cfg.space, cfg.open]);
+  const points = useMemo(() => (cfg.open && hist ? pointsImage(scopeGrid(hist.px, cfg.space, 240, zoom / EXTENT)) : null), [hist, cfg.space, cfg.open, zoom]);
+  const mark = cfg.open && hist && hover ? scopeAt(hist.px, hist.w, hist.h, hover[0], hover[1], cfg.space) : null;
 
   useEffect(() => {
     const c = ref.current;
@@ -51,7 +89,7 @@ export function Vectorscope() {
     const at = (a, r) => [cx + Math.cos(a) * r * R, cy - Math.sin(a) * r * R];
     ctx.lineCap = 'round';
 
-    // Skin tone line: a soft wedge and the line, with a person at its end.
+    // Skin tone line: a soft wedge (about where most skin falls), the line on top later.
     ctx.fillStyle = 'rgba(255,255,255,0.07)';
     ctx.beginPath();
     ctx.moveTo(cx, cy);
@@ -59,7 +97,7 @@ export function Vectorscope() {
     ctx.closePath();
     ctx.fill();
 
-    // Dashed lines out to each colour, with the 75% target as a tick across it.
+    // Dashed lines out to each colour, with the 75% target as a tick across it (moves out when zoomed).
     ctx.strokeStyle = 'rgba(255,255,255,0.32)';
     ctx.lineWidth = 1.2 * dpr;
     ctx.setLineDash([5 * dpr, 5 * dpr]);
@@ -71,27 +109,23 @@ export function Vectorscope() {
     ctx.lineWidth = 1.4 * dpr;
     ctx.beginPath();
     for (const t of TARGETS) {
-      const [x, y] = at(t.angle, t.tick), nx = -Math.sin(t.angle) * 6 * dpr, ny = -Math.cos(t.angle) * 6 * dpr;
+      if (t.tick * zoom > 1.1) continue;
+      const [x, y] = at(t.angle, t.tick * zoom), nx = -Math.sin(t.angle) * 6 * dpr, ny = -Math.cos(t.angle) * 6 * dpr;
       ctx.moveTo(x - nx, y - ny); ctx.lineTo(x + nx, y + ny);
     }
     ctx.stroke();
 
-    // The pixels: each cell drawn in its own colour, lighter where many pixels fall.
-    if (grid) {
-      const { n, count, col, max } = grid;
-      const img = new ImageData(n, n), lmax = Math.log1p(max);
-      for (let k = 0; k < n * n; k++) {
-        const m = count[k];
-        if (m < 0.05) continue;
-        const t = Math.max(0, Math.log1p(m) / lmax), lift = 0.3 + 0.45 * t;
-        for (let j = 0; j < 3; j++) img.data[k * 4 + j] = Math.round(((col[k * 3 + j] / m) * (1 - lift) + lift) * 255);
-        img.data[k * 4 + 3] = Math.round(Math.min(1, 0.25 + 0.75 * t + m * 0.5) * 255);
-      }
-      const off = new OffscreenCanvas(n, n);
-      off.getContext('2d').putImageData(img, 0, 0);
+    if (points) {
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(off, cx - R, cy - R, 2 * R, 2 * R);
+      const E = EXTENT * R;
+      // Round, a little past the ring, so nothing ends on a straight edge.
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, 1.14 * R, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.drawImage(points, cx - E, cy - E, 2 * E, 2 * E);
+      ctx.restore();
     }
 
     ctx.strokeStyle = 'rgba(235,235,235,0.85)';
@@ -125,6 +159,21 @@ export function Vectorscope() {
       ctx.arc(...at(t.angle, 1), 5 * dpr, 0, Math.PI * 2);
       ctx.fill();
     }
+
+    // The spot under the pointer on the photo: a cross, as Lightroom shows it.
+    if (mark) {
+      const [mx, my] = [cx + mark[0] * zoom * R, cy - mark[1] * zoom * R];
+      const x = Math.max(4 * dpr, Math.min(w - 4 * dpr, mx)), y = Math.max(4 * dpr, Math.min(h - 4 * dpr, my));
+      const arm = 9 * dpr;
+      for (const [style, lw] of [['rgba(0,0,0,0.7)', 3.6], ['rgba(255,255,255,0.95)', 1.6]]) {
+        ctx.strokeStyle = style;
+        ctx.lineWidth = lw * dpr;
+        ctx.beginPath();
+        ctx.moveTo(x - arm, y); ctx.lineTo(x + arm, y);
+        ctx.moveTo(x, y - arm); ctx.lineTo(x, y + arm);
+        ctx.stroke();
+      }
+    }
   });
 
   return (
@@ -133,11 +182,19 @@ export function Vectorscope() {
         <button className="dev-scope-toggle" onClick={() => save({ ...cfg, open: !cfg.open })} title={cfg.open ? 'Hide the Vectorscope' : 'Show the Vectorscope'}>
           <Icon name={cfg.open ? 'chevD' : 'chevR'} size={11} />Vectorscope
         </button>
-        {cfg.open && <Dropdown className="dev-scope-space" value={cfg.space} title="Colour space the Vectorscope measures in"
-          options={SCOPE_SPACES.map((x) => ({ value: x.id, label: x.label }))} onChange={(space) => save({ ...cfg, space })} />}
+        {cfg.open && (
+          <div className="dev-scope-tools">
+            <div className="dev-scope-zoom" title="Zoom in on low saturation, to read skin tones more closely (as DaVinci Resolve's 2x)">
+              {ZOOMS.map((z) => <button key={z} className={z === zoom ? 'on' : ''} onClick={() => save({ ...cfg, zoom: z })}>{z}×</button>)}
+            </div>
+            <Dropdown className="dev-scope-space" value={cfg.space} title="Colour space the Vectorscope measures in"
+              options={SCOPE_SPACES.map((x) => ({ value: x.id, label: x.label }))} onChange={(space) => save({ ...cfg, space })} />
+          </div>
+        )}
       </div>
       {cfg.open && <canvas className="dev-scope-canvas" ref={ref}
-        title="Vectorscope: hue round the ring, saturation out from the centre. The line is the skin tone line; ticks mark 75% saturation." />}
+        title="Vectorscope: hue round the ring, saturation out from the centre. The line is the skin tone line; ticks mark 75% saturation. Hover the photo to see where a spot sits." />}
+      {cfg.open && <div className="dev-scope-read">{mark ? skinText(skinReading(mark)) : 'Hover the photo to read a spot against the skin line'}</div>}
     </div>
   );
 }

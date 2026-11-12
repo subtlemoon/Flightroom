@@ -34,30 +34,43 @@ function encoder(trc) {
       : (v) => v ** (1 / trc);
   const t = new Float32Array(ENC + 1);
   for (let i = 0; i <= ENC; i++) t[i] = f(i / ENC);
+  t.f = f;
   return (encoders[trc] = t);
 }
 let LIN = null;
+const lin = () => {
+  if (!LIN) { LIN = new Float32Array(256); for (let i = 0; i < 256; i++) LIN[i] = decodeS(i / 255); }
+  return LIN;
+};
+// Encoded through the space's tone curve. Colours outside the space are not
+// clipped (that piled them up on a hard edge): below 0 is mirrored, above 1
+// follows the curve on, so they land where they really are, past the ring.
+const curveAt = (t, v) => (v >= 0 && v <= 1 ? t[Math.round(v * ENC)] : v < 0 ? -curveAt(t, -v) : t.f(v));
+const clip = (t, v) => t[Math.round((v <= 0 ? 0 : v >= 1 ? 1 : v) * ENC)];
+
+/** Where one pixel (Melissa RGB bytes) lands on the scope: [x, y], ring = 1; plus its sRGB colour. */
+function place(sp, r8, g8, b8) {
+  const L = lin(), r = L[r8], g = L[g8], b = L[b8], m = sp.m, enc = encoder(sp.trc);
+  return chroma(curveAt(enc, m[0] * r + m[1] * g + m[2] * b), curveAt(enc, m[3] * r + m[4] * g + m[5] * b), curveAt(enc, m[6] * r + m[7] * g + m[8] * b));
+}
+const spaceOf = (id) => SCOPE_SPACES.find((x) => x.id === id) || SCOPE_SPACES[0];
 
 /**
  * Bins the pixels (RGBA bytes, Melissa RGB) on an n x n grid over the
- * scope's square (-1..1 both ways, +y up). Each cell keeps a count and the sum
- * of its pixels' sRGB colours (what the dots are drawn in).
+ * scope's square (-1..1 both ways, +y up). Each cell keeps a (spread) count
+ * and the sum of its pixels' sRGB colours (what the dots are drawn in).
  */
-export function scopeGrid(px, spaceId = 'srgb', n = 220) {
-  const sp = SCOPE_SPACES.find((x) => x.id === spaceId) || SCOPE_SPACES[0];
-  if (!LIN) { LIN = new Float32Array(256); for (let i = 0; i < 256; i++) LIN[i] = decodeS(i / 255); }
-  const enc = encoder(sp.trc), toS = SCOPE_SPACES[0].m, encS = encoder('srgb'), m = sp.m;
+export function scopeGrid(px, spaceId = 'srgb', n = 220, zoom = 1) {
+  const sp = spaceOf(spaceId), L = lin(), toS = SCOPE_SPACES[0].m, encS = encoder('srgb');
   const count = new Float32Array(n * n), col = new Float32Array(n * n * 3);
-  const e = (t, v) => t[Math.round((v <= 0 ? 0 : v >= 1 ? 1 : v) * ENC)];
   for (let i = 0; i < px.length; i += 4) {
-    const r = LIN[px[i]], g = LIN[px[i + 1]], b = LIN[px[i + 2]];
-    const R = e(enc, m[0] * r + m[1] * g + m[2] * b), G = e(enc, m[3] * r + m[4] * g + m[5] * b), B = e(enc, m[6] * r + m[7] * g + m[8] * b);
-    const [x, y] = chroma(R, G, B);
+    const [x, y] = place(sp, px[i], px[i + 1], px[i + 2]);
     // Spread over the four nearest cells (bilinear), so the scope is smooth rather than blocky.
-    const fx = (x * 0.5 + 0.5) * n - 0.5, fy = (0.5 - y * 0.5) * n - 0.5;
+    const fx = (x * zoom * 0.5 + 0.5) * n - 0.5, fy = (0.5 - y * zoom * 0.5) * n - 0.5;
     const x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
     if (x0 < 0 || y0 < 0 || x0 + 1 >= n || y0 + 1 >= n) continue;
-    const sr = e(encS, toS[0] * r + toS[1] * g + toS[2] * b), sg = e(encS, toS[3] * r + toS[4] * g + toS[5] * b), sb = e(encS, toS[6] * r + toS[7] * g + toS[8] * b);
+    const r = L[px[i]], g = L[px[i + 1]], b = L[px[i + 2]];
+    const sr = clip(encS, toS[0] * r + toS[1] * g + toS[2] * b), sg = clip(encS, toS[3] * r + toS[4] * g + toS[5] * b), sb = clip(encS, toS[6] * r + toS[7] * g + toS[8] * b);
     for (let q = 0; q < 4; q++) {
       const cx = x0 + (q & 1), cy = y0 + (q >> 1), wgt = (q & 1 ? tx : 1 - tx) * (q >> 1 ? ty : 1 - ty);
       const k = cy * n + cx;
@@ -67,6 +80,32 @@ export function scopeGrid(px, spaceId = 'srgb', n = 220) {
   let max = 0;
   for (let k = 0; k < n * n; k++) if (count[k] > max) max = count[k];
   return { n, count, col, max };
+}
+
+/**
+ * The scope position of the photo under the pointer: (fx, fy) in frame units
+ * (-1..1, +y down, as outToFrame gives) on the histogram's render (w x h, bottom row first), 3x3 averaged.
+ */
+export function scopeAt(px, w, h, fx, fy, spaceId = 'srgb') {
+  const cx = Math.floor((fx * 0.5 + 0.5) * w), cy = Math.floor((0.5 - fy * 0.5) * h);
+  if (cx < 0 || cy < 0 || cx >= w || cy >= h) return null;
+  const sum = [0, 0, 0];
+  let n = 0;
+  for (let y = cy - 1; y <= cy + 1; y++) for (let x = cx - 1; x <= cx + 1; x++) {
+    if (x < 0 || y < 0 || x >= w || y >= h) continue;
+    const i = (y * w + x) * 4;
+    for (let j = 0; j < 3; j++) sum[j] += px[i + j];
+    n++;
+  }
+  return place(spaceOf(spaceId), ...sum.map((v) => Math.round(v / n)));
+}
+
+/** How a scope position reads against the skin tone line: degrees off it (+ = toward yellow) and saturation (ring = 100). */
+export function skinReading([x, y]) {
+  const sat = Math.hypot(x, y);
+  let d = ((Math.atan2(y, x) - SKIN_ANGLE) * 180) / Math.PI;
+  d = ((d + 540) % 360) - 180;
+  return { off: d, sat: sat * 100 };
 }
 
 /** The six colour targets: name, dot colour, angle, and the 75% target's distance from the centre. */

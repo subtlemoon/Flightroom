@@ -916,7 +916,7 @@ export class Renderer {
       if (!px) return null;
       const bins = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
       for (let i = 0; i < px.length; i += 4) { bins[0][px[i]]++; bins[1][px[i + 1]]++; bins[2][px[i + 2]]++; }
-      bins.px = px; // the pixels themselves, for the Vectorscope
+      bins.px = px; bins.w = w; bins.h = h; // the pixels themselves, for the Vectorscope
       return bins;
     };
     const read = () => {
