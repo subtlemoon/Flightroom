@@ -657,6 +657,8 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
       {toast && <div className="cull-toast">{toast}</div>}
       {retouch && s && info && <RetouchDialogs rx={rx} />}
       {aiDialog}
+      {aiMasks.lock}
+      {mood.lock}
       {dialog === 'copy' && s && (
         <CopyDialog groups={copyGroups.groups} onClose={() => setDialog(null)} onDone={(groups) => {
           setCopyGroups({ groups });

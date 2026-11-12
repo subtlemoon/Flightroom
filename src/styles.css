@@ -941,7 +941,8 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 
 /* AI grade (Develop, top of the right panel) */
 .mood { display: flex; flex-direction: column; gap: 8px; }
-.mood-row { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.mood-row { display: flex; align-items: center; gap: 8px; justify-content: space-between; flex-wrap: wrap; }
+.mood-checks { display: flex; gap: 10px; }
 .mood-input { flex: 1; min-width: 0; height: 28px; font-size: 13px; }
 .mood-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .mood-chips .chip { height: 24px; padding: 0 9px; font-size: 12px; }

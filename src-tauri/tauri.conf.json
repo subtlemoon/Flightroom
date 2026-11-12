@@ -17,7 +17,7 @@
         "default-src": "'self'",
         "script-src": "'self' 'wasm-unsafe-eval'",
         "worker-src": "'self' blob:",
-        "connect-src": "'self' ipc: http://ipc.localhost gcimg: http://gcimg.localhost https://raw.githubusercontent.com",
+        "connect-src": "'self' ipc: http://ipc.localhost gcimg: http://gcimg.localhost http://127.0.0.1:* https://raw.githubusercontent.com",
         "style-src": "'self' 'unsafe-inline'",
         "img-src": "'self' data: blob: gcimg: http://gcimg.localhost"
       }

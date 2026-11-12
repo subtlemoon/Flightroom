@@ -4,6 +4,7 @@
 // and one undo step.
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from './ui.jsx';
+import { AiLock } from './ai.jsx';
 import { MAX_MASKS, newAiPart, newMask } from '../develop/masks.js';
 import { aiDone } from '../notify.js';
 import { autoMood, lookSettings, maskWeights, measure, MOOD_CHIPS, MOOD_KEYS, parseMood, readScene, recipeFor, sceneRecipe, solveGrade, subjectAdjust } from '../develop/mood.js';
@@ -29,7 +30,8 @@ export function useMoodGrade({ photo, s, update, stage, aiMasks, ensure, toast }
   const [last, setLast] = useState(null);
   const [opts, setOptsState] = useState(readOpts);
   const live = useRef(null);
-  useEffect(() => { setLast(null); }, [photo?.id]);
+  // Another photo: a grade still working stops (its renders and result would land on the new photo).
+  useEffect(() => { live.current = null; setBusy(null); setLast(null); }, [photo?.id]);
   const setOpts = (patch) => setOptsState((o) => { const n = { ...o, ...patch }; try { localStorage.setItem(OPTS_KEY, JSON.stringify(n)); } catch {} return n; });
 
   // The vision model's look at the photo, or null when it's off, declined or can't run here (then words alone grade).
@@ -37,12 +39,21 @@ export function useMoodGrade({ photo, s, update, stage, aiMasks, ensure, toast }
     if (!opts.look) return null;
     const why = await visionBlocked();
     if (why) { if (!warned) toast(`AI grade can't look at photos on this computer (${why}), so it grades from your words.`); warned = true; return null; }
-    if (!(await ensure('grade'))) return null;
+    // The download question shows without the lock over it.
+    setBusy(null);
+    const ok = await ensure('grade');
+    if (live.current !== id) throw new Error('cancelled');
+    setBusy({ label: 'Starting the vision model', at: 0.02 });
+    if (!ok) return null;
     if (live.current !== id) throw new Error('cancelled');
     setBusy({ label: 'Looking at the photo', at: 0.03 });
     const pic = await stage.current.renderFlat?.(lookSettings(base, recipeFor({ looks: [], colors: [] }, 0)), VISION_EDGE);
     if (!pic) throw new Error('The photo isn\'t ready yet');
-    return lookAt(pic, { onProgress: (f) => setBusy({ label: 'Starting the vision model', at: 0.03 * f }) });
+    const saw = await lookAt(pic, {
+      onProgress: (label, f) => { if (live.current === id) setBusy({ label, at: 0.03 + 0.07 * f }); },
+      onLook: () => { if (live.current === id) setBusy({ label: 'Looking at the photo', at: 0.1 }); },
+    });
+    return saw;
   };
 
   const grade = async (text) => {
@@ -57,7 +68,7 @@ export function useMoodGrade({ photo, s, update, stage, aiMasks, ensure, toast }
     const from = same ? prior.from : { exposure: s.exposure, temp: s.temp, tint: s.tint, wb: s.wb };
     const base = { ...s, ...from };
     // The subject is found while the grade is worked out (it's the slow part).
-    const subjectP = opts.subject ? aiMasks.get('subject').catch(() => null) : Promise.resolve(null);
+    const subjectP = opts.subject ? aiMasks.get('subject', { quiet: true }).catch(() => null) : Promise.resolve(null);
     try {
       setBusy({ label: 'Reading the photo', at: 0.02 });
       let saw = null;
@@ -109,13 +120,14 @@ export function useMoodGrade({ photo, s, update, stage, aiMasks, ensure, toast }
       setLast({ name: mood.name, unknown: mood.unknown, subject: subjectNote, saw: saw || null, notes, picked: !typed });
       aiDone('AI grade is done', `Graded “${mood.name}”`);
     } catch (err) {
-      if (err.message !== 'cancelled') { toast(`AI grade didn't work: ${err.message || err}`); aiDone('AI grade didn\'t work', String(err.message || err)); }
+      if (err.message !== 'cancelled' && live.current === id) { toast(`AI grade didn't work: ${err.message || err}`); aiDone('AI grade didn\'t work', String(err.message || err)); }
     } finally {
-      if (live.current === id) live.current = null;
-      setBusy(null);
+      if (live.current === id) { live.current = null; setBusy(null); }
     }
   };
-  return { grade, busy, last, opts, setOpts };
+  const cancel = () => { live.current = null; setBusy(null); };
+  const lock = busy && <AiLock title="AI grade" text="Grading this photo on this computer." at={busy.at} label={`${busy.label}…`} onCancel={cancel} />;
+  return { grade, busy, last, opts, setOpts, lock };
 }
 
 const words = (t) => t.toLowerCase().split(/[\s,]+/).filter(Boolean);
@@ -134,7 +146,7 @@ export function MoodPanel({ mood }) {
   return (
     <div className="mood">
       <div className="mood-row">
-        <input type="text" className="input mood-input" placeholder={opts.look ? 'Describe a mood, or leave empty' : 'Describe a mood…'} title={`Any words: dreamy, warm, moody teal, faded film, golden hour, halation, vignette…${opts.look ? ' Leave it empty and AI picks a mood for the photo.' : ''}`} value={text} disabled={!!busy}
+        <input type="text" className="input mood-input" placeholder={opts.look ? 'A mood, or empty for AI' : 'Describe a mood…'} title={`Any words: dreamy, warm, moody teal, faded film, golden hour, halation, vignette…${opts.look ? ' Leave it empty and AI picks a mood for the photo.' : ''}`} value={text} disabled={!!busy}
           onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') go(text); }} />
         <button className={`btn btn-sm ai-glow${busy ? ' busy' : ''}`} disabled={!!busy || (!text.trim() && !opts.look)} onClick={() => go(text)}
           title="AI on this computer looks at the photo and grades it to the mood: the result is normal sliders, effects and a mask you can change"><Icon name="ai" size={14} />Grade</button>
@@ -153,8 +165,10 @@ export function MoodPanel({ mood }) {
           <div className="seg small">
             {STRENGTHS.map(([label, k]) => <button key={label} className={opts.strength === k ? 'on' : ''} onClick={() => setOpts({ strength: k })}>{label}</button>)}
           </div>
+          <span className="mood-checks">
           <label className="dev-check inline" title="Finds the subject with AI and gives it its own mask and grade, so it stands out in the mood"><input type="checkbox" checked={opts.subject} onChange={(e) => setOpts({ subject: e.target.checked })} />Subject</label>
           <label className="dev-check inline" title="A vision model on this computer looks at the photo first (the place, the light, the subject) and the grade, glow and vignette follow what it sees"><input type="checkbox" checked={opts.look} onChange={(e) => setOpts({ look: e.target.checked })} />Look</label>
+          </span>
         </div>
       )}
       {last && (
