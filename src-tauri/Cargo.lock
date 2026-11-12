@@ -1189,7 +1189,7 @@ dependencies = [
 
 [[package]]
 name = "flightroom"
-version = "3.4.2"
+version = "3.6.3"
 dependencies = [
  "base64 0.22.1",
  "flate2",

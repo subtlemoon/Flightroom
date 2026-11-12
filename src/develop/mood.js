@@ -367,7 +367,7 @@ export function lookSettings(base, r) {
   put('mid', 'gMidHue', 'gMidSat');
   put('hi', 'gHighHue', 'gHighSat');
   s.gBalance = fit('gBalance', r.bal);
-  s.glowStyle = 1;
+  s.glowStyle = 2;
   if (r.glow && r.glow.amount >= 1) {
     s.glowStyle = r.glow.style;
     s.glow = fit('glow', r.glow.amount);

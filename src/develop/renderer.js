@@ -470,18 +470,18 @@ export class Renderer {
   }
 
   /**
-   * Glow (glow.js): the light above the Range threshold, at five sizes from
-   * GLOW_EDGE px down, each blurred, then mixed by Spread into one small
-   * picture in photo coordinates that the develop pass adds. Redrawn only
-   * when what it depends on changes (its settings, the exposure, the white
-   * balance), which takes a few small passes.
+   * Glow (glow.js): the light that glows (GLOW_SRC, at most GLOW_EDGE px),
+   * halved down so each blur runs at a size where it is a few texels wide,
+   * blurred (round styles) or smeared along Direction (Motion, Streak), then
+   * mixed into one small picture in photo coordinates that the develop pass
+   * adds. Redrawn only when what it depends on changes.
    */
   updateGlow(info, s, geo) {
     if (!glowUsed(s, this.masks)) { this.glowOn = false; return; }
     this.glowOn = true;
     const exposure = s.exposure + lookFor(info, s).exposure;
-    const plan = glowPlan(s, exposure, geo.orientedToPhoto());
-    const key = JSON.stringify([this.guideKey, exposure, plan.style, plan.knee, plan.weights, plan.tint, plan.dir, plan.along, plan.across, geo.rot]);
+    const plan = this.glowPlan = glowPlan(s, exposure, geo.orientedToPhoto());
+    const key = JSON.stringify([this.guideKey, geo.rot, { ...plan, amount: 0 }]);
     if (this.glow && this.glowSrc === this.src && key === this.glowKey) return;
     const scale = Math.min(1, GLOW_EDGE / Math.max(this.src.w, this.src.h));
     const w0 = Math.max(8, Math.round(this.src.w * scale)), h0 = Math.max(8, Math.round(this.src.h * scale));
@@ -491,33 +491,59 @@ export class Renderer {
       for (let i = 0, w = w0, h = h0; i < LEVELS; i++, w = Math.max(4, Math.ceil(w / 2)), h = Math.max(4, Math.ceil(h / 2))) {
         levels.push({ a: this.target(w, h), b: this.target(w, h), w, h });
       }
-      this.glow = { w: w0, h: h0, levels, out: this.target(w0, h0) };
+      this.glow = { w: w0, h: h0, levels, res: [], out: this.target(w0, h0) };
     }
     const { levels, out } = this.glow;
-    this.draw('glowSrc', levels[0].a, { uSrc: this.src.tex, uOutSize: [w0, h0], uGlowGain: plan.gain, uGlowKnee: plan.knee, uGlowSat: plan.sat, ...this.colorUniforms(info, s) });
-    for (let i = 1; i < LEVELS; i++) this.draw('glowDown', levels[i].a, { uTex: levels[i - 1].a.tex, uOutSize: [levels[i].w, levels[i].h] });
-    for (const L of levels) {
-      // Along the direction, then across it (round styles: across, then down).
-      let u = [1, 0], v = [0, 1];
-      if (plan.dir) {
-        const tx = plan.dir[0] * L.w, ty = plan.dir[1] * L.h, n = Math.hypot(tx, ty) || 1;
-        u = [tx / n, ty / n]; v = [-u[1], u[0]];
-      }
-      this.draw('blur', L.b, { uTex: L.a.tex, uStep: [u[0] / L.w, u[1] / L.h], uSigma: plan.along });
-      this.draw('blur', L.a, { uTex: L.b.tex, uStep: [v[0] / L.w, v[1] / L.h], uSigma: plan.across });
+    const edge = Math.max(w0, h0);
+    // A result target per blur, at the size of the level it ran at.
+    const res = (k, L) => {
+      const r = this.glow.res[k];
+      if (r && r.w === L.w && r.h === L.h) return r.t;
+      if (r) this.free(r.t);
+      this.glow.res[k] = { t: this.target(L.w, L.h), w: L.w, h: L.h };
+      return this.glow.res[k].t;
+    };
+    // The slight pre-blur widens what each glow pixel averages (a box that wide).
+    const w = [plan.w[0], plan.w[1], plan.w[2], Math.max(1, plan.pre * edge * Math.sqrt(12))];
+    this.draw('glowSrc', levels[0].a, { uSrc: this.src.tex, uOutSize: [w0, h0], uGlowGain: plan.gain, uGlowMode: plan.mode, uGlowW: w, uContrast: lookFor(info, s).contrast, ...this.colorUniforms(info, s) });
+    // Down only as far as the widest blur needs.
+    const levelFor = (px, per) => Math.max(0, Math.min(LEVELS - 1, Math.floor(Math.log2(px / per))));
+    let need = 0;
+    const jobs = [];
+    if (plan.dir) {
+      const i = Math.max(0, Math.min(LEVELS - 1, Math.ceil(Math.log2(plan.len * edge / 48))));
+      jobs.push(i); need = i;
+    } else {
+      plan.blur.forEach((b, k) => { if (plan.mix[k] > 0) { const i = levelFor(b * edge, 3); jobs[k] = i; need = Math.max(need, i); } });
     }
-    const [w0w, w1, w2, w3, w4] = plan.weights;
-    this.draw('glowMix', out, {
-      uG0: levels[0].a.tex, uG1: levels[1].a.tex, uG2: levels[2].a.tex, uG3: levels[3].a.tex, uG4: levels[4].a.tex,
-      uGlowW: [w0w, w1, w2, w3], uGlowW4: w4, uGlowHalo: plan.halo, uGlowTint: plan.tint, uOutSize: [w0, h0],
-    });
-    this.glowMix = plan.mix;
+    for (let i = 1; i <= need; i++) this.draw('glowDown', levels[i].a, { uTex: levels[i - 1].a.tex, uOutSize: [levels[i].w, levels[i].h] });
+    const tex = [this.blank, this.blank];
+    if (plan.dir) {
+      const L = levels[jobs[0]], le = Math.max(L.w, L.h);
+      const tx = plan.dir[0] * L.w, ty = plan.dir[1] * L.h, n = Math.hypot(tx, ty) || 1;
+      const u = [tx / n, ty / n], v = [-u[1], u[0]];
+      this.draw('blur', L.b, { uTex: L.a.tex, uStep: [v[0] / L.w, v[1] / L.h], uSigma: Math.max(0.05, plan.across * le) });
+      const r = res(0, L);
+      this.draw('glowLine', r, { uTex: L.b.tex, uStep: [u[0] / L.w, u[1] / L.h], uLen: plan.len * le, uOneSided: plan.one });
+      tex[0] = r.tex;
+    } else {
+      jobs.forEach((i, k) => {
+        if (i === undefined) return;
+        const L = levels[i], sigma = Math.max(0.05, (plan.blur[k] * Math.max(L.w, L.h)));
+        const r = res(k, L);
+        this.draw('blur', L.b, { uTex: L.a.tex, uStep: [1 / L.w, 0], uSigma: sigma });
+        this.draw('blur', r, { uTex: L.b.tex, uStep: [0, 1 / L.h], uSigma: sigma });
+        tex[k] = r.tex;
+      });
+    }
+    this.draw('glowMix', out, { uG0: tex[0], uG1: tex[1], uGlowW: plan.mix, uGlowTint: plan.tint, uOutSize: [w0, h0] });
     this.glowSrc = this.src;
     this.glowKey = key;
   }
 
   freeGlow() {
     for (const L of this.glow?.levels || []) { this.free(L.a); this.free(L.b); }
+    for (const r of this.glow?.res || []) if (r) this.free(r.t);
     if (this.glow) this.free(this.glow.out);
     this.glow = null;
     this.glowKey = '';
@@ -807,7 +833,9 @@ export class Renderer {
       uHiSafe: hi ? hi.safe : [0, 0, 0, 0],
       uGuide: this.guide[2].tex,
       uGlow: this.glowOn ? this.glow.out.tex : this.blank,
-      uGlowMix: this.glowOn ? [(s.glow || 0) / 100, ...this.glowMix.slice(1)] : [0, 0, 0, 0],
+      uGlowMix: this.glowOn ? [this.glowPlan.amount, this.glowPlan.mode, 0, 1] : [0, 0, 0, 0],
+      uGlowF: this.glowOn ? this.glowPlan.final : [0, 0, 0, 0],
+      uGlowF2: this.glowOn ? this.glowPlan.final2 : [0, 0, 0, 0],
       uCurve: this.curveTex,
       uHue: this.hueTex,
       uOut2Ori: glMat(out2ori),
@@ -900,6 +928,7 @@ export class Renderer {
       if (!px) return null;
       const bins = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
       for (let i = 0; i < px.length; i += 4) { bins[0][px[i]]++; bins[1][px[i + 1]]++; bins[2][px[i + 2]]++; }
+      bins.px = px; bins.w = w; bins.h = h; // the pixels themselves, for the Vectorscope
       return bins;
     };
     const read = () => {
@@ -921,7 +950,7 @@ export class Renderer {
       this.melissa = false;
       this.hi = saveHi;
     }
-    const join = (a, b) => (a ? Object.assign(a, { pre: b }) : null);
+    const join = (a, b) => { if (b) delete b.px; return a ? Object.assign(a, { pre: b }) : null; };
     return out instanceof Promise || pre instanceof Promise ? Promise.all([out, pre]).then(([a, b]) => join(a, b)) : join(out, pre);
   }
 

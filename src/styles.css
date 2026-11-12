@@ -487,6 +487,18 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .dev-panel-empty { padding: 20px; }
 .dev-panel-inner { padding: 12px 14px 20px; display: flex; flex-direction: column; gap: 6px; }
 .dev-hist { width: 100%; height: 96px; display: block; border-radius: var(--r); background: var(--well); border: 1px solid var(--line); }
+.dev-scope { display: flex; flex-direction: column; border-radius: var(--r); background: var(--well); border: 1px solid var(--line); }
+.dev-scope-head { display: flex; align-items: center; justify-content: space-between; height: 28px; padding: 0 4px 0 2px; }
+.dev-scope-toggle { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 4px; background: transparent; border: 0; color: var(--text-2); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.dev-scope-toggle:hover, .dev-scope.open .dev-scope-toggle { color: var(--text); }
+.dev-scope-space { height: 22px; padding: 0 6px; gap: 4px; font-size: 12px; background: transparent; border-color: transparent; }
+.dev-scope-tools { display: flex; align-items: center; gap: 2px; }
+.dev-scope-zoom { display: flex; gap: 1px; }
+.dev-scope-zoom button { height: 20px; min-width: 24px; padding: 0 4px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--faint); font: inherit; font-size: 11px; font-variant-numeric: tabular-nums; cursor: pointer; }
+.dev-scope-zoom button:hover { color: var(--text-2); }
+.dev-scope-zoom button.on { background: var(--sel); color: var(--text); }
+.dev-scope-read { padding: 0 8px 6px; font-size: 11px; color: var(--text-2); font-variant-numeric: tabular-nums; text-align: center; min-height: 18px; }
+.dev-scope-canvas { width: 100%; aspect-ratio: 1 / 0.92; display: block; }
 .dev-shot { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .dev-shot span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dev-row { display: flex; align-items: center; gap: 4px; }
@@ -506,8 +518,6 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .dev-group-title { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 600; color: var(--text); margin: 4px 0 2px; }
 .dev-group-title .btn { font-weight: 400; color: var(--muted); }
 .dev-group-title .btn:hover { color: var(--text); }
-.dev-glow-toggle { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
-.dev-glow-toggle:hover { color: var(--text); opacity: 0.85; }
 .dev-wb { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 2px; }
 .dev-wb .dd { height: 26px; min-width: 150px; font-size: 12px; border-radius: var(--r-sm); }
 .dev-line { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
