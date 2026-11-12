@@ -76,6 +76,7 @@ const PERSON_PARTS = [['', 'Entire person'], ['face', 'Face skin'], ['skin', 'Bo
  */
 export function useAiMasks({ photo, picture, acts, ensure, toast }) {
   const [busy, setBusy] = useState(null);
+  const job = useRef(0); // the run that's showing; Cancel moves on, so a cancelled run's answer is dropped
   const [pick, setPick] = useState(null); // { type, results, target }
   useEffect(() => setPick(null), [photo?.id]);
 
@@ -128,11 +129,13 @@ export function useAiMasks({ photo, picture, acts, ensure, toast }) {
   };
 
   const run = async (type, target = null) => {
+    const me = ++job.current;
     try {
       if (!(await ensure(FEATURE[type]))) return;
       setBusy(AI_TYPES.find(([k]) => k === type)[1]);
       const t0 = performance.now();
       const { r, secs } = await results(TASK[type]);
+      if (job.current !== me) return;
       if (performance.now() - t0 > 6000) slow(type, secs);
       aiDone(`AI ${aiName(type)} mask is ready`);
       const named = (n) => r.find((x) => x.name === n);
@@ -149,34 +152,40 @@ export function useAiMasks({ photo, picture, acts, ensure, toast }) {
       } else if (!r.length) toast(type === 'people' ? 'No people found in this photo' : 'Nothing found to select');
       else setPick({ type, results: r, target });
     } catch (err) {
+      if (job.current !== me) return;
       toast(`AI masking didn't work: ${err.message || err}`);
       aiDone('AI masking didn\'t work', String(err.message || err));
     } finally {
-      setBusy(null);
+      if (job.current === me) setBusy(null);
     }
   };
 
-  /** For Retouch's Select menu: the AI mask itself, { w, h, data } (0-255, top row first), or null. */
-  const get = async (type) => {
+  /** The AI mask itself, { w, h, data } (0-255, top row first), or null (Retouch's Select menu;
+   *  the AI grade with `quiet`, as it shows its own lock). */
+  const get = async (type, { quiet = false } = {}) => {
+    const me = quiet ? job.current : ++job.current;
     try {
       if (!(await ensure(FEATURE[type]))) return null;
-      setBusy(AI_TYPES.find(([k]) => k === type)[1]);
+      if (!quiet) setBusy(AI_TYPES.find(([k]) => k === type)[1]);
       const { r } = await results(TASK[type]);
+      if (!quiet && job.current !== me) return null;
       const named = (n) => r.find((x) => x.name === n);
       if (type === 'sky') { if (!named('sky')) toast('No sky found in this photo'); return named('sky') || null; }
       if (type === 'skin') { const skin = allSkin(r); if (!skin) toast('No skin found in this photo'); return skin; }
       const sub = named('subject');
       return sub && (type === 'background' ? { ...sub, data: sub.data.map((v) => 255 - v) } : sub);
     } catch (err) {
-      toast(`AI selection didn't work: ${err.message || err}`);
+      if (!quiet && job.current === me) toast(`AI selection didn't work: ${err.message || err}`);
       return null;
     } finally {
-      setBusy(null);
+      if (!quiet && job.current === me) setBusy(null);
     }
   };
 
   const picker = pick && <AiPicker {...pick} onClose={() => setPick(null)} onCreate={(items, separate) => { setPick(null); make(items, pick.target, separate); }} />;
-  return { run, get, busy, picker, warm };
+  const cancel = () => { job.current++; setBusy(null); };
+  const lock = busy && <AiLock title={`AI ${busy}`} text="Finding it in the photo on this computer." at={null} onCancel={cancel} />;
+  return { run, get, busy, picker, warm, lock };
 }
 
 // People: each person and their parts. Landscape: what was found.
@@ -215,39 +224,40 @@ function AiPicker({ type, results, target, onClose, onCreate }) {
 
 // --- AI Denoise -------------------------------------------------------------------
 
-/** While Denoise runs, a panel over the whole app (below the title bar, so the
- *  window can still be moved) keeps clicks and keys from reaching anything
- *  else. Esc or Cancel stops it. */
-function DenoiseLock({ run, onCancel }) {
+/** While an AI job runs (Denoise, AI masks, AI grade), a panel over the whole
+ *  app (below the title bar, so the window can still be moved) keeps clicks and
+ *  keys from reaching anything else, so the photo can't change under it.
+ *  `at` is 0-1, or null when the job can't tell how far it is. Esc or Cancel stops it. */
+export function AiLock({ title, text, at, label, cancelling, onCancel }) {
   const box = useRef(null);
+  const cancel = useRef(onCancel);
+  cancel.current = onCancel;
   useEffect(() => {
     const onKey = (e) => {
       if (box.current?.contains(e.target) && (e.key === 'Enter' || e.key === ' ' || e.key === 'Tab')) return;
       e.stopImmediatePropagation();
       e.preventDefault();
-      if (e.key === 'Escape') onCancel();
+      if (e.key === 'Escape' && e.type === 'keydown') cancel.current();
     };
     const opts = { capture: true };
     window.addEventListener('keydown', onKey, opts);
     window.addEventListener('keyup', onKey, opts);
     box.current?.querySelector('button')?.focus();
     return () => { window.removeEventListener('keydown', onKey, opts); window.removeEventListener('keyup', onKey, opts); };
-  }, [onCancel]);
-  const pct = run.total > 1 ? Math.round((100 * run.done) / run.total) : 0;
-  return (
+  }, []);
+  return createPortal(
     <div className="overlay ai-lock" onContextMenu={(e) => e.preventDefault()} onWheel={(e) => e.stopPropagation()}>
-      <div className="modal ai-lock-box" role="alertdialog" aria-modal="true" aria-label="AI Denoise" ref={box}>
-        <div className="modal-head"><h2>AI Denoise</h2></div>
+      <div className="modal ai-lock-box" role="alertdialog" aria-modal="true" aria-label={title} ref={box}>
+        <div className="modal-head"><h2>{title}</h2></div>
         <div className="modal-body">
-          <p className="small">{run.cancelling ? 'Stopping…' : 'Removing noise on this computer. The rest of Flightroom waits until it is done.'}</p>
-          <div className="ai-progress ai-glow busy"><span style={{ width: `${pct}%` }} /><em>{run.total > 1 ? `${pct}%` : 'Starting…'}</em></div>
+          <p className="small">{cancelling ? 'Stopping…' : `${text} The rest of Flightroom waits until it is done.`}</p>
+          <div className="ai-progress ai-glow busy"><span style={{ width: `${Math.round(100 * (at || 0))}%` }} /><em>{label ?? (at ? `${Math.round(100 * at)}%` : 'Working…')}</em></div>
         </div>
         <div className="modal-foot">
-          <button className="btn btn-sm" onClick={onCancel} disabled={run.cancelling}>Cancel</button>
+          <button className="btn btn-sm" onClick={() => cancel.current()} disabled={cancelling}>Cancel</button>
         </div>
       </div>
-    </div>
-  );
+    </div>, document.body);
 }
 
 const DN_AMOUNT = { key: 'aiDenoise', label: 'Amount', min: 1, max: 100, step: 1, def: 50 };
@@ -276,7 +286,8 @@ export function AiDenoise({ photo, info, s, set, ensure, onDenoised }) {
   };
   const busy = run && !run.error;
   const cancel = () => { setRun((r) => (r && !r.error ? { ...r, cancelling: true } : r)); bridge.develop.cancelDenoise(); };
-  const lock = busy && createPortal(<DenoiseLock run={run} onCancel={cancel} />, document.body);
+  const lock = busy && <AiLock title="AI Denoise" text="Removing noise on this computer." at={run.total > 1 ? run.done / run.total : null}
+    label={run.total > 1 ? null : 'Starting…'} cancelling={run.cancelling} onCancel={cancel} />;
   if (info.denoised && !busy) {
     return (
       <div className="dev-group ai-denoise">

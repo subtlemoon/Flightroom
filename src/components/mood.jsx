@@ -4,6 +4,7 @@
 // and one undo step.
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from './ui.jsx';
+import { AiLock } from './ai.jsx';
 import { MAX_MASKS, newAiPart, newMask } from '../develop/masks.js';
 import { aiDone } from '../notify.js';
 import { autoMood, lookSettings, maskWeights, measure, MOOD_CHIPS, MOOD_KEYS, parseMood, readScene, recipeFor, sceneRecipe, solveGrade, subjectAdjust } from '../develop/mood.js';
@@ -38,12 +39,21 @@ export function useMoodGrade({ photo, s, update, stage, aiMasks, ensure, toast }
     if (!opts.look) return null;
     const why = await visionBlocked();
     if (why) { if (!warned) toast(`AI grade can't look at photos on this computer (${why}), so it grades from your words.`); warned = true; return null; }
-    if (!(await ensure('grade'))) return null;
+    // The download question shows without the lock over it.
+    setBusy(null);
+    const ok = await ensure('grade');
+    if (live.current !== id) throw new Error('cancelled');
+    setBusy({ label: 'Starting the vision model', at: 0.02 });
+    if (!ok) return null;
     if (live.current !== id) throw new Error('cancelled');
     setBusy({ label: 'Looking at the photo', at: 0.03 });
     const pic = await stage.current.renderFlat?.(lookSettings(base, recipeFor({ looks: [], colors: [] }, 0)), VISION_EDGE);
     if (!pic) throw new Error('The photo isn\'t ready yet');
-    return lookAt(pic, { onProgress: (f) => setBusy({ label: 'Starting the vision model', at: 0.03 * f }) });
+    const saw = await lookAt(pic, {
+      onProgress: (label, f) => { if (live.current === id) setBusy({ label, at: 0.03 + 0.07 * f }); },
+      onLook: () => { if (live.current === id) setBusy({ label: 'Looking at the photo', at: 0.1 }); },
+    });
+    return saw;
   };
 
   const grade = async (text) => {
@@ -58,7 +68,7 @@ export function useMoodGrade({ photo, s, update, stage, aiMasks, ensure, toast }
     const from = same ? prior.from : { exposure: s.exposure, temp: s.temp, tint: s.tint, wb: s.wb };
     const base = { ...s, ...from };
     // The subject is found while the grade is worked out (it's the slow part).
-    const subjectP = opts.subject ? aiMasks.get('subject').catch(() => null) : Promise.resolve(null);
+    const subjectP = opts.subject ? aiMasks.get('subject', { quiet: true }).catch(() => null) : Promise.resolve(null);
     try {
       setBusy({ label: 'Reading the photo', at: 0.02 });
       let saw = null;
@@ -115,7 +125,9 @@ export function useMoodGrade({ photo, s, update, stage, aiMasks, ensure, toast }
       if (live.current === id) { live.current = null; setBusy(null); }
     }
   };
-  return { grade, busy, last, opts, setOpts };
+  const cancel = () => { live.current = null; setBusy(null); };
+  const lock = busy && <AiLock title="AI grade" text="Grading this photo on this computer." at={busy.at} label={`${busy.label}…`} onCancel={cancel} />;
+  return { grade, busy, last, opts, setOpts, lock };
 }
 
 const words = (t) => t.toLowerCase().split(/[\s,]+/).filter(Boolean);

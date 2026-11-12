@@ -115,6 +115,8 @@ export const bridge = inApp ? {
     // The computer's graphics adapters, and whether there's only graphics built into the processor.
     gpu: () => call('gpu_info'),
     install: (feature) => call('ai_install', { feature }),
+    // Where the AI grade's vision model files are served on this computer (a local address, fast for big files).
+    visionUrl: () => call('vision_url'),
     onProgress: (fn) => onEvent('ai:progress', fn),
     // rgba: bottom-up RGBA of the upright, uncropped photo. Answers [{ name, data }] of w x h bytes.
     masks: async (task, w, h, rgba) => {

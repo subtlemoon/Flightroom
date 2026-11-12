@@ -210,6 +210,7 @@ pub fn run() {
             ai::ai_prefer,
             ai::gpu_info,
             ai::ai_masks,
+            ai::vision_url,
             display::display_profile,
         ])
         .build(tauri::generate_context!())

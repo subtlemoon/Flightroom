@@ -1345,16 +1345,14 @@ pub async fn gpu_info() -> GpuInfo {
         .unwrap_or(GpuInfo { adapters: vec![], integrated: false })
 }
 
-/// gcimg://localhost/ai/<path>: a downloaded file of the AI grade's vision
-/// model, for the window (it runs that model itself, on WebGPU). The path's
-/// folders are joined with "--" into the file's name, as it is in the release;
-/// only files the manifest lists are served.
-pub fn serve(app: &AppHandle, path: &str) -> crate::photos::HttpResponse {
-    let ai = app.state::<Ai>();
+/// A downloaded file of the AI grade's vision model by its path ("smolvlm/onnx/x.onnx"):
+/// its place on disk and type. The path's folders are joined with "--" into the
+/// file's name, as it is in the release; only files the manifest lists are given.
+fn vision_file(ai: &Ai, path: &str) -> Option<(PathBuf, &'static str)> {
     let name = path.replace('/', "--");
     let listed = ai.manifest().map(|m| m.files.iter().any(|f| f.name == name)).unwrap_or(false);
     if !listed || name.contains("..") || name.contains('\\') {
-        return crate::photos::not_found();
+        return None;
     }
     let ctype = match name.rsplit('.').next() {
         Some("json") => "application/json",
@@ -1362,10 +1360,83 @@ pub fn serve(app: &AppHandle, path: &str) -> crate::photos::HttpResponse {
         Some("txt") => "text/plain",
         _ => "application/octet-stream",
     };
-    match std::fs::read(ai.dir.join(&name)) {
-        Ok(b) => crate::photos::respond(200, ctype, b),
-        Err(_) => crate::photos::not_found(),
+    Some((ai.dir.join(&name), ctype))
+}
+
+/// gcimg://localhost/ai/<path>: a vision model file, for the window. (Slow for
+/// the big model files on Windows, which is why vision_url serves them too.)
+pub fn serve(app: &AppHandle, path: &str) -> crate::photos::HttpResponse {
+    let ai = app.state::<Ai>();
+    match vision_file(&ai, path).and_then(|(p, ctype)| std::fs::read(p).ok().map(|b| (b, ctype))) {
+        Some((b, ctype)) => crate::photos::respond(200, ctype, b),
+        None => crate::photos::not_found(),
     }
+}
+
+/// Where the window loads the vision model from: a small file server on this
+/// computer only (127.0.0.1), under a random path, serving only the model's
+/// files. WebView2 reads big answers from gcimg:// a few KB at a time, so the
+/// 350 MB model took minutes to load that way.
+#[tauri::command]
+pub fn vision_url(app: AppHandle) -> Result<String, String> {
+    static URL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    if let Some(u) = URL.get() {
+        return Ok(u.clone());
+    }
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|e| e.to_string())?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    let token = {
+        use std::hash::{BuildHasher, Hasher};
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+        h.write_u32(std::process::id());
+        let a = h.finish();
+        h.write_u64(a);
+        format!("{a:016x}{:016x}", h.finish())
+    };
+    let prefix = format!("/{token}/");
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let app = app.clone();
+            let prefix = prefix.clone();
+            std::thread::spawn(move || {
+                let _ = answer(&app, &prefix, stream);
+            });
+        }
+    });
+    Ok(URL.get_or_init(|| format!("http://127.0.0.1:{port}/{token}/")).clone())
+}
+
+fn answer(app: &AppHandle, prefix: &str, mut stream: std::net::TcpStream) -> std::io::Result<()> {
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
+    let mut head = Vec::new();
+    let mut buf = [0u8; 1024];
+    while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+        let n = stream.read(&mut buf)?;
+        if n == 0 || head.len() > 16384 {
+            return Ok(());
+        }
+        head.extend_from_slice(&buf[..n]);
+    }
+    let line = String::from_utf8_lossy(&head);
+    let mut parts = line.split_whitespace();
+    let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+    let cors = "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Private-Network: true\r\nAccess-Control-Allow-Headers: *\r\nConnection: close\r\n";
+    if method == "OPTIONS" {
+        return stream.write_all(format!("HTTP/1.1 204 No Content\r\n{cors}\r\n").as_bytes());
+    }
+    let path = target.split('?').next().unwrap_or("");
+    let path = percent_encoding::percent_decode_str(path).decode_utf8_lossy();
+    let file = path.strip_prefix(prefix).filter(|_| method == "GET").and_then(|p| vision_file(&app.state::<Ai>(), p));
+    let Some((file, ctype)) = file else {
+        return stream.write_all(format!("HTTP/1.1 404 Not Found\r\n{cors}Content-Length: 0\r\n\r\n").as_bytes());
+    };
+    let Ok(mut f) = std::fs::File::open(&file) else {
+        return stream.write_all(format!("HTTP/1.1 404 Not Found\r\n{cors}Content-Length: 0\r\n\r\n").as_bytes());
+    };
+    let len = f.metadata()?.len();
+    stream.write_all(format!("HTTP/1.1 200 OK\r\n{cors}Content-Type: {ctype}\r\nContent-Length: {len}\r\nCache-Control: no-store\r\n\r\n").as_bytes())?;
+    std::io::copy(&mut f, &mut std::io::BufWriter::with_capacity(1 << 20, stream)).map(|_| ())
 }
 
 pub fn models_dir(app: &AppHandle) -> PathBuf {

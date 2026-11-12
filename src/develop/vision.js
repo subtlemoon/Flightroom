@@ -2,9 +2,9 @@
 // Apache-2.0) that looks at the photo and says what it is: the place, the
 // light, the subject. It runs in the window with transformers.js on the
 // graphics card (WebGPU). The model comes with the "grade" AI download and the
-// desktop side serves it at gcimg://localhost/ai/ (src-tauri/src/ai.rs serve);
+// desktop side serves it from this computer (src-tauri/src/ai.rs vision_url);
 // nothing is fetched from the internet. mood.js turns what it says into the grade.
-import { FILES } from '../bridge.js';
+import { bridge, FILES } from '../bridge.js';
 // ONNX Runtime's WebAssembly part, from the app itself (transformers.js would fetch it from a CDN).
 import ortWasm from '../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm?url';
 
@@ -29,19 +29,36 @@ export async function visionBlocked() {
   return null;
 }
 
-/** Loads the model once (a few seconds; the files are on this computer). */
+const MB = (n) => Math.round(n / 1e6);
+
+/**
+ * Loads the model once (a few seconds; the files are on this computer).
+ * onProgress(label, 0-1) says how far: reading the files, then starting it on the graphics card.
+ */
+let listen = null; // the latest caller's onProgress (a grade started while loading takes it over)
 export function loadVision(onProgress) {
+  listen = onProgress;
   if (!loading) {
     loading = (async () => {
+      listen?.('Starting the vision model', 0);
       const t = await import('@huggingface/transformers');
+      const local = base || (await bridge?.ai.visionUrl().catch(() => null));
       t.env.allowRemoteModels = false;
       t.env.allowLocalModels = true;
-      t.env.localModelPath = base || `${FILES}ai/`;
+      t.env.localModelPath = typeof local === 'string' ? local : `${FILES}ai/`;
       t.env.useBrowserCache = false;
       t.env.useWasmCache = false;
       t.env.backends.onnx.wasm.wasmPaths = { wasm: ortWasm };
       t.env.backends.onnx.wasm.numThreads = 1;
-      const progress_callback = (p) => { if (p.status === 'progress' && p.total) onProgress?.(p.loaded / p.total); };
+      // Bytes read across all the files; once they're in, the graphics card gets the model ready.
+      const files = new Map();
+      const progress_callback = (p) => {
+        if (p.status !== 'progress' || !p.total) return;
+        files.set(p.file, [p.loaded, p.total]);
+        let got = 0, all = 0;
+        for (const [l, n] of files.values()) { got += l; all += n; }
+        listen?.(got >= all ? 'Starting the vision model on the graphics card' : `Reading the vision model (${MB(got)} of ${MB(all)} MB)`, all > 1e8 ? got / all : 0);
+      };
       const processor = await t.AutoProcessor.from_pretrained(MODEL, { progress_callback });
       const model = await t.AutoModelForVision2Seq.from_pretrained(MODEL, {
         device: 'webgpu',
@@ -86,7 +103,8 @@ export const DESCRIBE = 'Describe this photo in two sentences: what and where it
  * What the model sees in `pic` ({ w, h, rgba } bottom row first, about
  * VISION_EDGE on the long edge), as a short description.
  */
-export async function lookAt(pic, { onProgress } = {}) {
+export async function lookAt(pic, { onProgress, onLook } = {}) {
   const vlm = await loadVision(onProgress);
+  onLook?.();
   return ask(vlm, toImage(pic), DESCRIBE, 80);
 }
