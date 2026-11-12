@@ -208,10 +208,11 @@ uniform float uContrastSat; // the Contrast slider (-1..1), for the colour it ch
 // Contrast changes colour too, as in Lightroom, weak colours most (fitted on
 // Lightroom's exports of JWL_7451, tools/lr-tone.md).
 const float CS_K = 0.25, CS_V = 0.1;
-const float CON_K = 1.0, CON_PIVOT = 0.6, CON_LUM = 0.6;
+const float CON_K = 1.0, CON_LUM = 0.6;
+uniform float uConPivot;
 // An S-curve of strength k around CON_PIVOT (screen values 0-1).
 float conCurve(float x, float k) {
-  float p = CON_PIVOT;
+  float p = uConPivot;
   float t = clamp(x < p ? 0.5 * x / p : 0.5 + 0.5 * (x - p) / (1.0 - p), 0.0, 1.0);
   t += k * (t * t * (3.0 - 2.0 * t) - t);
   return t < 0.5 ? 2.0 * p * t : p + (t - 0.5) * 2.0 * (1.0 - p);
@@ -232,7 +233,7 @@ uniform float uNrLum, uNrColor, uNrLumDetail, uNrLumContrast, uNrColorDetail, uN
 uniform float uVignette, uVigMid, uVigRound, uVigFeather, uVigStyle, uVigHighlights;
 uniform float uRefineSat;
 uniform float uBW;
-uniform vec3 uGradeS, uGradeM, uGradeH, uGradeG; // OKLab hue direction (xy) and amount (luts.js gradeTints)
+uniform vec3 uGradeS, uGradeM, uGradeH, uGradeG; // each region's tint, scaled by its amount (luts.js gradeTints)
 uniform vec4 uGradeLum;   // shadows, midtones, highlights, global
 uniform vec2 uGradeShape; // blending, balance
 uniform float uGradeOn;
@@ -409,7 +410,7 @@ vec3 gamutIn(vec3 d) {
 // Display colour <-> OKLab (sRGB curve, signed so colours past the gamut edge
 // keep going), for colour grading.
 const float MIX_HUE = 37.97, MIX_SAT_UP = 0.211, MIX_SAT_DOWN = 0.692, MIX_LUM_UP = 0.929, MIX_LUM_DOWN = 0.834, MIX_LUM_SAT = 0.127, MIX_S = 0.0615;
-const float GRADE_OFF = 0.165, GRADE_K = 0.0787, GRADE_D = 0.248, GRADE_Q = 0.18;
+const float GRADE_C = 0.6257, GRADE_OFF = 0.1045, GRADE_W = 0.1302, GRADE_P = 0.4262;
 vec3 srgbToLin(vec3 c) {
   vec3 a = abs(c);
   return sign(c) * mix(pow((a + 0.055) / 1.055, vec3(2.4)), a / 12.92, step(a, vec3(0.04045)));
@@ -932,28 +933,21 @@ void main() {
     d = vec3(max(yb, 0.0));
   }
 
-  // Colour grading, fitted to Lightroom's (exports of JWL_7345 with and without
-  // its grade, tools/lr-tone.md), in OKLab: soft regions on lightness around the
-  // balance point; each adds its colour, pulls existing colour in a little and
-  // darkens (Lightroom's grade does: 3-5 L*), less for colours already leaning
-  // its way, so a red suit keeps its brightness under a red midtone grade.
+  // Colour grading, fitted on Lightroom exports of test charts and
+  // of JWL_7345/7530 with and without their grade (tools/lr-tone.md):
+  // soft regions on OKLab lightness around the balance point; each adds its
+  // tint (luts.js gradeTints) to the display colour, most in the middle of each
+  // channel's range and fading toward black and white, as a soft-light blend does.
   if (uGradeOn > 0.0) {
-    vec3 o = toOklab(d);
-    float c = 0.639 - uGradeShape.y * 0.3, w = 0.0943 * (0.1 + uGradeShape.x * 0.4) / 0.3;
-    float sh = 1.0 / (1.0 + exp((o.x - c + GRADE_OFF) / w));
-    float hi = 1.0 / (1.0 + exp((c + GRADE_OFF - o.x) / w));
-    float mi = clamp(1.0 - sh - hi, 0.0, 1.0) / (1.0 - 2.0 / (1.0 + exp(GRADE_OFF / w)));
-    vec4 wr = vec4(sh, mi, hi, 1.0) * vec4(uGradeS.z, uGradeM.z, uGradeH.z, uGradeG.z);
-    vec2 ab = o.yz;
-    float dk = 0.0;
-    o.yz *= 1.0 - GRADE_Q * (wr.x + wr.y + wr.z + wr.w);
-    vec2 dirs[4] = vec2[4](uGradeS.xy, uGradeM.xy, uGradeH.xy, uGradeG.xy);
-    for (int i = 0; i < 4; i++) {
-      o.yz += GRADE_K * pow(max(o.x, 0.0), 0.361) * wr[i] * dirs[i];
-      dk += wr[i] * clamp(1.0 - 7.0 * dot(ab, dirs[i]), 0.0, 1.0);
-    }
-    o.x *= 1.0 - GRADE_D * dk;
-    d = fromOklab(o);
+    float lk = toOklab(d).x;
+    // Blending past 50 widens the regions and strengthens them (chart at 100).
+    float bl = uGradeShape.x, up = max(bl - 0.5, 0.0);
+    float c = GRADE_C - uGradeShape.y * 0.3, w = GRADE_W * (bl >= 0.5 ? 1.0 + up * 4.0 : (0.1 + bl * 0.4) / 0.3);
+    float sh = 1.0 / (1.0 + exp((lk - c + GRADE_OFF) / w));
+    float hi = 1.0 / (1.0 + exp((c + GRADE_OFF - lk) / w));
+    float mi = clamp(1.0 - sh - hi, 0.0, 1.0);
+    vec3 dd = clamp(d, 0.0, 1.0);
+    d += ((sh * uGradeS + mi * uGradeM + hi * uGradeH) * (1.0 + up * 2.0) + uGradeG) * pow(4.0 * dd * (1.0 - dd), vec3(GRADE_P));
     float lum = uGradeLum.x * sh + uGradeLum.y * mi + uGradeLum.z * hi + uGradeLum.w;
     d = lum >= 0.0 ? 1.0 - (1.0 - d) * (1.0 - lum * 0.5) : d * (1.0 + lum * 0.5);
   }
@@ -966,16 +960,20 @@ void main() {
     vec2 qs = q * (r > 0.0 ? vec2(mix(1.0, uCropAspect, r), 1.0) / mix(1.0, max(uCropAspect, 1.0), r) : vec2(1.0));
     float pw = 2.0 + max(-r, 0.0) * 6.0;
     float dist = pow(pow(abs(qs.x), pw) + pow(abs(qs.y), pw), 1.0 / pw);
-    float m0 = 1.45 - uVigMid * 0.9;
-    float f = 0.08 + uVigFeather * 0.9;
+    // Reach and strength fitted on Lightroom's -15 (midpoint and feather 50) on
+    // IMG_9251: it starts about a third of the way out and takes the corners'
+    // mid tones down 11 L* (was 0.9 strength from halfway out: about half that).
+    float m0 = 1.374 - uVigMid * 0.9;
+    float f = 0.08 + uVigFeather * 1.476;
     float mask = smoothstep(m0 - f * 0.5, m0 + f * 0.5, dist);
-    float amt = abs(uVignette) * mask * 0.9;
+    float amt = abs(uVignette) * mask * 1.58;
     if (uVigStyle > 2.5) d = mix(d, uVignette > 0.0 ? vec3(1.0) : vec3(0.0), amt);
     else {
       vec3 d0 = d;
       // Highlight and Color Priority scale the light (keeping colours); Highlights lets bright parts through.
       d = uVignette > 0.0 ? 1.0 - (1.0 - d) * (1.0 - amt) : d * (1.0 - amt);
-      if (uVigStyle < 1.5) d = mix(d, d0, uVigHighlights * smoothstep(0.55, 1.0, max(d0.r, max(d0.g, d0.b))));
+      // Highlight Priority spares bright parts even with its Highlights at 0 (IMG_9251).
+      if (uVigStyle < 1.5) d = mix(d, d0, (0.83 + 0.17 * uVigHighlights) * smoothstep(mix(0.68, 0.55, uVigHighlights), 1.0, max(d0.r, max(d0.g, d0.b))));
       else d = mix(d, d0, uVigHighlights * 0.5 * smoothstep(0.7, 1.0, max(d0.r, max(d0.g, d0.b))));
     }
   }
