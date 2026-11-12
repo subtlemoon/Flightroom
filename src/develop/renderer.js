@@ -4,7 +4,7 @@
 // (shaders.js) for just the pixels on screen.
 import { LUT_SIZE } from './icc.js';
 import { createDevice } from './gpu/index.js';
-import { colorTransform, inv3, mul3, neutralToXy, tempTintToXy } from './color.js';
+import { colorTransform, inv3, mul3, neutralToXy, tempTintToXy, xyToTempTint } from './color.js';
 import { BASELINE_EXPOSURE, PP_TO_SRGB, SRGB_TO_PP, TONE_SIZE, adobeRendering, dcpTransform, hueSatFor, hueSatPixels, toneTable } from './adobe.js';
 import { CURVE_SIZE, HUE_SIZE, calibrationMatrix, curveTable, gradeTints, hueTable } from './luts.js';
 import { MAX_MASKS, POINT_DEFAULT, adjOf, lumRange, maskRaster, rasterChange } from './masks.js';
@@ -66,10 +66,55 @@ function whiteXy(info, s) {
   return tempTintToXy(s.temp, s.tint);
 }
 
+// Without Lightroom's profile for the camera (no Lightroom or Adobe DNG
+// Converter on the computer: the built-in Adobe Standard, or Camera Standard
+// and AgX), only the camera's colour matrices are here, and they make a white
+// balance away from the photo's light exactly as strong as colour science says.
+// Lightroom's profiles carry forward matrices that make it about 0.6 as strong:
+// fitted on eleven cameras' Adobe Standard profiles (Canon 80D, R, R6, Nikon
+// Z 7, Z 8, D3100, Sony A7S II, Leica M10, Fujifilm X-A7, XF10, Olympus E-PM2).
+// Unsoftened, Tint +100 on a Canon 80D turned the whole photo solid blue where
+// Lightroom shows lavender. So the white is moved from the photo's As Shot
+// light only 0.6 of the way (in mireds and tint) to the one asked for. As Shot
+// itself, and the Temp and Tint numbers, stay as they are.
+export const BUILT_IN_WB = 0.6;
+const softWb = (r) => !r || !r.dcp.illuminants.some((i) => i.forward);
+function asShotTT(info) {
+  if (!info.asShot?.every((m) => m > 0) || !info.matrices?.length) return null;
+  return xyToTempTint(neutralToXy(info.matrices, info.asShot.map((m) => 1 / m)));
+}
+/** Moves `t` (temp, tint) `k` of the way from `from`, in mireds and tint (kept within 2000-50000 K and Tint ±150). */
+function between(from, t, k) {
+  const mired = Math.min(500, Math.max(20, 1e6 / from.temp + k * (1e6 / t.temp - 1e6 / from.temp)));
+  return { temp: 1e6 / mired, tint: Math.min(150, Math.max(-150, from.tint + k * (t.tint - from.tint))) };
+}
+
+/** The white the photo is rendered with: softened as above where only colour matrices are here. */
+export function renderWhite(info, s, r = adobeRendering(info, s.profile)) {
+  const xy = whiteXy(info, s);
+  const shot = softWb(r) && asShotTT(info);
+  if (!shot) return xy;
+  const { temp, tint } = between(shot, xyToTempTint(xy), BUILT_IN_WB);
+  return tempTintToXy(temp, tint);
+}
+
+/**
+ * Temp and Tint that render camera colour `neutral` as grey (the white balance
+ * selector, Auto): undoes the softening, so the spot picked really comes out neutral.
+ */
+export function tempTintFor(info, profile, neutral) {
+  const t = xyToTempTint(neutralToXy(info.matrices, neutral));
+  const shot = softWb(adobeRendering(info, profile)) && asShotTT(info);
+  return shot ? between(shot, t, 1 / BUILT_IN_WB) : t;
+}
+
 /** Multipliers and the matrix from camera RGB to linear sRGB for these settings (and how the profile's illuminants mix). */
 export function cameraTransform(info, s) {
   const r = adobeRendering(info, s.profile);
-  return r ? dcpTransform(r.dcp, whiteXy(info, s)) : colorTransform(info, s.temp, s.tint);
+  const xy = renderWhite(info, s, r);
+  if (r) return dcpTransform(r.dcp, xy);
+  const { temp, tint } = xyToTempTint(xy);
+  return colorTransform(info, temp, tint);
 }
 
 export function parseFrame(buf) {

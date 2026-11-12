@@ -311,6 +311,7 @@ export function AiDenoise({ photo, info, s, set, ensure, onDenoised }) {
         <>
           <button className="btn btn-sm full ai-glow" onClick={start} title="Removes noise with AI on this computer, keeping detail. Quick with a graphics card, slow without one; the result is kept for this photo."><Icon name="ai" size={14} />Denoise…</button>
           {run?.error && <p className="ai-error small">{run.error}</p>}
+          {!run?.error && s.aiDenoise > 0 && <p className="muted small">This photo was denoised before, but the result was cleared to free up space. Run Denoise again to bring it back (your Amount stays at {s.aiDenoise}).</p>}
         </>
       )}
     </div>
