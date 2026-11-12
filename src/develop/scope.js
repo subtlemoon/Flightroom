@@ -12,10 +12,11 @@ export const SCOPE_SPACES = [
   { id: 'prophoto', label: 'ProPhoto', m: [1, 0, 0, 0, 1, 0, 0, 0, 1], trc: 1.8 },
 ];
 
-// Rec. 709 chroma; scaled so the 75% colour targets sit where Lightroom puts
-// its tick marks (about 0.8 of the ring, 0.9 for green and magenta).
+// Rec. 709 chroma, scaled as Lightroom's: the space's pure (100%) colours
+// sit on the tick marks (about 0.8 of the ring, 0.9 for green and magenta),
+// so its gamut edge runs straight from tick to tick, as Lightroom's does.
 const KR = 0.2126, KB = 0.0722, KG = 1 - KR - KB;
-export const SCOPE_GAIN = 2.07;
+export const SCOPE_GAIN = 1.55;
 export function chroma(r, g, b) {
   const y = KR * r + KG * g + KB * b;
   return [((b - y) / (2 - 2 * KB)) * SCOPE_GAIN, ((r - y) / (2 - 2 * KR)) * SCOPE_GAIN];
@@ -105,11 +106,11 @@ export function skinReading([x, y]) {
   return { off: d, sat: sat * 100 };
 }
 
-/** The six colour targets: name, dot colour, angle, and the 75% target's distance from the centre. */
+/** The six colour targets: name, dot colour, angle, and the pure colour's distance from the centre (its tick). */
 export const TARGETS = [
   ['Red', '#e04848', [1, 0, 0]], ['Magenta', '#d84ad8', [1, 0, 1]], ['Blue', '#4040e0', [0, 0, 1]],
   ['Cyan', '#40d8d8', [0, 1, 1]], ['Green', '#40c840', [0, 1, 0]], ['Yellow', '#dede40', [1, 1, 0]],
 ].map(([name, dot, rgb]) => {
-  const [x, y] = chroma(...rgb.map((v) => v * 0.75));
+  const [x, y] = chroma(...rgb);
   return { name, dot, angle: Math.atan2(y, x), tick: Math.hypot(x, y) };
 });

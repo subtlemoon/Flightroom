@@ -97,7 +97,7 @@ export function Vectorscope() {
     ctx.closePath();
     ctx.fill();
 
-    // Dashed lines out to each colour, with the 75% target as a tick across it (moves out when zoomed).
+    // Dashed lines out to each colour, with its pure colour as a tick across it (moves out when zoomed).
     ctx.strokeStyle = 'rgba(255,255,255,0.32)';
     ctx.lineWidth = 1.2 * dpr;
     ctx.setLineDash([5 * dpr, 5 * dpr]);
@@ -193,8 +193,8 @@ export function Vectorscope() {
         )}
       </div>
       {cfg.open && <canvas className="dev-scope-canvas" ref={ref}
-        title="Vectorscope: hue round the ring, saturation out from the centre. The line is the skin tone line; ticks mark 75% saturation. Hover the photo to see where a spot sits." />}
-      {cfg.open && <div className="dev-scope-read">{mark ? skinText(skinReading(mark)) : 'Hover the photo to read a spot against the skin line'}</div>}
+        title="Vectorscope: hue round the ring, saturation out from the centre. The line is the skin tone line; ticks mark the colour space's pure colours (its edge). Hover the photo to see where a spot sits." />}
+      {cfg.open && <div className="dev-scope-read">{mark ? skinText(skinReading(mark)) : 'Hover the photo to read a spot'}</div>}
     </div>
   );
 }
