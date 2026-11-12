@@ -22,3 +22,13 @@ turns clockwise on screen (+45 points down-right).
 Checked in a WebGL rig (Renderer with an identity look, chart as the source): the glow
 profile around the big dot is within about 10% of Lightroom's, and the Motion / Streak
 trails point and fade the same way.
+
+## Raws (3.6.3)
+On a raw (IMG_0977.CR2, Canon 80D night shot, Bloom 100) lights are far brighter than
+white in scene light, and the glow added before the tone curve was then blown up by it:
+solid white blobs. Now the glow's source is capped at white (luminance, keeping the
+light's own colour before the photo eases near-clipped colours to white), and Bloom,
+Halation, Motion and Streak are added after the tone curve, as on the TIFF chart where
+Lightroom's rendering is the identity. Diffusion stays on scene light. Halo size and
+strength around the lights now match Lightroom's export (mean added light 0.040 vs
+Lightroom 0.040); Lightroom's glow around the yellow lights is a little more orange.
