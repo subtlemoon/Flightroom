@@ -136,10 +136,11 @@ const toBase64 = (bytes) => { let s = ''; for (let i = 0; i < bytes.length; i +=
 const fromBase64 = (b64) => { try { return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)); } catch { return null; } };
 
 /**
- * A .cube file (Adobe / Resolve 3D LUT) as a Color Lookup table: { name, n, data }.
- * Throws with a readable reason when the file isn't one Flightroom can use.
+ * A .cube file (Adobe / Resolve 3D LUT): { name, n, values } with the colours
+ * scaled to 0-1, red fastest. Throws with a readable reason when the file
+ * isn't one Flightroom can use.
  */
-export function parseCube(text, fileName = 'Look') {
+export function readCube(text, fileName = 'Look') {
   let n = 0, name = fileName.replace(/\.cube$/i, ''), min = [0, 0, 0], max = [1, 1, 1];
   const vals = [];
   for (const raw of text.split(/\r?\n/)) {
@@ -151,17 +152,25 @@ export function parseCube(text, fileName = 'Look') {
     if (key === 'LUT_1D_SIZE') throw new Error('1D .cube files are not supported, only 3D ones');
     if (key === 'DOMAIN_MIN') { min = rest.map(Number); continue; }
     if (key === 'DOMAIN_MAX') { max = rest.map(Number); continue; }
-    if (/^[A-Z_]+$/.test(key)) continue;
+    if (/^[A-Z][A-Z_0-9]*$/.test(key)) continue;
     const v = line.split(/\s+/).map(Number);
     if (v.length >= 3 && v.slice(0, 3).every(Number.isFinite)) vals.push(v[0], v[1], v[2]);
   }
   if (!(n >= 2 && n <= 65)) throw new Error('No LUT_3D_SIZE between 2 and 65 in the file');
   if (vals.length !== n * n * n * 3) throw new Error(`Expected ${n * n * n} colours, found ${vals.length / 3}`);
-  const data = new Uint8Array(vals.length);
+  const values = new Float32Array(vals.length);
   for (let i = 0; i < vals.length; i++) {
     const c = i % 3;
-    data[i] = Math.round(Math.min(1, Math.max(0, (vals[i] - min[c]) / ((max[c] - min[c]) || 1))) * 255);
+    values[i] = Math.min(1, Math.max(0, (vals[i] - min[c]) / ((max[c] - min[c]) || 1)));
   }
+  return { name, n, values };
+}
+
+/** A .cube file as a Color Lookup layer's table: { name, n, data: base64 RGB bytes }. */
+export function parseCube(text, fileName = 'Look') {
+  const { name, n, values } = readCube(text, fileName);
+  const data = new Uint8Array(values.length);
+  for (let i = 0; i < values.length; i++) data[i] = Math.round(values[i] * 255);
   return { name, n, data: toBase64(data) };
 }
 

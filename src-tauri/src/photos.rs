@@ -145,6 +145,11 @@ impl Photos {
         self.folders.lock().unwrap().contains(&dir).then_some(path)
     }
 
+    /// Lets the viewer serve this folder's files (the Library's folders, at start).
+    pub fn open_folder(&self, dir: &Path) {
+        self.folders.lock().unwrap().insert(dir.to_path_buf());
+    }
+
     pub fn info(&self, p: &Path) -> std::io::Result<(String, PhotoInfo)> {
         let key = file_key(p)?;
         if let Some(c) = self.info.lock().unwrap().get(p) {
@@ -409,24 +414,27 @@ pub fn handle_photo(app: &AppHandle, kind: &str, q: &HashMap<String, String>) ->
 
 // --- commands ---------------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, serde::Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Photo {
-    id: String,
-    name: String,
-    raw: Option<String>,
-    jpeg: Option<String>,
-    sidecar: String,
-    rating_in: &'static str,
-    rating: Option<i32>,
+    pub id: String,
+    pub name: String,
+    pub raw: Option<String>,
+    pub jpeg: Option<String>,
+    pub sidecar: String,
+    pub rating_in: String,
+    pub rating: Option<i32>,
     /// The sidecar has develop settings (the filmstrip then shows the photo as developed).
-    developed: bool,
+    pub developed: bool,
     /// A virtual copy's number.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    copy: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub copy: Option<u32>,
     /// The file's size in bytes and when it was last written (ms since 1970), for sorting.
-    size: u64,
-    modified: u64,
+    pub size: u64,
+    pub modified: u64,
+    /// Keywords from the sidecar (dc:subject, as Lightroom writes them).
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub keywords: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -443,7 +451,7 @@ fn skip_dir(name: &str) -> bool {
 
 /// The folder's files, and with `subfolders` those of the folders inside it too
 /// (each folder's files together, the folder itself first, then its subfolders by name).
-fn scan_dirs(dir: &Path, subfolders: bool) -> Result<Vec<(PathBuf, Vec<String>)>, String> {
+pub fn scan_dirs(dir: &Path, subfolders: bool) -> Result<Vec<(PathBuf, Vec<String>)>, String> {
     const MAX_DIRS: usize = 2000;
     const MAX_DEPTH: usize = 8;
     let mut out = Vec::new();
@@ -475,72 +483,70 @@ fn scan_dirs(dir: &Path, subfolders: bool) -> Result<Vec<(PathBuf, Vec<String>)>
     Ok(out)
 }
 
+/// Every photo in `root` (and its subfolders with `subfolders`), with stars and
+/// keywords from the sidecars. Its folders are opened for the viewer.
+pub fn scan_photos(photos: &Photos, root: &Path, subfolders: bool) -> Result<Vec<Photo>, String> {
+    let mut out = Vec::new();
+    for (dir, names) in scan_dirs(root, subfolders)? {
+        photos.folders.lock().unwrap().insert(dir.clone());
+        let join = |n: &str| dir.join(n).to_string_lossy().to_string();
+        let sidecar = |n: &str| read_sidecar(&dir.join(n)).ok().flatten();
+        let mut copies: HashMap<String, Vec<(u32, &String)>> = HashMap::new();
+        for n in &names {
+            if let Some((base, k)) = parse_copy_sidecar(n) {
+                copies.entry(base.to_lowercase()).or_default().push((k, n));
+            }
+        }
+        for list in copies.values_mut() {
+            list.sort();
+        }
+        // Each photo's sidecar is read for its stars: several at a time (a folder
+        // of thousands took a file read per photo, one after another), in the same order.
+        use rayon::prelude::*;
+        let groups = lib::group_photos(&names);
+        let found: Vec<Vec<Photo>> = groups
+            .par_iter()
+            .map(|g| {
+                let text = g.sidecar.as_deref().and_then(sidecar);
+                let id = join(&g.file);
+                let (size, modified) = fs::metadata(dir.join(&g.file)).map_or((0, 0), |md| {
+                    (md.len(), md.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64))
+                });
+                let made = |id: String, sidecar_name: &str, text: Option<&str>, copy: Option<u32>, rating_in: &str| Photo {
+                    id,
+                    name: g.file.clone(),
+                    raw: g.raw.as_deref().map(join),
+                    jpeg: g.jpeg.as_deref().map(join),
+                    sidecar: join(sidecar_name),
+                    rating_in: rating_in.to_string(),
+                    rating: text.and_then(lib::read_rating),
+                    developed: text.is_some_and(has_develop),
+                    copy,
+                    size,
+                    modified,
+                    keywords: text.map(lib::read_keywords).unwrap_or_default(),
+                };
+                let own = g.sidecar.clone().unwrap_or_else(|| format!("{}.xmp", g.base));
+                let mut out = vec![made(id.clone(), &own, text.as_deref(), None, if g.rating_in_file { "file" } else { "sidecar" })];
+                // Its virtual copies right after it (only RAW files are developed).
+                let Some(list) = g.raw.as_ref().and_then(|_| copies.get(&g.base.to_lowercase())) else { return out };
+                for &(k, name) in list.iter() {
+                    let text = sidecar(name);
+                    out.push(made(format!("{id}{COPY_TAG}{k}"), name, text.as_deref(), Some(k), "sidecar"));
+                }
+                out
+            })
+            .collect();
+        out.extend(found.into_iter().flatten());
+    }
+    Ok(out)
+}
+
 #[tauri::command]
 pub async fn cull_scan(app: AppHandle, folder: String, subfolders: Option<bool>) -> Result<Scan, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let root = clean(&folder);
-        let mut photos = Vec::new();
-        for (dir, names) in scan_dirs(&root, subfolders.unwrap_or(false))? {
-            app.state::<Photos>().folders.lock().unwrap().insert(dir.clone());
-            let join = |n: &str| dir.join(n).to_string_lossy().to_string();
-            let sidecar = |n: &str| read_sidecar(&dir.join(n)).ok().flatten();
-            let mut copies: HashMap<String, Vec<(u32, &String)>> = HashMap::new();
-            for n in &names {
-                if let Some((base, k)) = parse_copy_sidecar(n) {
-                    copies.entry(base.to_lowercase()).or_default().push((k, n));
-                }
-            }
-            for list in copies.values_mut() {
-                list.sort();
-            }
-            // Each photo's sidecar is read for its stars: several at a time (a folder
-            // of thousands took a file read per photo, one after another), in the same order.
-            use rayon::prelude::*;
-            let groups = lib::group_photos(&names);
-            let found: Vec<Vec<Photo>> = groups
-                .par_iter()
-                .map(|g| {
-                    let text = g.sidecar.as_deref().and_then(sidecar);
-                    let id = join(&g.file);
-                    let (size, modified) = fs::metadata(dir.join(&g.file)).map_or((0, 0), |md| {
-                        (md.len(), md.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64))
-                    });
-                    let mut out = vec![Photo {
-                        id: id.clone(),
-                        name: g.file.clone(),
-                        raw: g.raw.as_deref().map(join),
-                        jpeg: g.jpeg.as_deref().map(join),
-                        sidecar: join(g.sidecar.as_deref().unwrap_or(&format!("{}.xmp", g.base))),
-                        rating_in: if g.rating_in_file { "file" } else { "sidecar" },
-                        rating: text.as_deref().and_then(lib::read_rating),
-                        developed: text.as_deref().is_some_and(has_develop),
-                        copy: None,
-                        size,
-                        modified,
-                    }];
-                    // Its virtual copies right after it (only RAW files are developed).
-                    let Some(list) = g.raw.as_ref().and_then(|_| copies.get(&g.base.to_lowercase())) else { return out };
-                    for &(k, name) in list.iter() {
-                        let text = sidecar(name);
-                        out.push(Photo {
-                            id: format!("{id}{COPY_TAG}{k}"),
-                            name: g.file.clone(),
-                            raw: g.raw.as_deref().map(join),
-                            jpeg: g.jpeg.as_deref().map(join),
-                            sidecar: join(name),
-                            rating_in: "sidecar",
-                            rating: text.as_deref().and_then(lib::read_rating),
-                            developed: text.as_deref().is_some_and(has_develop),
-                            copy: Some(k),
-                            size,
-                            modified,
-                        });
-                    }
-                    out
-                })
-                .collect();
-            photos.extend(found.into_iter().flatten());
-        }
+        let photos = scan_photos(&app.state::<Photos>(), &root, subfolders.unwrap_or(false))?;
         Ok(Scan { folder: root.to_string_lossy().to_string(), photos })
     })
     .await
@@ -828,9 +834,10 @@ pub async fn cull_virtual_copy(app: AppHandle, args: CopyArgs) -> Result<Photo, 
             raw,
             jpeg: None,
             sidecar: path(&target),
-            rating_in: "sidecar",
+            rating_in: "sidecar".into(),
             rating: text.as_deref().and_then(lib::read_rating),
             developed: text.as_deref().is_some_and(has_develop),
+            keywords: text.as_deref().map(lib::read_keywords).unwrap_or_default(),
             copy: Some(k),
             size: fs::metadata(&file).map_or(0, |md| md.len()),
             modified: fs::metadata(&file).ok().and_then(|md| md.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64),

@@ -1574,6 +1574,34 @@ mod tests {
         assert_eq!(mirror(5, 10), 5);
     }
 
+    /// For the UI test rig: what develop_open answers for a RAW file, and its overview frame.
+    /// FLIGHTROOM_NEF=<file> FLIGHTROOM_OUT=<dir> cargo test --release dumps_a_photo -- --ignored
+    #[test]
+    #[ignore]
+    fn dumps_a_photo_for_the_rig() {
+        let p = std::env::var("FLIGHTROOM_NEF").expect("set FLIGHTROOM_NEF");
+        let out = PathBuf::from(std::env::var("FLIGHTROOM_OUT").expect("set FLIGHTROOM_OUT"));
+        let raw = Raw::decode(Path::new(&p), String::new()).unwrap();
+        let src = crate::photolib::FileSource::open(Path::new(&p)).unwrap();
+        let orientation = crate::photolib::read_photo_info(&src, &crate::photolib::ext_of(&p)).orientation;
+        let cameras = crate::adobe::camera_names(&raw.make, &raw.model, &raw.exif_model);
+        let opened = Opened {
+            width: raw.w,
+            height: raw.h,
+            orientation,
+            as_shot: raw.wb,
+            matrices: raw.matrices.clone(),
+            camera: format!("{} {}", raw.make, raw.model),
+            saved: saved(None),
+            adobe: crate::adobe::for_camera(&cameras, None, &out),
+            denoised: false,
+            lens: raw.lens.clone(),
+        };
+        std::fs::write(out.join("opened.json"), serde_json::to_vec(&opened).unwrap()).unwrap();
+        let (w, h, ov) = raw.overview(2560, None);
+        std::fs::write(out.join("overview.frim"), frame(w, h, &ov)).unwrap();
+    }
+
     /// FLIGHTROOM_NEF=<file> cargo test --release -- --ignored --nocapture
     #[test]
     #[ignore]

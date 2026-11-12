@@ -63,6 +63,22 @@ export const bridge = inApp ? {
   },
   // GearCheck's saved data (gear, groups, settings), for the first start.
   migrationData: () => invoke('migration_data'),
+  // The Library: every photo in the folders you add, searchable across all of them.
+  catalog: {
+    load: () => call('catalog_load'),
+    index: (folders = [], subfolders) => call('catalog_index', { folders, subfolders }),
+    removeFolder: (folder) => call('catalog_remove_folder', { folder }),
+    keywords: (photos, add = [], remove = []) => call('catalog_keywords', { args: { items: photos.map((p) => [p.id, p.sidecar]), add, remove } }),
+    onProgress: (fn) => onEvent('catalog:progress', fn),
+  },
+  // Develop's looks: your own .cube files, kept in Flightroom's looks folder.
+  looks: {
+    list: () => call('looks_list'),
+    read: (name) => call('looks_read', { name }),
+    save: (name, text) => call('looks_save', { name, text }),
+    remove: (name) => call('looks_remove', { name }),
+    folder: () => call('looks_folder'),
+  },
   // Culling: folders, previews, and star ratings written to the photos.
   cull: {
     pickFolder: () => open({ directory: true, title: 'Choose a folder of photos' }).catch(() => null),

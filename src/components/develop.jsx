@@ -16,7 +16,7 @@ import { toggle, useLayout } from '../layout.js';
 import { ExportedTag, Filmstrip, photoRating } from './cull.jsx';
 import { imgUrl, ROTATION } from '../cull/previews.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
-import { cachedFolder, startAt, useFolder, usePosition, useStripPick } from '../cull/folder.js';
+import { cachedFolder, startAt, startId, useFolder, usePosition, useStripPick } from '../cull/folder.js';
 import { keepThumb, pixelsToBlob, thumbSize } from '../develop/thumbs.js';
 import { thumbBuilder } from '../develop/thumbbuilder.js';
 import { edited, keepSettings, session } from '../develop/session.js';
@@ -32,6 +32,8 @@ import { Geometry, Renderer, ap, cameraTransform, tempTintFor, constrainedCrop, 
 import { lightGraphics } from '../develop/graphics.js';
 import { engineKind, watchResets } from '../develop/gpu/engine.js';
 import { ExportModal } from './export.jsx';
+import { LookPicker } from './looks.jsx';
+import { loadLook, lookPending } from '../develop/looks.js';
 import { activeToneMap } from '../develop/tonemap.js';
 import { DEFAULT_STYLE, GLOW_STYLES } from '../develop/glow.js';
 import { useRetouch } from './retouch.jsx';
@@ -75,7 +77,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
 
   // Coming from Culling: its photo list, at once (open() reads the folder again quietly).
   const [seen] = useState(() => cachedFolder(folder));
-  const [currentId, setCurrentId] = useState(() => seen?.list.photos[state.cull?.positions?.[seen.list.folder] || 0]?.id ?? null);
+  const [currentId, setCurrentId] = useState(() => startId(seen, state.cull?.positions));
   const [opened, setOpened] = useState(null); // { id, info, asShot } | { id, error }
   const [s, setS] = useState(null);
   const [crop, setCrop] = useState(false);
@@ -90,6 +92,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const [dialog, setDialog] = useState(null); // 'copy' | 'preset'
   const [presets, setPresets] = useStored('flightroom-presets', { list: [], open: true });
   const [hoverPreset, setHoverPreset] = useState(null);
+  const [hoverLook, setHoverLook] = useState(null); // a look tile under the pointer: shown on the photo
   // Color grading wheels hidden with their eye (Lightroom's), for the view only.
   const [gradeHidden, setGradeHidden] = useState(() => new Set());
   const [picking, setPicking] = useState(false); // 'wb' (white balance selector) | 'point' (a mask's Point Color)
@@ -560,10 +563,11 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
 
   // What the stage draws. The same object until one of these changes, so an
   // unrelated redraw of this view (a toast, a menu) doesn't draw the photo again.
-  const shownFrom = [s, before, hoverPreset, gradeHidden, opened?.asShot];
+  const shownFrom = [s, before, hoverPreset, gradeHidden, opened?.asShot, hoverLook];
   if (!shownMemo.current || shownFrom.some((x, i) => x !== shownMemo.current.from[i])) {
     let next = s && before && opened?.asShot ? { ...defaults(opened.asShot), crop: s.crop }
       : s && hoverPreset && opened?.asShot ? applyTo(s, hoverPreset.part, opened.asShot) : s;
+    if (next && !before && hoverLook != null) next = { ...next, look: hoverLook, lookAmount: hoverLook === s.look ? s.lookAmount : 100 };
     if (next && !before && gradeHidden.size) {
       next = { ...next };
       for (const k of gradeHidden) { next[`${k}Sat`] = 0; next[`${k}Lum`] = 0; }
@@ -648,6 +652,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
               override={selMask && <MaskAdjust m={selMask} part={selPart} acts={acts} brush={brush} setBrush={setBrush} options={maskOptions} setOptions={setMaskOptions}
                 ai={aiMasks} sampling={picking === 'point'} onSample={() => setPicking((p) => (p === 'point' ? false : 'point'))} onDone={() => setSel(null)} />}
               photo={photo} ensureAi={ensureAi} onDenoised={onDenoised} gradeHidden={gradeHidden} mood={mood}
+              looks={{ onHover: setHoverLook, base: () => stageApi.current.lookBase?.(), toast: setToast }}
               onGradeHide={(k, on) => setGradeHidden((h) => { const n = new Set(h); if (on) n.add(k); else n.delete(k); return n; })}
               edited={isEdited(s, opened.asShot)} picking={picking === 'wb'} onPick={() => setPicking((p) => (p === 'wb' ? false : 'wb'))} onAutoWb={autoWb} onAutoTone={autoTone} />
           ) : (
@@ -1156,6 +1161,22 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
     const rgba = await r.previewReady(info, { ...s, crop: null }, geo, geo.frame(null), w, h, null);
     return rgba && { w, h, rgba };
   };
+  // A look of your own loads from its file: drawn once it has.
+  const lookId = s?.look;
+  useEffect(() => {
+    if (lookPending(lookId)) loadLook(lookId).then(() => drawRef.current?.());
+  }, [lookId]);
+  // The photo as edited but without its look, small (RGBA, bottom row first): what the look tiles show each look on.
+  apiRef.current.lookBase = async (edge = 160) => {
+    const r = rendererRef.current;
+    const es = editS || s;
+    if (!r || !ready || !es || !info) return null;
+    const f = geo.frame(es.crop);
+    const k = edge / Math.max(f.hw, f.hh) / 2;
+    const w = Math.max(8, Math.round(f.hw * 2 * k)), h = Math.max(8, Math.round(f.hh * 2 * k));
+    const rgba = await r.previewReady(info, { ...es, look: '', layers: [] }, geo, f, w, h, null, 'lookTarget');
+    return rgba && { w, h, rgba };
+  };
   // Zoomed in: sharp copies of what visible clones and heals copy from.
   const layersNow = s?.layers;
   useEffect(() => {
@@ -1590,7 +1611,7 @@ function profileNote(info, profile) {
   return 'A close match to the camera\'s own look';
 }
 
-function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onReset, onCopy, onPaste, edited, picking, onPick, onAutoWb, onAutoTone, cropMode, cropOverlay, setCropOverlay, onCropClose, override, photo, ensureAi, onDenoised, gradeHidden, onGradeHide, mood }) {
+function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onReset, onCopy, onPaste, edited, picking, onPick, onAutoWb, onAutoTone, cropMode, cropOverlay, setCropOverlay, onCropClose, override, photo, ensureAi, onDenoised, gradeHidden, onGradeHide, mood, looks }) {
   const [open, setOpen] = useState(() => {
     try { return JSON.parse(localStorage.getItem(PANELS_KEY)) || { basic: true }; } catch { return { basic: true }; }
   });
@@ -1630,6 +1651,7 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
           <Dropdown value={s.profile || 'adobe'} options={PROFILES.map(([value, label]) => ({ value, label }))} onChange={(v) => { rememberProfile(v); update({ profile: v }); }}
             title={profileNote(info, s.profile)} />
         </div>
+        <LookPicker s={s} set={set} update={update} {...looks} />
         <div className="dev-line dev-wb"><span className="muted">WB</span>
           <span className="dev-line">
             <button className={`icon-btn sm${picking ? ' on' : ''}`} onClick={onPick} title="White balance selector (W): click something white or grey"><Icon name="picker" size={15} /></button>
