@@ -916,6 +916,7 @@ export class Renderer {
       if (!px) return null;
       const bins = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
       for (let i = 0; i < px.length; i += 4) { bins[0][px[i]]++; bins[1][px[i + 1]]++; bins[2][px[i + 2]]++; }
+      bins.px = px; // the pixels themselves, for the Vectorscope
       return bins;
     };
     const read = () => {
@@ -937,7 +938,7 @@ export class Renderer {
       this.melissa = false;
       this.hi = saveHi;
     }
-    const join = (a, b) => (a ? Object.assign(a, { pre: b }) : null);
+    const join = (a, b) => { if (b) delete b.px; return a ? Object.assign(a, { pre: b }) : null; };
     return out instanceof Promise || pre instanceof Promise ? Promise.all([out, pre]).then(([a, b]) => join(a, b)) : join(out, pre);
   }
 

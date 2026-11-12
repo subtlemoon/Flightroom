@@ -487,6 +487,12 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .dev-panel-empty { padding: 20px; }
 .dev-panel-inner { padding: 12px 14px 20px; display: flex; flex-direction: column; gap: 6px; }
 .dev-hist { width: 100%; height: 96px; display: block; border-radius: var(--r); background: var(--well); border: 1px solid var(--line); }
+.dev-scope { display: flex; flex-direction: column; border-radius: var(--r); background: var(--well); border: 1px solid var(--line); }
+.dev-scope-head { display: flex; align-items: center; justify-content: space-between; height: 28px; padding: 0 4px 0 2px; }
+.dev-scope-toggle { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 4px; background: transparent; border: 0; color: var(--text-2); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.dev-scope-toggle:hover, .dev-scope.open .dev-scope-toggle { color: var(--text); }
+.dev-scope-space { height: 22px; padding: 0 6px; gap: 4px; font-size: 12px; background: transparent; border-color: transparent; }
+.dev-scope-canvas { width: 100%; aspect-ratio: 1 / 0.92; display: block; }
 .dev-shot { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .dev-shot span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dev-row { display: flex; align-items: center; gap: 4px; }
