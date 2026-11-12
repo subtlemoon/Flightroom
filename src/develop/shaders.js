@@ -157,10 +157,11 @@ uniform float uContrastSat; // the Contrast slider (-1..1), for the colour it ch
 // Contrast changes colour too, as in Lightroom, weak colours most (fitted on
 // Lightroom's exports of JWL_7451, tools/lr-tone.md).
 const float CS_K = 0.25, CS_V = 0.1;
-const float CON_K = 1.0, CON_PIVOT = 0.6, CON_LUM = 0.6;
+const float CON_K = 1.0, CON_LUM = 0.6;
+uniform float uConPivot;
 // An S-curve of strength k around CON_PIVOT (screen values 0-1).
 float conCurve(float x, float k) {
-  float p = CON_PIVOT;
+  float p = uConPivot;
   float t = clamp(x < p ? 0.5 * x / p : 0.5 + 0.5 * (x - p) / (1.0 - p), 0.0, 1.0);
   t += k * (t * t * (3.0 - 2.0 * t) - t);
   return t < 0.5 ? 2.0 * p * t : p + (t - 0.5) * 2.0 * (1.0 - p);

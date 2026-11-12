@@ -27,13 +27,23 @@ const FLAT_CURVE = { curve: LINEAR, curveR: LINEAR, curveG: LINEAR, curveB: LINE
 // three photos (tools/lr-tone.md): JWL_7451 (middle brightness 2^-3.97 of
 // white, where the sliders were fitted), JWL_7345 (0.86 stop brighter, where
 // Highlights doesn't ease off on the brightest tones, so a bright sky comes
-// down with the rest) and the night shot JWL_7530. Positive Shadows and Blacks
-// follow the photo's range above its middle (stops from the median to the
-// brightest 0.1%): full on JWL_7451 (2.0 stops), 0.79 on JWL_7345 (3.0) and
-// next to nothing on JWL_7530 (4.0, with bright lights), where Lightroom's
-// +90 / +90 leaves the night dark.
-const KEY_REF = -3.97, KEY_SPAN = 0.86, HL_TOP = 0.55, SPAN_MID = 3.24, SPAN_W = 0.205;
+// down with the rest) and the night shot JWL_7530. Positive Shadows follows
+// the photo's range above its middle (stops from the median to the
+// brightest 0.1%), and so does where Contrast pivots. Fitted on Lightroom's
+// one-slider exports of JWL_7451 (2.0 stops) and JWL_7530 (4.0, a night shot
+// with bright lights) and the full edit of JWL_7345 (3.0): Blacks lifts fully
+// on all of them, Shadows lifts fully at 2.0 stops, about 0.7 at 3.0 and 0.37
+// at 4.0, and Contrast turns about 0.6 of the way up at 2.0 but 0.4 at 4.0, so
+// a negative Contrast doesn't lift a night's mids (positive Contrast keeps
+// 0.6: lower, it brightened IMG_9251's night portrait by 3 L*). (2.11.2 had shrunk both lifts
+// to nothing on JWL_7530: that hid masks' Exposure reaching Lightroom 4x too
+// strong, masks.js.)
+const KEY_REF = -3.97, KEY_SPAN = 0.86, HL_TOP = 0.55, SPAN_MID = 3.63, SPAN_W = 0.775;
+const PIVOT = 0.6, PIVOT_DROP = 0.2, PIVOT_FROM = 2.4, PIVOT_SPAN = 1.64, PIVOT_POW = 1.5;
+/** How much positive Shadows lifts, for the photo's range above its middle (null: unknown). */
 export const liftScale = (span) => (span == null ? 1 : 1 / (1 + Math.exp((span - SPAN_MID) / SPAN_W)));
+/** Where Contrast pivots (screen value), for the photo's range above its middle. */
+export const contrastPivot = (span) => (span == null ? PIVOT : PIVOT - PIVOT_DROP * Math.min(1, Math.max(0, (span - PIVOT_FROM) / PIVOT_SPAN)) ** PIVOT_POW);
 /** How much Highlights eases off on the brightest tones (shaders.js uHlTop). */
 export const highlightTop = (keyL) => (keyL == null ? HL_TOP : HL_TOP * Math.min(1, Math.max(0, 1 - (keyL - KEY_REF) / KEY_SPAN)));
 
@@ -551,7 +561,7 @@ export class Renderer {
   measure(s) {
     if ((s.dehaze || this.masks.some((m) => m.adj?.dehaze)) && this.airY == null) this.measureAir();
     // The photo's middle brightness, for the adaptive sliders: read once per photo, when they're used.
-    if ((s.shadows > 0 || s.blacks > 0 || s.highlights < 0) && this.keySrc !== this.src) {
+    if ((s.shadows > 0 || s.highlights < 0 || s.contrast) && this.keySrc !== this.src) {
       const lum = this.guideLum();
       if (!lum) return;
       this.keyL = lum[lum.length >> 1];
@@ -780,7 +790,8 @@ export class Renderer {
     const hi = sharper || this.hi;
     const look = lookFor(info, s);
     const key = this.keySrc === this.src ? this.keyL : null;
-    const lift = liftScale(key == null ? null : this.spanL);
+    const span = key == null ? null : this.spanL;
+    const lift = liftScale(span);
     const { cx, cy, half } = centred(geo);
     const [tS, tM, tH, tG] = gradeTints(s);
     const gradeLum = [s.gShadowLum, s.gMidLum, s.gHighLum, s.gGlobalLum].map((v) => (v || 0) / 100);
@@ -834,12 +845,13 @@ export class Renderer {
       uExposure: s.exposure + look.exposure,
       uContrast: look.contrast,
       uContrastSat: s.contrast / 100,
+      uConPivot: s.contrast < 0 ? contrastPivot(span) : contrastPivot(null),
       ...tonemapUniforms(s),
       uHighlights: s.highlights / 100,
       uHlTop: highlightTop(key),
       uShadows: (s.shadows > 0 ? s.shadows * lift : s.shadows) / 100,
       uWhites: s.whites / 100,
-      uBlacks: (s.blacks > 0 ? s.blacks * lift : s.blacks) / 100,
+      uBlacks: s.blacks / 100,
       uTexture: s.texture / 100,
       uClarity: s.clarity / 100,
       uDehaze: s.dehaze / 100,
