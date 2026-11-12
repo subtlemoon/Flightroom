@@ -146,7 +146,7 @@ export function MoodPanel({ mood }) {
   return (
     <div className="mood">
       <div className="mood-row">
-        <input type="text" className="input mood-input" placeholder={opts.look ? 'Describe a mood, or leave empty' : 'Describe a mood…'} title={`Any words: dreamy, warm, moody teal, faded film, golden hour, halation, vignette…${opts.look ? ' Leave it empty and AI picks a mood for the photo.' : ''}`} value={text} disabled={!!busy}
+        <input type="text" className="input mood-input" placeholder={opts.look ? 'A mood, or empty for AI' : 'Describe a mood…'} title={`Any words: dreamy, warm, moody teal, faded film, golden hour, halation, vignette…${opts.look ? ' Leave it empty and AI picks a mood for the photo.' : ''}`} value={text} disabled={!!busy}
           onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') go(text); }} />
         <button className={`btn btn-sm ai-glow${busy ? ' busy' : ''}`} disabled={!!busy || (!text.trim() && !opts.look)} onClick={() => go(text)}
           title="AI on this computer looks at the photo and grades it to the mood: the result is normal sliders, effects and a mask you can change"><Icon name="ai" size={14} />Grade</button>
@@ -165,8 +165,10 @@ export function MoodPanel({ mood }) {
           <div className="seg small">
             {STRENGTHS.map(([label, k]) => <button key={label} className={opts.strength === k ? 'on' : ''} onClick={() => setOpts({ strength: k })}>{label}</button>)}
           </div>
+          <span className="mood-checks">
           <label className="dev-check inline" title="Finds the subject with AI and gives it its own mask and grade, so it stands out in the mood"><input type="checkbox" checked={opts.subject} onChange={(e) => setOpts({ subject: e.target.checked })} />Subject</label>
           <label className="dev-check inline" title="A vision model on this computer looks at the photo first (the place, the light, the subject) and the grade, glow and vignette follow what it sees"><input type="checkbox" checked={opts.look} onChange={(e) => setOpts({ look: e.target.checked })} />Look</label>
+          </span>
         </div>
       )}
       {last && (

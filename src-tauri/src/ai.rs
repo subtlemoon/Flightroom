@@ -1435,8 +1435,25 @@ fn answer(app: &AppHandle, prefix: &str, mut stream: std::net::TcpStream) -> std
         return stream.write_all(format!("HTTP/1.1 404 Not Found\r\n{cors}Content-Length: 0\r\n\r\n").as_bytes());
     };
     let len = f.metadata()?.len();
-    stream.write_all(format!("HTTP/1.1 200 OK\r\n{cors}Content-Type: {ctype}\r\nContent-Length: {len}\r\nCache-Control: no-store\r\n\r\n").as_bytes())?;
-    std::io::copy(&mut f, &mut std::io::BufWriter::with_capacity(1 << 20, stream)).map(|_| ())
+    // transformers.js asks whether a file is there with "Range: bytes=0-0".
+    let range = line.lines().find_map(|l| {
+        let (k, v) = l.split_once(':')?;
+        let (a, b) = k.trim().eq_ignore_ascii_case("range").then_some(v.trim())?.strip_prefix("bytes=")?.split_once('-')?;
+        let a: u64 = a.parse().ok()?;
+        let b: u64 = if b.is_empty() { len.checked_sub(1)? } else { b.parse::<u64>().ok()?.min(len.checked_sub(1)?) };
+        (a <= b).then_some((a, b))
+    });
+    let mut out = std::io::BufWriter::with_capacity(1 << 20, stream);
+    if let Some((a, b)) = range {
+        use std::io::Seek;
+        f.seek(std::io::SeekFrom::Start(a))?;
+        out.write_all(format!("HTTP/1.1 206 Partial Content\r\n{cors}Content-Type: {ctype}\r\nContent-Range: bytes {a}-{b}/{len}\r\nContent-Length: {}\r\nCache-Control: no-store\r\n\r\n", b - a + 1).as_bytes())?;
+        std::io::copy(&mut f.take(b - a + 1), &mut out)?;
+    } else {
+        out.write_all(format!("HTTP/1.1 200 OK\r\n{cors}Content-Type: {ctype}\r\nContent-Length: {len}\r\nCache-Control: no-store\r\n\r\n").as_bytes())?;
+        std::io::copy(&mut f, &mut out)?;
+    }
+    out.flush()
 }
 
 pub fn models_dir(app: &AppHandle) -> PathBuf {

@@ -43,9 +43,13 @@ export function loadVision(onProgress) {
       listen?.('Starting the vision model', 0);
       const t = await import('@huggingface/transformers');
       const local = base || (await bridge?.ai.visionUrl().catch(() => null));
-      t.env.allowRemoteModels = false;
-      t.env.allowLocalModels = true;
-      t.env.localModelPath = typeof local === 'string' ? local : `${FILES}ai/`;
+      // The files come from this computer, but by URL, which transformers.js only checks for
+      // (tokenizer_config.json above all) as a "remote" host: as a local path it decides they're missing.
+      const url = typeof local === 'string' ? local : `${FILES}ai/`;
+      t.env.allowLocalModels = false;
+      t.env.allowRemoteModels = true;
+      t.env.remoteHost = new URL(url, location.href).href;
+      t.env.remotePathTemplate = '{model}/';
       t.env.useBrowserCache = false;
       t.env.useWasmCache = false;
       t.env.backends.onnx.wasm.wasmPaths = { wasm: ortWasm };
