@@ -19,6 +19,7 @@ import { cleanCurve, LINEAR_CURVE, SLIDER } from './params.js';
 //   grade  colour wheels [hue, saturation]: sh shadows, mid midtones, hi highlights; bal = balance
 //   set    sliders set as they are; mix: Color Mixer (hue0..7, sat0..7, lum0..7)
 //   sub    the subject: pop (how much brighter than the rest, L), sat, clarity, texture, temp
+//   glow   [style (1 Diffusion, 2 Bloom, 3 Halation), amount, range, spread, warmth], as in Effects
 const LOOKS = {
   warm: { words: ['warm', 'warmer', 'warmth', 'hot', 'toasty'], warm: 0.02, grade: { hi: [40, 12], sh: [30, 5] } },
   cold: { words: ['cold', 'cool', 'cooler', 'chilly', 'icy', 'frozen', 'frosty'], warm: -0.02, grade: { sh: [215, 12], hi: [200, 6] }, sub: { temp: 10 } },
@@ -26,7 +27,7 @@ const LOOKS = {
     words: ['dreamy', 'dream', 'ethereal', 'hazy', 'haze', 'heavenly', 'magical', 'whimsical', 'fairytale', 'glow', 'glowy', 'angelic'],
     style: true, dKey: 0.035, spread: 0.84, chroma: 0.9, fade: 0.35, roll: 0.35, warm: 0.006,
     set: { highlights: -25, shadows: 20, clarity: -25, dehaze: -12, texture: -10 }, grade: { hi: [45, 12], sh: [280, 10] },
-    sub: { pop: 0.05, clarity: 12, texture: 10 },
+    sub: { pop: 0.05, clarity: 12, texture: 10 }, glow: [1, 35, 65, 60, 10],
   },
   moody: {
     words: ['moody', 'mood', 'brooding', 'stormy', 'intense', 'deep'],
@@ -39,25 +40,21 @@ const LOOKS = {
   airy: {
     words: ['airy', 'clean', 'minimal', 'fresh', 'crisp', 'white'],
     style: true, dKey: 0.08, key: 0.72, keyW: 0.3, spread: 0.86, chroma: 0.9, fade: 0.15, warm: 0.004,
-    set: { highlights: -15, shadows: 30, blacks: 10, clarity: -8, dehaze: -10 }, sub: { pop: 0.03 },
-  },
+    set: { highlights: -15, shadows: 30, blacks: 10, clarity: -8, dehaze: -10 }, sub: { pop: 0.03 }, glow: [1, 12, 70, 50, 0] },
   cinematic: {
     words: ['cinematic', 'cinema', 'movie', 'film-like', 'hollywood', 'blockbuster', 'tealorange', 'orangeteal'],
     style: true, spread: 1.1, chroma: 0.95, fade: 0.12,
     set: { highlights: -20, clarity: 8, vignette: -15 }, grade: { sh: [200, 22], hi: [38, 16], bal: -10 },
-    mix: { hue3: 30, sat3: -20, sat1: 10, hue5: -10 }, sub: { pop: 0.05, clarity: 10, temp: 6 },
-  },
+    mix: { hue3: 30, sat3: -20, sat1: 10, hue5: -10 }, sub: { pop: 0.05, clarity: 10, temp: 6 }, glow: [3, 15, 35, 55, 30] },
   vintage: {
     words: ['vintage', 'retro', 'nostalgic', 'nostalgia', 'old', 'oldschool', '70s', '80s', '90s', 'polaroid', 'kodak', 'portra'],
     style: true, spread: 0.92, chroma: 0.8, fade: 0.4, roll: 0.25, warm: 0.01,
     set: { grain: 25, grainSize: 30, vignette: -12 }, grade: { sh: [190, 10], hi: [50, 14] },
-    mix: { hue3: -20, sat5: -25 }, sub: { pop: 0.04 },
-  },
+    mix: { hue3: -20, sat5: -25 }, sub: { pop: 0.04 }, glow: [3, 14, 40, 50, 20] },
   film: {
     words: ['film', 'analog', 'analogue', '35mm', 'grainy', 'grain'],
     style: true, chroma: 0.9, fade: 0.25, roll: 0.2,
-    set: { grain: 22, grainSize: 25 }, grade: { sh: [180, 8], hi: [45, 8] }, sub: { pop: 0.04 },
-  },
+    set: { grain: 22, grainSize: 25 }, grade: { sh: [180, 8], hi: [45, 8] }, sub: { pop: 0.04 }, glow: [3, 12, 40, 45, 15] },
   matte: { words: ['matte', 'faded', 'fade', 'washed', 'flat'], fade: 0.5, spread: 0.9, chroma: 0.88 },
   vivid: {
     words: ['vivid', 'vibrant', 'colorful', 'colourful', 'saturated', 'poppy', 'bold', 'rich', 'lively'],
@@ -71,41 +68,41 @@ const LOOKS = {
   },
   golden: {
     words: ['golden', 'gold', 'goldenhour', 'honey', 'amber', 'glowing'],
-    style: true, warm: 0.028, chroma: 1.1, dKey: 0.02, grade: { hi: [42, 22], mid: [35, 8], sh: [20, 8] }, sub: { pop: 0.04 },
-  },
+    style: true, warm: 0.028, chroma: 1.1, dKey: 0.02, grade: { hi: [42, 22], mid: [35, 8], sh: [20, 8] }, sub: { pop: 0.04 }, glow: [2, 18, 45, 60, 30] },
   sunset: {
     words: ['sunset', 'sunrise', 'dusk', 'dawn', 'evening'],
-    style: true, warm: 0.024, green: 0.006, chroma: 1.08, grade: { hi: [30, 22], sh: [280, 10] }, sub: { pop: 0.05 },
-  },
+    style: true, warm: 0.024, green: 0.006, chroma: 1.08, grade: { hi: [30, 22], sh: [280, 10] }, sub: { pop: 0.05 }, glow: [2, 15, 45, 60, 20] },
   neon: {
     words: ['neon', 'cyberpunk', 'synthwave', 'vaporwave', 'futuristic', 'electric', 'night', 'nightlife'],
     style: true, dKey: -0.03, spread: 1.15, chroma: 1.2, warm: -0.012, green: 0.01,
-    set: { clarity: 10, dehaze: 8 }, grade: { sh: [240, 25], hi: [300, 15] }, mix: { hue1: -15, sat4: 15, sat6: 20 }, sub: { pop: 0.06 },
-  },
+    set: { clarity: 10, dehaze: 8 }, grade: { sh: [240, 25], hi: [300, 15] }, mix: { hue1: -15, sat4: 15, sat6: 20 }, sub: { pop: 0.06 }, glow: [2, 30, 40, 55, 0] },
   noir: {
     words: ['noir', 'bw', 'b&w', 'monochrome', 'mono', 'grayscale', 'greyscale', 'blackandwhite', 'black-and-white'],
     style: true, bw: true, dKey: -0.03, spread: 1.3, set: { clarity: 20, vignette: -20, grain: 15 }, sub: { pop: 0.08, clarity: 15 },
   },
   pastel: {
     words: ['pastel', 'candy', 'cotton', 'sweet', 'cute'],
-    style: true, dKey: 0.06, spread: 0.85, chroma: 0.75, fade: 0.25, grade: { hi: [330, 8], sh: [190, 8] }, set: { clarity: -10 },
-  },
+    style: true, dKey: 0.06, spread: 0.85, chroma: 0.75, fade: 0.25, grade: { hi: [330, 8], sh: [190, 8] }, set: { clarity: -10 }, glow: [1, 18, 65, 55, 0] },
   autumn: {
     words: ['autumn', 'fall', 'autumnal', 'harvest', 'halloween', 'pumpkin'],
     style: true, warm: 0.015, chroma: 1.05, grade: { hi: [35, 12] }, mix: { hue3: -40, sat3: -10, sat1: 15, hue2: -10 },
   },
   summer: { words: ['summer', 'summery', 'beach', 'tropical', 'holiday', 'vacation'], style: true, warm: 0.01, chroma: 1.12, dKey: 0.03, grade: { hi: [50, 10] }, mix: { sat4: 15, sat5: 10 } },
   winter: { words: ['winter', 'wintry', 'snow', 'snowy', 'arctic'], style: true, warm: -0.022, chroma: 0.8, dKey: 0.04, grade: { hi: [200, 10], sh: [220, 12] }, sub: { temp: 10 } },
-  spring: { words: ['spring', 'blossom', 'bloom', 'floral'], style: true, chroma: 1.08, dKey: 0.04, mix: { hue3: 10, sat3: 10, sat7: 10 }, grade: { hi: [80, 6] } },
+  spring: { words: ['spring', 'blossom', 'floral'], style: true, chroma: 1.08, dKey: 0.04, mix: { hue3: 10, sat3: 10, sat7: 10 }, grade: { hi: [80, 6] } },
   earthy: { words: ['earthy', 'earth', 'forest', 'woods', 'woodland', 'nature', 'organic', 'rustic'], style: true, warm: 0.008, chroma: 0.9, grade: { sh: [100, 8], hi: [45, 8] }, mix: { sat3: -20, lum3: -10, hue3: -15 } },
   ocean: { words: ['ocean', 'sea', 'aqua', 'marine', 'underwater', 'lagoon'], style: true, chroma: 1.05, grade: { sh: [190, 14] }, mix: { sat4: 15, sat5: 10, hue5: -8 } },
   natural: { words: ['natural', 'true', 'realistic', 'neutral', 'accurate', 'normal'], style: true, set: { clarity: 5, vibrance: 8 }, sub: { pop: 0.03 } },
   gritty: { words: ['gritty', 'grungy', 'grunge', 'urban', 'street', 'raw', 'rough', 'industrial'], style: true, chroma: 0.75, spread: 1.2, warm: -0.005, set: { clarity: 35, texture: 20, dehaze: 10, grain: 20 }, sub: { clarity: 20, pop: 0.05 } },
-  romantic: { words: ['romantic', 'love', 'lovely', 'wedding', 'blush'], style: true, warm: 0.01, green: 0.006, dKey: 0.03, fade: 0.15, set: { clarity: -15 }, grade: { hi: [20, 12], sh: [330, 8] }, sub: { pop: 0.04 } },
+  romantic: { words: ['romantic', 'love', 'lovely', 'wedding', 'blush'], style: true, warm: 0.01, green: 0.006, dKey: 0.03, fade: 0.15, set: { clarity: -15 }, grade: { hi: [20, 12], sh: [330, 8] }, sub: { pop: 0.04 }, glow: [1, 25, 60, 60, 15] },
   eerie: { words: ['eerie', 'spooky', 'creepy', 'horror', 'scary', 'mysterious', 'mystery', 'haunted', 'sinister', 'ominous'], style: true, dKey: -0.1, warm: -0.01, green: -0.008, chroma: 0.7, set: { vignette: -30, clarity: 10 }, grade: { sh: [160, 15] }, sub: { pop: 0.07 } },
   happy: { words: ['happy', 'cheerful', 'joyful', 'joy', 'fun', 'playful', 'uplifting'], style: true, dKey: 0.05, chroma: 1.15, warm: 0.008, sub: { pop: 0.04 } },
   sad: { words: ['sad', 'melancholy', 'melancholic', 'lonely', 'gloomy', 'somber', 'sombre', 'blue-mood', 'depressing', 'rainy'], style: true, dKey: -0.05, chroma: 0.65, warm: -0.012, spread: 0.9, fade: 0.15, grade: { sh: [215, 12] }, sub: { pop: 0.04 } },
-  cozy: { words: ['cozy', 'cosy', 'hygge', 'homey', 'candlelight', 'fireplace', 'intimate'], style: true, warm: 0.02, dKey: -0.02, fade: 0.1, set: { clarity: -5, vignette: -15 }, grade: { hi: [35, 14], sh: [25, 10] }, sub: { pop: 0.05 } },
+  cozy: { words: ['cozy', 'cosy', 'hygge', 'homey', 'candlelight', 'fireplace', 'intimate'], style: true, warm: 0.02, dKey: -0.02, fade: 0.1, set: { clarity: -5, vignette: -15 }, grade: { hi: [35, 14], sh: [25, 10] }, sub: { pop: 0.05 }, glow: [2, 18, 40, 55, 25] },
+  // Effects by name.
+  vignette: { words: ['vignette', 'vignetted', 'vignetting', 'framed'], set: { vignette: -25 } },
+  bloom: { words: ['bloom', 'blooming', 'bloomy', 'orton'], glow: [2, 30, 45, 60, 15] },
+  halation: { words: ['halation', 'halo', 'halos', 'cinestill'], glow: [3, 30, 35, 55, 40] },
   sporty: { words: ['sporty', 'sport', 'sports', 'action', 'racing', 'speed', 'energetic', 'aggressive'], style: true, spread: 1.15, chroma: 1.1, set: { clarity: 15, dehaze: 8, vignette: -12 }, sub: { pop: 0.07, clarity: 15, texture: 10 } },
 };
 
@@ -192,6 +189,7 @@ export function recipeFor(mood, strength = 1) {
   const styles = mood.looks.filter(([id]) => LOOKS[id].style);
   const r = { dKey: 0, key: null, keyW: 0, spread: 0, chroma: 0, warm: 0, green: 0, fade: 0, roll: 0, bw: false, set: {}, mix: {}, grade: { sh: [0, 0], mid: [0, 0], hi: [0, 0] }, bal: 0, sub: { pop: 0, sat: 0, clarity: 0, texture: 0, temp: 0 } };
   let popW = 0;
+  const glows = {};
   for (const [id, k0] of mood.looks) {
     const l = LOOKS[id];
     const k = k0 * strength * (l.style ? 1 / styles.length : 1);
@@ -211,7 +209,11 @@ export function recipeFor(mood, strength = 1) {
     for (const [s, v] of Object.entries(l.sub || {})) {
       if (s === 'pop') { r.sub.pop += v * k; popW += k; } else r.sub[s] += v * k;
     }
+    if (l.glow) { const g = (glows[l.glow[0]] ||= { w: 0, v: [0, 0, 0, 0] }); g.w += k; l.glow.slice(1).forEach((v, i) => { g.v[i] += v * k; }); }
   }
+  // One glow style for the photo (as in Lightroom): the one the looks lean on most.
+  const top = Object.entries(glows).sort((a, b) => b[1].w - a[1].w)[0];
+  r.glow = top ? { style: Number(top[0]), amount: top[1].v[0], range: top[1].v[1] / top[1].w, spread: top[1].v[2] / top[1].w, warmth: top[1].v[3] / top[1].w } : null;
   for (const [hue, k0] of mood.colors) {
     // Cool colours in the shadows, warm ones in the highlights, a little in the midtones.
     const k = k0 * strength, warmHue = hue < 75 || hue > 320;
@@ -222,6 +224,107 @@ export function recipeFor(mood, strength = 1) {
   // A subject always stands out a little, unless a look says how much.
   r.sub.pop = popW ? r.sub.pop / Math.max(1, popW) * Math.min(1.5, popW) : 0.035 * strength;
   return r;
+}
+
+// --- what the vision model saw -------------------------------------------------------
+
+// Things the model's description can say, by the words that say them.
+const SCENE_WORDS = {
+  sunset: ['sunset', 'sunrise', 'dusk', 'dawn', 'golden hour', 'setting sun', 'sun is setting', 'sun sets', 'evening sun', 'twilight'],
+  night: ['night', 'nighttime', 'dark sky', 'after dark', 'moonlight', 'starry', 'stars'],
+  lights: ['lights', 'lamps', 'street light', 'streetlight', 'neon', 'headlights', 'candle', 'lanterns', 'fairy lights', 'illuminated', 'lit up'],
+  sun: ['sunny', 'sunlight', 'bright sun', 'clear sky', 'blue sky', 'daylight', 'midday'],
+  overcast: ['overcast', 'cloudy', 'grey sky', 'gray sky', 'rain', 'rainy', 'storm', 'stormy'],
+  fog: ['fog', 'foggy', 'mist', 'misty', 'haze', 'hazy', 'smoke'],
+  backlit: ['backlit', 'silhouette', 'against the sun', 'sun behind', 'lens flare', 'sun flare'],
+  indoor: ['indoor', 'indoors', 'inside', 'room', 'kitchen', 'restaurant', 'cafe', 'studio', 'bedroom', 'living room', 'office'],
+  snow: ['snow', 'snowy', 'ice', 'icy', 'winter', 'frost'],
+  beach: ['beach', 'sea', 'ocean', 'coast', 'shore', 'waves', 'sand'],
+  forest: ['forest', 'woods', 'trees', 'jungle', 'park', 'garden', 'grass', 'field', 'meadow', 'leaves'],
+  mountain: ['mountain', 'mountains', 'hills', 'valley', 'landscape', 'lake', 'river', 'canyon', 'cliff', 'desert'],
+  city: ['city', 'street', 'building', 'buildings', 'skyline', 'urban', 'downtown', 'road', 'bridge', 'architecture', 'alley'],
+  person: ['person', 'man', 'woman', 'boy', 'girl', 'child', 'people', 'portrait', 'face', 'couple', 'bride', 'groom', 'baby', 'model', 'he ', 'she '],
+  animal: ['dog', 'cat', 'bird', 'horse', 'animal', 'puppy', 'kitten', 'deer', 'wildlife', 'pet'],
+  vehicle: ['car', 'cars', 'truck', 'motorcycle', 'bike', 'kart', 'vehicle', 'race', 'racing', 'train', 'plane', 'aircraft', 'boat'],
+  food: ['food', 'dish', 'plate', 'meal', 'coffee', 'cake', 'dessert', 'drink', 'bread', 'fruit'],
+  flower: ['flower', 'flowers', 'blossom', 'bloom', 'petals', 'rose', 'tulip'],
+};
+
+/**
+ * What a description says about the photo: a Set of SCENE_WORDS keys, e.g.
+ * "A man walks down a city street at night under neon lights." -> person, city, night, lights.
+ */
+export function readScene(text) {
+  const t = ` ${String(text || '').toLowerCase().replace(/[^a-z ]+/g, ' ').replace(/\s+/g, ' ')} `;
+  const seen = new Set();
+  for (const [k, words] of Object.entries(SCENE_WORDS)) if (words.some((w) => t.includes(` ${w.trim()} `))) seen.add(k);
+  return seen;
+}
+
+/** A mood for a photo the user gave no words for: the model's pick, else one that suits the scene. */
+export function autoMood(scene, pick = '') {
+  const picked = parseMood(pick);
+  if (picked && picked.looks.length) return { ...picked, unknown: [] };
+  const id = scene.has('sunset') ? 'golden' : scene.has('night') && scene.has('lights') ? 'cinematic' : scene.has('night') ? 'moody'
+    : scene.has('fog') ? 'moody' : scene.has('snow') ? 'airy' : scene.has('beach') ? 'summer' : scene.has('forest') ? 'earthy'
+      : scene.has('food') ? 'warm' : scene.has('flower') ? 'airy' : scene.has('city') ? 'cinematic' : scene.has('person') ? 'natural' : 'vivid';
+  return { looks: [[id, 1]], colors: [], name: id, unknown: [] };
+}
+
+/**
+ * The recipe adjusted to what's in the photo, with the effects chosen for it:
+ * skin kept natural, glow where there's light to glow (and its style from that
+ * light), a vignette where it frames a subject, landscape and night care.
+ * Returns the recipe (changed in place) and short notes on what changed.
+ */
+export function sceneRecipe(r, scene, strength = 1) {
+  const notes = [];
+  const add = (k, v) => { r.set[k] = (r.set[k] || 0) + v * strength; };
+  const glowy = r.glow && r.glow.amount >= 1;
+  // People: skin stays natural, no crunchy clarity on faces, a soft frame.
+  if (scene.has('person')) {
+    r.chroma = Math.min(r.chroma, 0.12);
+    if (r.mix.hue1) r.mix.hue1 *= 0.3;
+    if (r.mix.sat1) r.mix.sat1 = Math.min(r.mix.sat1, 5);
+    if ((r.set.clarity || 0) > 5) r.set.clarity = 5;
+    r.sub.clarity = 4;
+    r.sub.texture = -6;
+    if (!r.set.vignette) { add('vignette', -12); notes.push('soft vignette'); }
+    notes.push('skin kept natural');
+  }
+  // Lights in the dark: halation round them, as film does; no lifting a noisy night.
+  if (scene.has('night') || (scene.has('lights') && !scene.has('sun'))) {
+    r.dKey = Math.min(r.dKey, 0.015);
+    if (glowy) { r.glow.style = r.glow.style === 1 ? 2 : r.glow.style; }
+    else if (scene.has('lights')) r.glow = { style: 3, amount: 18 * strength, range: 25, spread: 40, warmth: 30 };
+    if (scene.has('lights')) notes.push(r.glow.style === 3 ? 'halation on the lights' : 'bloom on the lights');
+  }
+  // Low sun: a warm bloom from the bright parts; less extra warmth, it's warm already.
+  if (scene.has('sunset') || scene.has('backlit')) {
+    if (!r.glow || r.glow.amount < 1) r.glow = { style: 2, amount: 14 * strength, range: 40, spread: 55, warmth: 35 };
+    else if (r.glow.style === 1 && scene.has('backlit')) r.glow.style = 2;
+    r.glow.amount *= 1.15;
+    notes.push('glow from the sun');
+  }
+  // Flat grey days get a little depth back; fog keeps its softness for dreamy moods.
+  if (scene.has('overcast') && !glowy) { add('dehaze', 6); add('clarity', 5); r.spread += 0.04; }
+  if (scene.has('fog')) { if (glowy) r.glow.amount *= 1.2; else add('dehaze', 8); }
+  // Landscapes: a light vignette and crisp detail; buildings: no glow smearing lines.
+  if (scene.has('mountain') || scene.has('forest') || scene.has('beach')) {
+    if (!r.set.vignette) { add('vignette', -8); notes.push('light vignette'); }
+    if (!scene.has('fog') && !glowy) add('texture', 6);
+  }
+  if (scene.has('city') && !scene.has('night') && r.glow) r.glow.amount *= 0.6;
+  // Snow stays white: brighter, and never pushed toward a colour.
+  if (scene.has('snow')) { r.dKey += 0.02; r.warm = clamp(r.warm, -0.012, 0.008); }
+  if (scene.has('food')) { r.chroma += 0.06; r.warm += 0.004; if (!r.set.vignette) add('vignette', -10); }
+  if (scene.has('animal')) r.sub.texture = Math.max(r.sub.texture || 0, 12);
+  if (scene.has('vehicle')) { r.sub.clarity = Math.max(r.sub.clarity || 0, 12); if (!r.set.vignette) add('vignette', -10); }
+  if (scene.has('flower') && r.glow) r.glow.amount *= 1.1;
+  // Indoor light is often orange: a cold mood can go further, a warm one less far.
+  if (scene.has('indoor') && r.warm > 0) r.warm *= 0.7;
+  if (r.glow) r.glow.amount = Math.min(60, r.glow.amount);
+  return { r, notes: [...new Set(notes)] };
 }
 
 // --- the settings ----------------------------------------------------------------
@@ -235,7 +338,7 @@ const fit = (key, v) => { const sl = SLIDER[key]; return sl ? clamp(Math.round(v
 export const MOOD_KEYS = [
   'contrast', 'highlights', 'shadows', 'whites', 'blacks', 'texture', 'clarity', 'dehaze', 'vibrance', 'saturation',
   'gShadowHue', 'gShadowSat', 'gShadowLum', 'gMidHue', 'gMidSat', 'gMidLum', 'gHighHue', 'gHighSat', 'gHighLum', 'gGlobalHue', 'gGlobalSat', 'gGlobalLum', 'gBalance', 'gBlending',
-  'vignette', 'grain', 'grainSize', ...['hue', 'sat', 'lum'].flatMap((k) => Array.from({ length: 8 }, (_, i) => `${k}${i}`)),
+  'vignette', 'grain', 'grainSize', 'glow', 'glowRange', 'glowSpread', 'glowWarmth', ...['hue', 'sat', 'lum'].flatMap((k) => Array.from({ length: 8 }, (_, i) => `${k}${i}`)),
 ];
 
 /** The fixed part of a grade: wheels, mixer, curve and look sliders, on top of `base`. */
@@ -251,6 +354,14 @@ export function lookSettings(base, r) {
   put('mid', 'gMidHue', 'gMidSat');
   put('hi', 'gHighHue', 'gHighSat');
   s.gBalance = fit('gBalance', r.bal);
+  s.glowStyle = 1;
+  if (r.glow && r.glow.amount >= 1) {
+    s.glowStyle = r.glow.style;
+    s.glow = fit('glow', r.glow.amount);
+    s.glowRange = fit('glowRange', r.glow.range);
+    s.glowSpread = fit('glowSpread', r.glow.spread);
+    s.glowWarmth = fit('glowWarmth', r.glow.warmth);
+  }
   // Faded blacks and soft whites on the point curve, as the classic looks do it.
   const fade = clamp(r.fade, 0, 1), roll = clamp(r.roll, 0, 1);
   if (fade > 0.01 || roll > 0.01) s.curve = cleanCurve([[0, 42 * fade], [64, 64 + 10 * fade], [192, 192 - 5 * roll], [255, 255 - 26 * roll]]);

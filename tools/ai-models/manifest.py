@@ -14,6 +14,11 @@ FEATURES = {
     'landscape': ['ade20k.onnx'],
     'people': ['ade20k.onnx', 'selfie_multiclass.onnx'],
     'denoise': ['scunet.onnx'],
+    # The AI grade's vision model (transformers.js layout, folders joined with "--").
+    'grade': ['smolvlm--' + f for f in [
+        'config.json', 'generation_config.json', 'preprocessor_config.json', 'processor_config.json', 'chat_template.json',
+        'tokenizer.json', 'tokenizer_config.json', 'special_tokens_map.json', 'added_tokens.json',
+        'onnx--vision_encoder_q4f16.onnx', 'onnx--embed_tokens_q4f16.onnx', 'onnx--decoder_model_merged_q4f16.onnx']],
 }
 files = []
 for name in sorted({n for v in [*RUNTIME.values(), *FEATURES.values()] for n in v}):
