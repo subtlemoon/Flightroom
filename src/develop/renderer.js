@@ -12,6 +12,7 @@ import { tonemapUniforms } from './tonemap.js';
 import { noiseModel } from './noise.js';
 import { Composer } from './compose.js';
 import { renderLayers } from './retouch.js';
+import { LOOK_W, HUE_ROWS, loadLook, lookTable, packLook } from './looks.js';
 import { GLOW_EDGE, LEVELS, glowPlan, glowUsed } from './glow.js';
 import { ROTATION } from '../cull/rotation.js';
 
@@ -351,7 +352,7 @@ export class Renderer {
     this.guideGen = 0;
     // The tone curve in row 0 and each mask's own curve in the rows after (one texture: the develop pass has none to spare).
     this.curveTex = dev.texture('rgba16f', CURVE_SIZE, 1 + MAX_MASKS, new Float32Array(CURVE_SIZE * (1 + MAX_MASKS) * 4));
-    this.hueTex = dev.texture('rgba16f', HUE_SIZE, 1, new Float32Array(HUE_SIZE * 4), { wrap: 'repeat' });
+    this.hueTex = dev.texture('rgba16f', HUE_SIZE, HUE_ROWS, new Float32Array(HUE_SIZE * HUE_ROWS * 4), { wrap: 'repeat' });
     this.blank = dev.texture('rgb16f', 1, 1, new Float32Array(3));
     /** Called when something only known after a read-back arrived and the picture should be drawn again (WebGPU). */
     this.onStale = null;
@@ -640,6 +641,7 @@ export class Renderer {
   /** Waits until a render of these settings has everything it measures (WebGPU reads back; WebGL2 has it at once). */
   async prepare(info, s) {
     if (!this.src) return;
+    if (s.look) await loadLook(s.look);
     this.updateGuide(info, s);
     this.masks = (s.masks || []).filter((m) => !m.hidden).slice(0, MAX_MASKS);
     this.measure(s);
@@ -662,6 +664,14 @@ export class Renderer {
       this.dev.upload(this.hueTex, 0, 0, HUE_SIZE, 1, hueTable(s));
       this.hueKey = h;
     }
+    // The look's table sits in the rows below (looks.js); a look still loading shows once it has.
+    const t = s.look ? lookTable(s.look) : null;
+    if (t && t !== this.lookKey) {
+      const { rows, data } = packLook(t);
+      this.dev.upload(this.hueTex, 0, 1, LOOK_W, rows, data);
+      this.lookKey = t;
+    }
+    this.lookN = t ? t.n : 0;
   }
 
   /**
@@ -884,6 +894,7 @@ export class Renderer {
       uGlowF2: this.glowOn ? this.glowPlan.final2 : [0, 0, 0, 0],
       uCurve: this.curveTex,
       uHue: this.hueTex,
+      uLook: [this.lookN || 0, (s.lookAmount ?? 100) / 100],
       uOut2Ori: glMat(out2ori),
       uOri2Photo: glMat(geo.orientedToPhoto()),
       uOriCenter: [cx, cy],

@@ -16,7 +16,7 @@ const S = (key, label, crs, min, max, step = 1, def = 0, extra = {}) => ({ key, 
 // values drawn by their own controls (colour wheels, mixer); `keys` are the
 // other settings a section owns (for its reset button).
 export const SECTIONS = [
-  { id: 'basic', title: 'Basic', keys: ['wb', 'temp', 'tint', 'profile', 'bw', 'toneMap'], groups: [
+  { id: 'basic', title: 'Basic', keys: ['wb', 'temp', 'tint', 'profile', 'bw', 'toneMap', 'look'], groups: [
     { title: 'White balance', sliders: [
       S('temp', 'Temp', 'Temperature', 2000, 50000, 50, null, { log: true, gradient: 'temp' }),
       S('tint', 'Tint', 'Tint', -150, 150, 1, null, { gradient: 'tint' }),
@@ -48,6 +48,9 @@ export const SECTIONS = [
       S('vibrance', 'Vibrance', 'Vibrance', -100, 100),
       S('saturation', 'Saturation', 'Saturation', -100, 100),
     ] },
+  ], more: [
+    // The look's strength (looks.js): Flightroom's own, written only while a look is picked.
+    S('lookAmount', 'Amount', 'LookAmount', 0, 200, 1, 100, { own: true, onlyWith: 'look' }),
   ] },
   { id: 'curve', title: 'Tone curve', keys: ['curve', 'curveR', 'curveG', 'curveB'], groups: [
     { title: 'Regions', parametric: true, sliders: [
@@ -213,7 +216,7 @@ export function defaults(asShot) {
   return { ...d };
 }
 function makeDefaults(asShot) {
-  const s = { wb: 'As Shot', profile: startProfile, toneMap: 'none', bw: false, removeCA: false, lensProfile: false, vignetteStyle: 1, glowStyle: 2, constrainCrop: false, crop: null, masks: [], layers: [], aiDenoise: 0 };
+  const s = { wb: 'As Shot', profile: startProfile, look: '', toneMap: 'none', bw: false, removeCA: false, lensProfile: false, vignetteStyle: 1, glowStyle: 2, constrainCrop: false, crop: null, masks: [], layers: [], aiDenoise: 0 };
   for (const [k] of CURVE_CHANNELS) s[k] = LINEAR_CURVE;
   for (const sl of SLIDERS) s[sl.key] = sl.def;
   s.temp = asShot.temp;
@@ -268,6 +271,7 @@ export function fromXmp(crs, curves, asShot, own = {}, look = null) {
   s.lensProfile = num('LensProfileEnable') === 1;
   s.constrainCrop = num('CropConstrainToWarp') === 1;
   if ([1, 2, 3].includes(num('PostCropVignetteStyle'))) s.vignetteStyle = num('PostCropVignetteStyle');
+  if (typeof own.Look === 'string' && own.Look) s.look = own.Look;
   if ([1, 2, 3, 4, 5].includes(Number(own.GlowStyle))) s.glowStyle = Number(own.GlowStyle);
   const wb = crs.WhiteBalance;
   if (wb && wb !== 'As Shot' && num('Temperature') != null) s.wb = WB_PRESETS.some(([n]) => n === wb) ? wb : 'Custom';
@@ -313,7 +317,7 @@ export function toXmp(s) {
     const v = s[sl.key];
     if (sl.tm) ownTm[sl.crs] = s.toneMap === sl.tm ? Number(v).toFixed(sl.decimals || 0) : '';
     // Glow is only written while it's on, so photos without it keep a clean sidecar.
-    else if (sl.own) ownTm[sl.crs] = s.glow ? String(Math.round(v)) : '';
+    else if (sl.own) ownTm[sl.crs] = s[sl.onlyWith || 'glow'] ? String(Math.round(v)) : '';
     else if (sl.key === 'temp') set[sl.crs] = String(Math.round(v));
     else if (sl.key === 'sharpenRadius') set[sl.crs] = signed(v, 1);
     else set[sl.crs] = sl.min >= 0 ? String(Math.round(v)) : signed(v, sl.decimals || 0);
@@ -356,6 +360,7 @@ export function toXmp(s) {
       Profile: s.profile === 'agx' || s.profile === 'adobe' ? s.profile : '',
       ToneMap: s.toneMap && s.toneMap !== 'none' ? s.toneMap : '',
       GlowStyle: s.glow ? String(s.glowStyle || 2) : '',
+      Look: s.look || '',
       ...ownTm,
     },
   };

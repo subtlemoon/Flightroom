@@ -165,6 +165,18 @@ export function useStore() {
       s.cull = { ...s.cull, positions: { ...s.cull?.positions, [folder]: index } };
       return s;
     }),
+    // Library collections: { id, name, ids } (photo ids, in the order added).
+    addCollection: (name, ids = []) => { const id = uid('c'); update((s) => { s.collections = [...(s.collections || []), { id, name, ids: [...new Set(ids)] }]; return s; }); return id; },
+    renameCollection: (id, name) => update((s) => { s.collections = (s.collections || []).map((c) => (c.id === id ? { ...c, name } : c)); return s; }),
+    deleteCollection: (id) => update((s) => { s.collections = (s.collections || []).filter((c) => c.id !== id); return s; }),
+    collect: (id, ids, add = true) => update((s) => {
+      s.collections = (s.collections || []).map((c) => {
+        if (c.id !== id) return c;
+        const drop = new Set(ids);
+        return { ...c, ids: add ? [...new Set([...c.ids, ...ids])] : c.ids.filter((x) => !drop.has(x)) };
+      });
+      return s;
+    }),
     setSettings: (patch) => update((s) => { s.settings = { ...s.settings, ...patch }; return s; }),
     setCullSettings: (patch) => update((s) => { s.settings = { ...s.settings, ...patch }; return s; }),
     setApps: (apps) => update((s) => { s.settings.apps = apps; return s; }),

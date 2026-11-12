@@ -15,6 +15,7 @@ import { HomeView, startView } from './components/home.jsx';
 // app opens faster; they're fetched in the background once it has started.
 const loadDevelop = () => import('./components/develop.jsx');
 const DevelopView = lazy(() => loadDevelop().then((m) => ({ default: m.DevelopView })));
+const LibraryView = lazy(() => import('./components/photolib.jsx').then((m) => ({ default: m.LibraryView })));
 
 export default function App() {
   const store = useStore();
@@ -44,6 +45,7 @@ export default function App() {
   } else if (view.name === 'mygear') main = <MyGearView store={store} onOpenGear={openGear} onBrowse={() => setView({ name: 'catalog' })} onCustom={() => setForm({})} />;
   else if (view.name === 'catalog') main = <CatalogView store={store} onOpenGear={openGear} onCustom={() => setForm({})} />;
   else if (view.name === 'settings') main = <SettingsView store={store} />;
+  else if (view.name === 'library') main = <LibraryView store={store} onCull={() => setView({ name: 'cull' })} onDevelop={() => setView({ name: 'develop' })} />;
   else if (view.name === 'cull') main = <CullView store={store} onDevelop={() => setView({ name: 'develop' })} />;
   // Develop and Retouch are one view in two modes, so switching keeps the photo loaded.
   else if (view.name === 'develop') main = <DevelopView store={store} mode={view.mode} onMode={(mode) => setView({ name: 'develop', mode })} onCull={() => setView({ name: 'cull' })} />;
@@ -52,8 +54,8 @@ export default function App() {
   else if (group) main = <GroupView group={group} store={store} onOpenPreset={(presetId) => setView({ name: 'group', groupId: group.id, presetId })} />;
   else main = <div className="view"><div className="hero-empty"><h2>No groups yet</h2><button className="btn btn-primary" onClick={() => setNewGroup(true)}>Create a group</button></div></div>;
 
-  // In Develop the sidebar is a slim strip of icons: the left side holds the masks.
-  const rail = view.name === 'develop';
+  // In Develop and the Library the sidebar is a slim strip of icons: the left side holds the masks, or the Library's folders.
+  const rail = view.name === 'develop' || view.name === 'library';
   const navBtn = (key, label, icon, extra, to = { name: key }, on = view.name === key) => (
     <button className={`nav-item${on ? ' active' : ''}`} onClick={() => setView(to)} title={rail ? label : undefined}>
       <Icon name={icon} /><span className="nav-text">{label}</span>{extra}
@@ -66,7 +68,7 @@ export default function App() {
   }, []);
 
   const layout = useLayout();
-  const photoView = view.name === 'cull' || view.name === 'develop';
+  const photoView = view.name === 'cull' || view.name === 'develop' || view.name === 'library';
   // Lightroom's panel keys: Tab = side panels, F6 = filmstrip, F7 = left, F8 = right.
   useEffect(() => {
     const onKey = (e) => {
@@ -85,11 +87,12 @@ export default function App() {
     <div className={`app${rail ? ' rail' : layout.nav ? '' : ' nav-hidden'}`}>
       <nav className="sidebar" aria-hidden={!rail && !layout.nav}>
         {navBtn('home', 'Home', 'home')}
-        <div className="nav-label">Library</div>
+        <div className="nav-label">Gear</div>
         {navBtn('mygear', 'My Gear', 'bag', <span className="nav-count">{state.owned.length}</span>)}
         {navBtn('catalog', 'Catalog', 'grid')}
         {navBtn('news', 'News', 'news', hasNewNews && <span className="nav-new">New</span>)}
         <div className="nav-label">Photos</div>
+        {navBtn('library', 'Library', 'library')}
         {navBtn('cull', 'Culling', 'photo')}
         {navBtn('develop', 'Develop', 'develop', null, { name: 'develop' }, view.name === 'develop' && view.mode !== 'retouch')}
         {navBtn('retouch', 'Retouch', 'heal', null, { name: 'develop', mode: 'retouch' }, view.name === 'develop' && view.mode === 'retouch')}

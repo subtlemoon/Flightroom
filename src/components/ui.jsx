@@ -84,6 +84,8 @@ const paths = {
   triangle: <path d="M12 4l9 16H3z" />,
   polygon: <path d="M12 3l8.5 6.2-3.2 10H6.7L3.5 9.2z" />,
   line: <path d="M5 19L19 5" />,
+  focus: <><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4" /><rect x="9.5" y="9.5" width="5" height="5" rx="0.5" /></>,
+  library: <><rect x="6.5" y="6.5" width="14" height="11" rx="2" /><path d="M3.5 14.5v-8a2 2 0 0 1 2-2h11" /><path d="M20.5 15l-4-4-6 6.5" /></>,
   zoom: <><circle cx="10.5" cy="10.5" r="6.5" /><path d="M20 20l-4.8-4.8M10.5 7.5v6M7.5 10.5h6" /></>,
   fx: <><path d="M10 5c-2 0-3 1-3.4 3L5 20" /><path d="M4 11h6" /><path d="M13 10l6 8M19 10l-6 8" /></>,
   folder2: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,

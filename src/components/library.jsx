@@ -20,7 +20,7 @@ export function MyGearView({ store, onOpenGear, onBrowse, onCustom }) {
     <div className="view">
       <header className="view-head">
         <div className="grow">
-          <div className="eyebrow">Library</div>
+          <div className="eyebrow">Gear</div>
           <h1>My Gear</h1>
           <p className="muted">{counts.body} {counts.body === 1 ? 'body' : 'bodies'} · {counts.lens} {counts.lens === 1 ? 'lens' : 'lenses'} · {counts.accessory} {counts.accessory === 1 ? 'accessory' : 'accessories'}</p>
         </div>
@@ -51,7 +51,7 @@ export function CatalogView({ store, onOpenGear, onCustom }) {
     <div className="view">
       <header className="view-head">
         <div className="grow">
-          <div className="eyebrow">Library</div>
+          <div className="eyebrow">Gear</div>
           <h1>Gear catalog</h1>
           <p className="muted">{gear.length} items. Click one for full specs, or add it to My Gear.</p>
         </div>

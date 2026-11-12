@@ -258,7 +258,8 @@ uniform sampler2D uGlow;   // the glow (GLOW_MIX), in photo coordinates
 uniform vec4 uGlowMix;    // amount, mode (GLOW_SRC's), -, on
 uniform vec4 uGlowF, uGlowF2; // per mode (renderer.js updateGlow, glow.js glowPlan final / final2)
 uniform sampler2D uCurve; // the tone curve (row 0), then each mask's own curve (rows 1-16)
-uniform sampler2D uHue;
+uniform sampler2D uHue;   // row 0: the colour mixer per hue; rows 1+: the look's table (looks.js)
+uniform vec2 uLook;       // the look's size (0: none) and amount
 uniform mat3 uOut2Ori;    // output pixel -> oriented pixel of the transformed photo
 uniform mat3 uOri2Photo;  // oriented pixel -> photo coordinates (sensor orientation, 0-1)
 uniform mat3 uOut2Crop;   // output pixel -> crop frame (-1..1)
@@ -550,6 +551,28 @@ vec3 hsv6ToRgb(vec3 c) {
 }
 float encS1(float x) { return x <= 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0 / 2.4) - 0.055; }
 float decS1(float x) { return x <= 0.04045 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4); }
+// The look (a 3D LUT, red fastest), between its colours as Resolve does it:
+// tetrahedral interpolation, four colours per pixel.
+vec3 lookTex(int i) { return texelFetch(uHue, ivec2(i % 360, 1 + i / 360), 0).rgb; }
+vec3 lookAt(vec3 c) {
+  float n1 = uLook.x - 1.0;
+  vec3 p = clamp(c, 0.0, 1.0) * n1;
+  vec3 b = min(floor(p), vec3(n1 - 1.0));
+  vec3 f = p - b;
+  int n = int(uLook.x + 0.5);
+  int o = int(b.x) + int(b.y) * n + int(b.z) * n * n;
+  int sy = n, sz = n * n;
+  vec3 c0 = lookTex(o), c1 = lookTex(o + 1 + sy + sz);
+  if (f.x > f.y) {
+    if (f.y > f.z) return (1.0 - f.x) * c0 + (f.x - f.y) * lookTex(o + 1) + (f.y - f.z) * lookTex(o + 1 + sy) + f.z * c1;
+    if (f.x > f.z) return (1.0 - f.x) * c0 + (f.x - f.z) * lookTex(o + 1) + (f.z - f.y) * lookTex(o + 1 + sz) + f.y * c1;
+    return (1.0 - f.z) * c0 + (f.z - f.x) * lookTex(o + sz) + (f.x - f.y) * lookTex(o + 1 + sz) + f.y * c1;
+  }
+  if (f.z > f.y) return (1.0 - f.z) * c0 + (f.z - f.y) * lookTex(o + sz) + (f.y - f.x) * lookTex(o + sy + sz) + f.x * c1;
+  if (f.z > f.x) return (1.0 - f.y) * c0 + (f.y - f.z) * lookTex(o + sy) + (f.z - f.x) * lookTex(o + sy + sz) + f.x * c1;
+  return (1.0 - f.y) * c0 + (f.y - f.x) * lookTex(o + sy) + (f.x - f.z) * lookTex(o + 1 + sy) + f.z * c1;
+}
+
 vec3 hsmAt(sampler2D t, int hues, int v, int h, int s) { return texelFetch(t, ivec2(s, v * hues + h), 0).rgb; }
 // RefBaselineHueSatMap: hue shift (degrees), saturation and value scale, by hue, saturation and value.
 vec3 hueSatMap(sampler2D t, vec4 dims, vec3 rgb) {
@@ -993,7 +1016,7 @@ void main() {
   // space), with the bands' weights picked by that hue.
   vec3 pp = SRGB_TO_PP * srgbToLin(d);
   vec3 q = rgbToHsv6(max(pp, vec3(0.0)));
-  vec4 adj = texture(uHue, vec2((q.x * 60.0 + 0.5) / 360.0, 0.5)) * smoothstep(0.0, MIX_S, q.y);
+  vec4 adj = texture(uHue, vec2((q.x * 60.0 + 0.5) / 360.0, 0.5 / 764.0)) * smoothstep(0.0, MIX_S, q.y);
   if (adj.x != 0.0 || adj.y != 0.0 || adj.z != 0.0) {
     q.x += adj.x * MIX_HUE / 60.0;
     q.y *= max(1.0 + adj.y * (adj.y > 0.0 ? MIX_SAT_UP : MIX_SAT_DOWN) - adj.z * MIX_LUM_SAT, 0.0);
@@ -1075,6 +1098,9 @@ void main() {
     float lum = uGradeLum.x * sh + uGradeLum.y * mi + uGradeLum.z * hi + uGradeLum.w;
     d = lum >= 0.0 ? 1.0 - (1.0 - d) * (1.0 - lum * 0.5) : d * (1.0 + lum * 0.5);
   }
+
+  // The look, on the finished colours (before the vignette and grain, as a profile's look would be).
+  if (uLook.x > 1.5) d = mix(d, lookAt(d), uLook.y);
 
   // Vignette, measured from the centre of the crop (also while the crop is being
   // set, when the whole photo shows), as Lightroom's Post-Crop Vignetting is.

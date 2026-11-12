@@ -230,6 +230,25 @@ pub struct JpegPart {
     pub height: u32,
 }
 
+/// One AF point or area, in fractions of the camera's (unrotated) frame, top left first.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct FocusBox {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// The camera reports it as in focus (Canon); Nikon's one area is always true.
+    pub hit: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+pub struct Focus {
+    /// The camera's AF-area mode, as it names it ("Wide (L)", "Face + Tracking").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    pub boxes: Vec<FocusBox>,
+}
+
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PhotoInfo {
@@ -252,6 +271,9 @@ pub struct PhotoInfo {
     pub lens: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_rating: Option<i32>,
+    /// Where the camera focused, from its maker notes (Nikon and Canon).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focus: Option<Focus>,
     #[serde(skip)]
     pub preview: Option<JpegPart>,
     #[serde(skip)]
@@ -382,11 +404,135 @@ fn read_exif_info<S: Source + ?Sized>(tiff: &Tiff<S>, ifd0: &Ifd, info: &mut Pho
         info.taken_at = tiff.str(e, 0x9003);
         info.focal_length = tiff.num(e, 0x920a);
         info.lens = tiff.str(e, 0xa434);
+        info.focus = read_focus(tiff, e, info.make.as_deref().unwrap_or(""));
     }
     if let Some(t) = ifd0.tags.get(&0x2bc) {
         info.file_rating = read_rating(&String::from_utf8_lossy(&tiff.raw(t)));
     }
     exif
+}
+
+// --- focus points ------------------------------------------------------------
+
+fn u16_at(le: bool, b: &[u8], o: usize) -> Option<u16> {
+    let a = [*b.get(o)?, *b.get(o + 1)?];
+    Some(if le { u16::from_le_bytes(a) } else { u16::from_be_bytes(a) })
+}
+
+/// The AF point(s) from the maker notes. Nikon writes one AF area (AFInfo2: the
+/// area's centre and size, from the Z bodies' version 03xx, or live view on older
+/// ones); Canon writes every AF point with the ones that were in focus (AFInfo2).
+fn read_focus<S: Source + ?Sized>(tiff: &Tiff<S>, exif: &Ifd, make: &str) -> Option<Focus> {
+    let mn = exif.tags.get(&0x927c).filter(|t| t.inline.is_none() && t.offset != 0)?;
+    let start = tiff.base + mn.offset as u64;
+    let make = make.to_ascii_lowercase();
+    if make.starts_with("nikon") {
+        let head = tiff.src.get(start, 10);
+        if head.len() < 10 || &head[0..6] != b"Nikon\0" {
+            return None;
+        }
+        let t = Tiff::open(tiff.src, start + 10)?;
+        let ifd = t.read_ifd(t.ifd0)?;
+        nikon_focus(&t.raw(ifd.tags.get(&0xb7)?), t.le)
+    } else if make.starts_with("canon") {
+        let ifd = tiff.read_ifd(mn.offset)?;
+        let t = ifd.tags.get(&0x26)?;
+        canon_focus(&tiff.raw(t), tiff.le)
+    } else {
+        None
+    }
+}
+
+fn nikon_area_mode(v: u8) -> Option<&'static str> {
+    Some(match v {
+        192 => "Pinpoint",
+        193 => "Single point",
+        194 => "Dynamic area",
+        195 => "Wide (S)",
+        196 => "Wide (L)",
+        197 => "Auto area",
+        204 => "Dynamic (S)",
+        205 => "Dynamic (M)",
+        206 => "Dynamic (L)",
+        207 => "3D tracking",
+        _ => return None,
+    })
+}
+
+pub fn nikon_focus(b: &[u8], le: bool) -> Option<Focus> {
+    let ver = b.get(0..4)?;
+    // Where the AF image size and the area sit: Z bodies (03xx), or older bodies in live view.
+    let at = match ver {
+        [b'0', b'3', ..] => 0x2a,
+        [b'0', b'1', ..] if b.get(4).is_some_and(|&c| c != 0) => 0x10,
+        _ => return None,
+    };
+    let v = |i: usize| u16_at(le, b, at + i * 2).map(|x| x as f32);
+    let (iw, ih, cx, cy, w, h) = (v(0)?, v(1)?, v(2)?, v(3)?, v(4)?, v(5)?);
+    if iw < 1.0 || ih < 1.0 || w < 1.0 || h < 1.0 || cx > iw || cy > ih {
+        return None;
+    }
+    let mode = if at == 0x2a { b.get(5).and_then(|&m| nikon_area_mode(m)).map(String::from) } else { None };
+    Some(Focus { mode, boxes: vec![FocusBox { x: (cx - w / 2.0) / iw, y: (cy - h / 2.0) / ih, w: w / iw, h: h / ih, hit: true }] })
+}
+
+fn canon_area_mode(v: u16) -> Option<&'static str> {
+    Some(match v {
+        0 => "Off",
+        1 => "AF point expansion",
+        2 => "Single point",
+        4 => "Auto",
+        5 => "Face detect",
+        6 => "Face + Tracking",
+        7 => "Zone",
+        8 => "AF point expansion (4)",
+        9 => "Spot",
+        10 => "AF point expansion (8)",
+        11 => "Flexizone multi",
+        13 => "Flexizone single",
+        14 => "Large zone",
+        _ => return None,
+    })
+}
+
+pub fn canon_focus(b: &[u8], le: bool) -> Option<Focus> {
+    let w: Vec<u16> = (0..b.len() / 2).filter_map(|i| u16_at(le, b, i * 2)).collect();
+    let n = *w.get(2)? as usize;
+    let valid = (*w.get(3)? as usize).min(n);
+    let (iw, ih) = (*w.get(6)? as f32, *w.get(7)? as f32);
+    let words = n.div_ceil(16);
+    if n == 0 || valid == 0 || iw < 1.0 || ih < 1.0 || w.len() < 8 + 4 * n + words {
+        return None;
+    }
+    let col = |k: usize, i: usize| w[8 + k * n + i];
+    let bit = |base: usize, i: usize| w.get(base + i / 16).is_some_and(|m| m & (1 << (i % 16)) != 0);
+    let in_focus = 8 + 4 * n;
+    let selected = in_focus + words;
+    let has_selected = w.len() >= selected + words;
+    let mut boxes = Vec::new();
+    for i in 0..valid {
+        let (bw, bh) = (col(0, i) as f32, col(1, i) as f32);
+        if bw < 1.0 || bh < 1.0 {
+            continue;
+        }
+        let hit = bit(in_focus, i);
+        // Points that were neither in focus nor picked would only clutter the photo.
+        if !hit && has_selected && !bit(selected, i) {
+            continue;
+        }
+        // Positions are from the middle of the frame, y going up.
+        let (x, y) = (col(2, i) as i16 as f32, col(3, i) as i16 as f32);
+        boxes.push(FocusBox { x: (iw / 2.0 + x - bw / 2.0) / iw, y: (ih / 2.0 - y - bh / 2.0) / ih, w: bw / iw, h: bh / ih, hit });
+    }
+    // When some point found focus, only those count.
+    if boxes.iter().any(|b| b.hit) {
+        boxes.retain(|b| b.hit);
+    }
+    // Manual focus with every point picked: nothing to show.
+    if boxes.is_empty() || (!boxes[0].hit && boxes.len() > 9) {
+        return None;
+    }
+    Some(Focus { mode: canon_area_mode(w[1]).map(String::from), boxes })
 }
 
 // Nikon maker notes hold a second, small (640 px) preview in "PreviewIFD".
@@ -630,6 +776,45 @@ pub fn xmp_file_bytes(text: &str, enc: XmpEncoding) -> Vec<u8> {
 
 /// Sets xmp:Rating in an existing XMP packet and leaves everything else untouched
 /// (Lightroom keeps edits, keywords and labels in the same file).
+/// Keywords (dc:subject) from an XMP packet, as Lightroom writes them.
+pub fn read_keywords(xmp: &str) -> Vec<String> {
+    if !xmp.contains("dc:subject") {
+        return Vec::new();
+    }
+    let doc = crate::xmp::Doc::new(xmp);
+    let mut out: Vec<String> = Vec::new();
+    for k in doc.get_seq("dc", "subject").unwrap_or_default() {
+        let k = k.trim().to_string();
+        if !k.is_empty() && !out.iter().any(|o| o.eq_ignore_ascii_case(&k)) {
+            out.push(k);
+        }
+    }
+    out
+}
+
+const DC_NS: &str = "http://purl.org/dc/elements/1.1/";
+
+/// An XMP packet with these keywords added and those taken away (case doesn't matter).
+pub fn set_keywords(xmp: Option<&str>, add: &[String], remove: &[String]) -> String {
+    let base = match xmp.filter(|x| x.contains("<rdf:Description")) {
+        Some(x) => x.to_string(),
+        None => crate::xmp::empty(),
+    };
+    let mut list = read_keywords(&base);
+    list.retain(|k| !remove.iter().any(|r| r.eq_ignore_ascii_case(k)));
+    for a in add {
+        let a = a.trim();
+        if !a.is_empty() && !list.iter().any(|k| k.eq_ignore_ascii_case(a)) {
+            list.push(a.to_string());
+        }
+    }
+    let mut doc = crate::xmp::Doc::new(&base);
+    let lis: String = list.iter().map(|k| format!("\n     <rdf:li>{}</rdf:li>", crate::xmp::escape(k))).collect();
+    let inner = if list.is_empty() { String::new() } else { format!("\n    <rdf:Bag>{lis}\n    </rdf:Bag>\n   ") };
+    doc.set_xml("dc", "subject", &inner, DC_NS);
+    doc.text
+}
+
 pub fn set_rating(xmp: Option<&str>, rating: i32) -> String {
     let Some(xmp) = xmp.filter(|x| x.contains("<rdf:Description")) else { return new_xmp(rating) };
     let mut doc = crate::xmp::Doc::new(xmp);
@@ -757,6 +942,78 @@ pub fn group_photos(names: &[String]) -> Vec<Group> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn keywords_in_a_sidecar() {
+        let x = super::set_keywords(None, &["Kart".into(), "Halloween 100".into(), "kart".into()], &[]);
+        assert_eq!(super::read_keywords(&x), vec!["Kart", "Halloween 100"]);
+        let with_rating = super::set_rating(Some(&x), 4);
+        let y = super::set_keywords(Some(&with_rating), &["Race & Pit".into()], &["KART".into()]);
+        assert_eq!(super::read_keywords(&y), vec!["Halloween 100", "Race & Pit"]);
+        assert_eq!(super::read_rating(&y), Some(4));
+        assert!(y.contains("Race &amp; Pit"));
+        let none = super::set_keywords(Some(&y), &[], &["halloween 100".into(), "race & pit".into()]);
+        assert!(!none.contains("dc:subject"));
+        assert_eq!(super::read_rating(&none), Some(4));
+    }
+
+    #[test]
+    fn nikon_z_focus_area() {
+        // AFInfo2 of a Z 7II NEF in Wide (L): the area's centre and size in an 8256 x 5504 frame.
+        let mut b = vec![0u8; 60];
+        b[0..4].copy_from_slice(b"0301");
+        b[4] = 2;
+        b[5] = 0xc4;
+        for (i, v) in [8256u16, 5504, 4128, 2752, 2244, 1503].iter().enumerate() {
+            b[0x2a + i * 2..0x2c + i * 2].copy_from_slice(&v.to_le_bytes());
+        }
+        let f = super::nikon_focus(&b, true).unwrap();
+        assert_eq!(f.mode.as_deref(), Some("Wide (L)"));
+        let a = &f.boxes[0];
+        assert!((a.x - (4128.0 - 1122.0) / 8256.0).abs() < 1e-4 && (a.w - 2244.0 / 8256.0).abs() < 1e-4);
+        assert!((a.y + a.h / 2.0 - 0.5).abs() < 1e-4);
+        // An older body outside live view writes no area.
+        let mut old = b.clone();
+        old[0..4].copy_from_slice(b"0100");
+        old[4] = 0;
+        assert_eq!(super::nikon_focus(&old, true), None);
+    }
+
+    #[test]
+    fn canon_focus_points() {
+        // Three points; the second is in focus. y goes up from the middle.
+        let n = 3u16;
+        let mut w: Vec<u16> = vec![0, 2, n, n, 6000, 4000, 6000, 4000];
+        w.extend([250, 250, 250]); // widths
+        w.extend([250, 250, 250]); // heights
+        w.extend([0, (-1089i16) as u16, 500]); // x
+        w.extend([0, 349, 0]); // y
+        w.push(0b010); // in focus
+        w.push(0b111); // selected
+        let b: Vec<u8> = w.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let f = super::canon_focus(&b, true).unwrap();
+        assert_eq!(f.mode.as_deref(), Some("Single point"));
+        assert_eq!(f.boxes.len(), 1);
+        let p = &f.boxes[0];
+        assert!(p.hit);
+        assert!(((p.x + p.w / 2.0) * 6000.0 - (3000.0 - 1089.0)).abs() < 0.5);
+        assert!(((p.y + p.h / 2.0) * 4000.0 - (2000.0 - 349.0)).abs() < 0.5);
+        // None in focus: the picked ones show, dimmed.
+        let mut none = b.clone();
+        let at = (8 + 4 * 3) * 2;
+        none[at] = 0;
+        let f = super::canon_focus(&none, true).unwrap();
+        assert_eq!(f.boxes.len(), 3);
+        assert!(f.boxes.iter().all(|b| !b.hit));
+    }
+
+    /// FLIGHTROOM_FOCUS=<a NEF or CR2> cargo test photolib::tests::focus_of_a_real_file -- --nocapture
+    #[test]
+    fn focus_of_a_real_file() {
+        let Ok(p) = std::env::var("FLIGHTROOM_FOCUS") else { return };
+        let src = super::FileSource::open(std::path::Path::new(&p)).unwrap();
+        println!("{:?}", super::read_photo_info(&src, &super::ext_of(&p)).focus);
+    }
+
     use super::*;
 
     const LR_SIDECAR: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0-c000">

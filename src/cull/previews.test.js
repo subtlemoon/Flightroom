@@ -49,3 +49,17 @@ describe('culling previews', () => {
     expect(again.closed).toBe(false);
   });
 });
+
+import { uprightBox } from './rotation.js';
+describe('focus boxes', () => {
+  it('turn with the photo', () => {
+    const b = { x: 0.5, y: 0.55, w: 0.16, h: 0.24 }; // IMG_9251's face, camera turned (orientation 8)
+    const u = uprightBox(b, 8);
+    expect(u.x + u.w / 2).toBeCloseTo(0.67, 5);
+    expect(u.y + u.h / 2).toBeCloseTo(0.42, 5);
+    const r = uprightBox(b, 6);
+    expect(r.x + r.w / 2).toBeCloseTo(0.33, 5);
+    expect(r.y + r.h / 2).toBeCloseTo(0.58, 5);
+    expect(uprightBox(b, 1)).toEqual(b);
+  });
+});

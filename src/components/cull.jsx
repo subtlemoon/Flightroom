@@ -7,12 +7,13 @@ import { loadAnalysis, measure, saveAnalysis, suggest, upright } from '../cull/a
 import { Cancelled, measurePool } from '../cull/measure-pool.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
 import { SUBJECT_GROUPS, bySubject, subjectCounts, subjectGroup, subjectName } from '../cull/subjects.js';
-import { cachedFolder, setWithSubfolders, startAt, useFolder, usePosition, useStripPick, withSubfolders } from '../cull/folder.js';
+import { cachedFolder, setWithSubfolders, startAt, startId, useFolder, usePosition, useStripPick, withSubfolders } from '../cull/folder.js';
 import { useDevelopedThumb } from '../develop/thumbs.js';
 import { useExported } from '../develop/exported.js';
 import { confirmAction, fileItems, openMenu, photoLabel, ratingMenu } from './menu.jsx';
 import { ORDERS, filesOf, inOrder, saveOrder, savedOrder } from '../cull/order.js';
 import { copyActions } from '../cull/copies.js';
+import { uprightBox } from '../cull/rotation.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey, zoomLevel } from '../cull/keys.js';
 
 // A photo in the culling view, as listed by the desktop side:
@@ -35,13 +36,14 @@ export function CullView({ store, onDevelop }) {
   const { state, actions } = store;
   const keys = ratingKeys(state.settings);
   const advance = !!state.settings.cullAdvance;
+  const showFocus = !!state.settings.cullFocus; // the camera's AF points on the photo (F)
   const zKey = zoomKey(state.settings);
   const zoomPct = zoomLevel(state.settings);
   const folder = state.cull?.folder;
 
   // Back from Develop: the folder as it was left, at once (open() reads it again quietly).
   const [seen] = useState(() => cachedFolder(folder));
-  const [currentId, setCurrentId] = useState(() => seen?.list.photos[state.cull?.positions?.[seen.list.folder] || 0]?.id ?? null);
+  const [currentId, setCurrentId] = useState(() => startId(seen, state.cull?.positions));
   const [filter, setFilter] = useState(seen?.filter || 'all'); // see inFilter
   const [subjectView, setSubjectView] = useState('all'); // see bySubject
   const [order, setOrder] = useState(savedOrder); // see ORDERS
@@ -400,6 +402,7 @@ export function CullView({ store, onDevelop }) {
         }
         return;
       }
+      if (normKey(e.key) === 'f' && !e.repeat) { e.preventDefault(); actions.setCullSettings({ cullFocus: !showFocus }); return; }
       if (e.key === 'Delete' && photo && !e.repeat) { e.preventDefault(); askDelete(pickedPhotos() || [photo]); return; }
       if (e.key.toLowerCase() === 'd' && onDevelop && photo) { e.preventDefault(); onDevelop(); return; }
       const moves = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
@@ -410,7 +413,7 @@ export function CullView({ store, onDevelop }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [photos, photo, index, keys, zKey, advance, filter, go, rate, ratePicked, picked, autoOpen, suggestions, auto, exporting]);
+  }, [photos, photo, index, keys, zKey, advance, filter, go, rate, ratePicked, picked, autoOpen, suggestions, auto, exporting, showFocus]);
 
   if (!bridge) {
     return <div className="view"><div className="hero-empty"><div className="hero-icon"><Icon name="photo" size={40} /></div><h2>Culling runs in the desktop app</h2><p className="muted">Open Flightroom on your PC to link a photo folder.</p></div></div>;
@@ -443,6 +446,7 @@ export function CullView({ store, onDevelop }) {
   // The less-used switches: the ⋯ button and a right-click on the bar.
   const barMenu = (e) => openMenu(e, [
     { label: 'Auto-advance after rating', checked: advance, onClick: () => actions.setCullSettings({ cullAdvance: !advance }) },
+    { label: 'Show focus points', hint: 'F', checked: showFocus, onClick: () => actions.setCullSettings({ cullFocus: !showFocus }) },
     { label: 'Include subfolders', checked: subs, onClick: () => { setWithSubfolders(!subs); setSubs(!subs); open(folder, true); } },
     '-',
     { heading: 'Sort by' },
@@ -484,18 +488,20 @@ export function CullView({ store, onDevelop }) {
           <Icon name="spark" size={14} />
           {autoRun ? `${autoRun.kind === 'apply' ? 'Rating' : 'Analyzing'} ${autoRun.done}/${autoRun.total}` : 'Auto-rate'}
         </button>
+        <button className={`icon-btn${showFocus ? ' on' : ''}`} title={`${showFocus ? 'Hide' : 'Show'} focus points (F)`} onClick={() => actions.setCullSettings({ cullFocus: !showFocus })} onMouseDown={(e) => e.preventDefault()}><Icon name="focus" size={16} /></button>
         <button className="icon-btn" title="More options" onClick={barMenu}><Icon name="more" size={16} /></button>
       </header>
 
       {photo ? (
         <>
           <Stage photo={photo} meta={curMeta} photos={photos} index={index} metaById={meta} zoom={zoom} setZoom={setZoom} scale={zoomPct / 100} onMenu={(e) => photoMenu(e, photo, index)}
-            subject={showSubject ? auto.measured[photo.id]?.subject?.box : null}>
+            subject={showSubject ? auto.measured[photo.id]?.subject?.box : null} focus={showFocus ? curMeta?.focus : null}>
             <div className="stage-top">
               <span className="stage-name">{photoLabel(photo)}{photo.raw && photo.jpeg && <span className="pill-mini">RAW+JPEG</span>}<ExportedTag id={photo.id} /></span>
               <ShotInfo meta={curMeta} />
               {subjectView !== 'all' && <span className="pill-mini">{subjectName(subjectGroup(auto.measured[photo.id]))}</span>}
               {zoom && <span className="pill-mini zoom">{zoomPct}%</span>}
+              {showFocus && curMeta && !curMeta.error && <span className="pill-mini" title="The camera's AF-area mode">{curMeta.focus ? curMeta.focus.mode || 'Focus point' : 'No focus point in this file'}</span>}
             </div>
             <div className="stage-bottom">
               {curSug && <Suggestion sug={curSug} rating={curRating} applied={auto.applied[photo.id]} mayRate={autoMayRate(photo)} onAccept={() => rate(photo, curSug.stars, { byAuto: true })}
@@ -767,7 +773,7 @@ const FULL_LINGER_MS = 8000;
 
 // The big photo. Shows the small preview instantly, swaps in the sharp one as soon
 // as it's decoded, and loads the full-resolution preview only when zoomed in.
-function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, scale, subject, children, onMenu }) {
+function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, scale, subject, focus, children, onMenu }) {
   const wrapRef = useRef();
   const canvasRef = useRef();
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -882,6 +888,7 @@ function Stage({ photo, meta, photos, index, metaById, zoom, setZoom, scale, sub
         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} />
       {!bmp && <div className="stage-loading">Loading preview…</div>}
       {subject && bmp && <SubjectBox box={subject} g={geometry(W, H, bmp, meta, view)} W={W} H={H} dpr={dpr} />}
+      {focus && bmp && <FocusBoxes focus={focus} orientation={meta?.orientation} g={geometry(W, H, bmp, meta, view)} W={W} H={H} dpr={dpr} />}
       {children}
     </div>
   );
@@ -892,6 +899,16 @@ function SubjectBox({ box, g, W, H, dpr }) {
   const x = (W / 2 + (box.x * g.ow - g.cx) * g.s) / dpr;
   const y = (H / 2 + (box.y * g.oh - g.cy) * g.s) / dpr;
   return <div className="subject-box" style={{ left: x, top: y, width: (box.w * g.ow * g.s) / dpr, height: (box.h * g.oh * g.s) / dpr }} />;
+}
+
+// The camera's AF points (photolib.rs read_focus, in the unrotated frame) on the upright photo.
+function FocusBoxes({ focus, orientation, g, W, H, dpr }) {
+  return focus.boxes.map((b, i) => {
+    const u = uprightBox(b, orientation);
+    const x = (W / 2 + (u.x * g.ow - g.cx) * g.s) / dpr;
+    const y = (H / 2 + (u.y * g.oh - g.cy) * g.s) / dpr;
+    return <div key={i} className={`focus-box${b.hit ? '' : ' picked'}`} style={{ left: x, top: y, width: (u.w * g.ow * g.s) / dpr, height: (u.h * g.oh * g.s) / dpr }} />;
+  });
 }
 
 // Strip of thumbnails along the bottom. Only the cells on screen exist, so a

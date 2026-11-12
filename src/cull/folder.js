@@ -33,8 +33,23 @@ export function latestOnly() {
   return { next: () => check(++n), current: () => check(n) };
 }
 
-/** Where to start in a folder just read: where you left it. */
-export const startAt = (res, positions) => Math.min(positions?.[res.folder] || 0, Math.max(0, res.photos.length - 1));
+// A photo the Library asked to open (Culling or Develop then starts on it, once).
+let wanted = null;
+export const openAt = (id) => { wanted = id; };
+const takeWanted = (photos) => {
+  const i = wanted ? photos.findIndex((p) => p.id === wanted) : -1;
+  if (i >= 0) wanted = null;
+  return i;
+};
+
+/** Where to start in a folder just read: the photo the Library opened, else where you left it. */
+export function startAt(res, positions) {
+  const w = takeWanted(res.photos);
+  return w >= 0 ? w : Math.min(positions?.[res.folder] || 0, Math.max(0, res.photos.length - 1));
+}
+
+/** The photo to show first from the folder as last seen (`seen`, from cachedFolder). */
+export const startId = (seen, positions) => (seen ? seen.list.photos[startAt(seen.list, positions)]?.id ?? null : null);
 
 /**
  * The open folder as Culling and Develop keep it: its photo list and what has

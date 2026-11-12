@@ -12,7 +12,7 @@ export const COPY_GROUPS = [
   ['tone', 'Basic Tone', ['exposure', 'contrast', 'highlights', 'shadows', 'whites', 'blacks'], true],
   ['tonemap', 'Tone Mapping', ['toneMap', ...sliders('sigmoid'), ...sliders('agx'), ...sliders('filmic')], true],
   ['presence', 'Presence', ['texture', 'clarity', 'dehaze', 'vibrance', 'saturation'], true],
-  ['profile', 'Profile and Treatment', ['profile', 'bw'], true],
+  ['profile', 'Profile, Look and Treatment', ['profile', 'bw', 'look', 'lookAmount'], true],
   ['curve', 'Tone Curve', keysOf('curve'), true],
   ['color', 'Color Mixer', keysOf('color'), true],
   ['grading', 'Color Grading', keysOf('grading'), true],

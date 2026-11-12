@@ -4,9 +4,11 @@
 
 pub mod adobe;
 pub mod ai;
+pub mod catalog;
 pub mod develop;
 pub mod display;
 pub mod lens;
+pub mod looks;
 pub mod migrate;
 pub mod photolib;
 pub mod photos;
@@ -160,6 +162,7 @@ pub fn run() {
             app.manage(photos::Photos::new(thumbs));
             app.manage(updater::Updater::default());
             app.manage(develop::Develop::default());
+            app.manage(catalog::Catalog::default());
             app.manage(ai::Ai::new(ai::models_dir(&handle)));
             if updater::guard::update_in_progress(&handle) {
                 updater::guard::reopen_when_installed();
@@ -212,6 +215,15 @@ pub fn run() {
             ai::ai_masks,
             ai::vision_url,
             display::display_profile,
+            looks::looks_list,
+            catalog::catalog_load,
+            catalog::catalog_index,
+            catalog::catalog_remove_folder,
+            catalog::catalog_keywords,
+            looks::looks_read,
+            looks::looks_save,
+            looks::looks_remove,
+            looks::looks_folder,
         ])
         .build(tauri::generate_context!())
         .expect("Flightroom failed to start");
