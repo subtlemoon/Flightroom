@@ -133,11 +133,11 @@ export const SECTIONS = [
     // Lightroom 16's Glow. Kept in Flightroom's own part of the sidecar (`own`):
     // Adobe hasn't published how it stores Glow, so a guess could clash with it.
     { title: 'Glow', sliders: [
-      S('glow', 'Glow', 'GlowAmount', 0, 100, 1, 0, { own: true }),
+      S('glow', 'Amount', 'GlowAmount', 0, 100, 1, 0, { own: true }),
       S('glowRange', 'Range', 'GlowRange', 0, 100, 1, 50, { own: true }),
       S('glowSpread', 'Spread', 'GlowSpread', 0, 100, 1, 50, { own: true }),
       S('glowWarmth', 'Warmth', 'GlowWarmth', -100, 100, 1, 0, { own: true, gradient: 'temp' }),
-      S('glowDirection', 'Direction', 'GlowDirection', -90, 90, 1, 0, { own: true }),
+      S('glowDirection', 'Direction', 'GlowDirection', -180, 180, 1, 0, { own: true }),
       S('glowSoftness', 'Softness', 'GlowSoftness', 0, 100, 1, 50, { own: true }),
     ] },
   ] },
@@ -213,7 +213,7 @@ export function defaults(asShot) {
   return { ...d };
 }
 function makeDefaults(asShot) {
-  const s = { wb: 'As Shot', profile: startProfile, toneMap: 'none', bw: false, removeCA: false, lensProfile: false, vignetteStyle: 1, glowStyle: 1, constrainCrop: false, crop: null, masks: [], layers: [], aiDenoise: 0 };
+  const s = { wb: 'As Shot', profile: startProfile, toneMap: 'none', bw: false, removeCA: false, lensProfile: false, vignetteStyle: 1, glowStyle: 2, constrainCrop: false, crop: null, masks: [], layers: [], aiDenoise: 0 };
   for (const [k] of CURVE_CHANNELS) s[k] = LINEAR_CURVE;
   for (const sl of SLIDERS) s[sl.key] = sl.def;
   s.temp = asShot.temp;
@@ -355,7 +355,7 @@ export function toXmp(s) {
       // Adobe Color is marked too, so it comes back as Adobe Color whatever new photos start with.
       Profile: s.profile === 'agx' || s.profile === 'adobe' ? s.profile : '',
       ToneMap: s.toneMap && s.toneMap !== 'none' ? s.toneMap : '',
-      GlowStyle: s.glow ? String(s.glowStyle || 1) : '',
+      GlowStyle: s.glow ? String(s.glowStyle || 2) : '',
       ...ownTm,
     },
   };

@@ -65,33 +65,39 @@ void main() {
   o = sum / wsum;
 }`;
 
-// Glow (Effects), as in Lightroom 16: light spilling out of the bright parts
-// of the photo. Built small, in photo coordinates, once per change of its
-// settings or the exposure (renderer.js updateGlow): the light above the
-// Range threshold is taken from the photo (GLOW_SRC), halved again and again
-// (GLOW_DOWN), each size blurred (BLUR, along Direction for Motion and
-// Streak), and the sizes mixed by Spread and coloured by Warmth (GLOW_MIX).
-// FINAL adds the result where the photo is still scene light.
+// Glow (Effects), as in Lightroom 16 (glow.js has the fitted models). Built
+// small, in photo coordinates, once per change of its settings or the
+// exposure (renderer.js updateGlow): GLOW_SRC takes the light that glows,
+// GLOW_DOWN halves it down to the size the blur needs, BLUR (or GLOW_LINE,
+// for Motion and Streak) spreads it, GLOW_MIX adds the sizes and colours them.
+// FINAL then adds it to the photo where it is still scene light.
 export const GLOW_SRC = `${COMMON}
 uniform sampler2D uSrc;
 uniform vec2 uOutSize;
 uniform float uGlowGain;  // the exposure, as a factor
-uniform vec2 uGlowKnee;   // threshold (stops over middle grey) and its softness
-uniform float uGlowSat;   // the glow's colour: 0 grey, 1 the photo's, more for richer
+uniform float uGlowMode;  // 0: weighted light (Bloom, Motion, Streak), 1: above a threshold (Halation), 2: the photo (Diffusion)
+uniform vec4 uGlowW;      // 0: e, n, strength; 1: threshold, steepness; w: box width (texels)
 out vec4 o;
 void main() {
   vec2 cell = 1.0 / uOutSize;
-  vec2 base = (gl_FragCoord.xy - 0.5) * cell;
+  // Each pixel averages a box uGlowW.w texels wide: the slight pre-blur.
+  float foot = uGlowW.w;
   vec3 sum = vec3(0.0);
   for (int j = 0; j < 6; j++) for (int i = 0; i < 6; i++) {
-    vec2 uv = base + (vec2(float(i), float(j)) + 0.5) * cell / 6.0;
-    vec3 lin = min(max(toLinear(texture(uSrc, uv).rgb), vec3(0.0)) * uGlowGain, vec3(16.0));
-    float y = max(dot(lin, W709), 1e-6);
-    sum += lin * smoothstep(uGlowKnee.x - uGlowKnee.y, uGlowKnee.x + uGlowKnee.y, log2(y / 0.18));
+    vec2 uv = (gl_FragCoord.xy + ((vec2(float(i), float(j)) + 0.5) / 6.0 - 0.5) * foot) * cell;
+    sum += clamp(toLinear(texture(uSrc, uv).rgb) * uGlowGain, vec3(0.0), vec3(4.0));
   }
   vec3 c = sum / 36.0;
-  float y = dot(c, W709);
-  o = vec4(max(vec3(y) + (c - y) * uGlowSat, vec3(0.0)), 1.0);
+  if (uGlowMode < 0.5) {
+    // Weighted by how near white it is: K (eY / (1 + e - Y))^n.
+    float y = clamp(dot(c, W709), 0.0, 1.0);
+    c *= uGlowW.z * pow(max(uGlowW.x * y / (1.0 + uGlowW.x - y), 0.0), uGlowW.y);
+  } else if (uGlowMode < 1.5) {
+    // Halation: only areas (not thin lines or specks) past the threshold.
+    float y = clamp(dot(c, W709), 0.0, 1.0);
+    c = vec3(pow(clamp((y - uGlowW.x) / (1.0 - uGlowW.x), 0.0, 1.0), uGlowW.y));
+  }
+  o = vec4(c, 1.0);
 }`;
 
 export const GLOW_DOWN = `#version 300 es
@@ -106,21 +112,41 @@ void main() {
     + texture(uTex, uv + vec2(-px.x, px.y)) + texture(uTex, uv + vec2(px.x, px.y)));
 }`;
 
+// Motion and Streak: light smeared along a direction, fading exponentially;
+// Motion only trails one way.
+export const GLOW_LINE = `#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+uniform vec2 uStep;     // one texel along the direction
+uniform float uLen;     // how far it reaches (texels, the exponential's length)
+uniform float uOneSided;
+out vec4 o;
+void main() {
+  vec2 uv = gl_FragCoord.xy / vec2(textureSize(uTex, 0));
+  float reach = uLen * 4.0;
+  float stepT = max(1.0, reach / 96.0);
+  vec4 sum = vec4(0.0); float wsum = 0.0;
+  for (int i = -96; i <= 96; i++) {
+    float d = float(i) * stepT;
+    if (abs(d) > reach) continue;
+    if (uOneSided > 0.5 && d < 0.0) continue;
+    float w = exp(-abs(d) / max(uLen, 1e-3));
+    sum += texture(uTex, uv - uStep * d) * w;
+    wsum += w;
+  }
+  o = sum / max(wsum, 1e-6);
+}`;
+
 export const GLOW_MIX = `#version 300 es
 precision highp float;
-uniform sampler2D uG0, uG1, uG2, uG3, uG4;
-uniform vec4 uGlowW;    // how much of each size (finest first; the fifth is uGlowW4)
-uniform float uGlowW4;
-uniform float uGlowHalo; // Halation: the finest size taken back out, so the glow rings the light
+uniform sampler2D uG0, uG1;
+uniform vec2 uGlowW;    // how much of each
 uniform vec3 uGlowTint;
 uniform vec2 uOutSize;
 out vec4 o;
 void main() {
   vec2 uv = gl_FragCoord.xy / uOutSize;
-  vec3 f = texture(uG0, uv).rgb;
-  vec3 g = uGlowW.x * f + uGlowW.y * texture(uG1, uv).rgb + uGlowW.z * texture(uG2, uv).rgb
-    + uGlowW.w * texture(uG3, uv).rgb + uGlowW4 * texture(uG4, uv).rgb;
-  g = max(g - uGlowHalo * f, vec3(0.0));
+  vec3 g = uGlowW.x * texture(uG0, uv).rgb + uGlowW.y * texture(uG1, uv).rgb;
   o = vec4(g * uGlowTint, 1.0);
 }`;
 
@@ -131,7 +157,8 @@ uniform vec4 uHiRect;     // where uHi sits, in photo coordinates (0-1); w = 0 w
 uniform vec4 uHiSafe;     // the part of uHiRect that is safe to use
 uniform sampler2D uGuide;
 uniform sampler2D uGlow;   // the glow (GLOW_MIX), in photo coordinates
-uniform vec4 uGlowMix;    // amount, how much it stands in for the photo, how much it adds, on
+uniform vec4 uGlowMix;    // amount, mode (GLOW_SRC's), -, on
+uniform vec4 uGlowF, uGlowF2; // per mode (renderer.js updateGlow, glow.js glowPlan final / final2)
 uniform sampler2D uCurve;
 uniform sampler2D uHue;
 uniform mat3 uOut2Ori;    // output pixel -> oriented pixel of the transformed photo
@@ -684,7 +711,22 @@ void main() {
   float glowAmt = clamp(uGlowMix.x + LG, 0.0, 1.0);
   if (uGlowMix.w > 0.5 && glowAmt > 0.0) {
     vec3 gl = texture(uGlow, p).rgb;
-    lin = mix(lin, gl, glowAmt * uGlowMix.y) + gl * (glowAmt * uGlowMix.z);
+    if (uGlowMix.y < 0.5) {
+      // Bloom, Motion, Streak: added, with faint glow faded out (dim, small lights don't glow).
+      gl *= glowAmt;
+      float yg = max(dot(gl, W709), 0.0);
+      lin += gl * (1.0 - exp(-pow(yg / uGlowF.x, uGlowF.y)));
+    } else if (uGlowMix.y < 1.5) {
+      // Halation: red where weak, through orange to white where strong.
+      float e = gl.r * glowAmt * uGlowF.x;
+      vec3 spill = vec3(0.0, uGlowF2.x, uGlowF2.y) * max(e - uGlowF2.z, 0.0);
+      lin += vec3(e, uGlowF.y * e, uGlowF.z * e) + spill;
+    } else {
+      // Diffusion: inside bright areas only, toward the blurred photo and lifted.
+      vec3 lc = clamp(lin, 0.0, 1.0);
+      float w = smoothstep(uGlowF.z, uGlowF.w, dot(lc, W709));
+      lin += glowAmt * w * (uGlowF.x * (gl - lin) + uGlowF.y * lc * (1.0 - lc));
+    }
   }
 
   vec3 mapped;

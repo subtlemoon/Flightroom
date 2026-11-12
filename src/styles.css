@@ -506,8 +506,6 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .dev-group-title { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 600; color: var(--text); margin: 4px 0 2px; }
 .dev-group-title .btn { font-weight: 400; color: var(--muted); }
 .dev-group-title .btn:hover { color: var(--text); }
-.dev-glow-toggle { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
-.dev-glow-toggle:hover { color: var(--text); opacity: 0.85; }
 .dev-wb { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 2px; }
 .dev-wb .dd { height: 26px; min-width: 150px; font-size: 12px; border-radius: var(--r-sm); }
 .dev-line { display: flex; align-items: center; gap: 8px; justify-content: space-between; }

@@ -32,7 +32,7 @@ import { lightGraphics } from '../develop/graphics.js';
 import { engineKind, watchResets } from '../develop/gpu/engine.js';
 import { ExportModal } from './export.jsx';
 import { activeToneMap } from '../develop/tonemap.js';
-import { DIRECTIONAL, GLOW_STYLES } from '../develop/glow.js';
+import { DEFAULT_STYLE, GLOW_STYLES } from '../develop/glow.js';
 import { useRetouch } from './retouch.jsx';
 import { screenColorOn, screenProfile } from '../develop/icc.js';
 import { RetouchStage } from './rtstage.jsx';
@@ -1736,28 +1736,23 @@ function Panel({ s, info, geo, asShot, update, meta, rating, keys, onRate, onRes
 
 const SECTION = Object.fromEntries(SECTIONS.map((sec) => [sec.id, sec]));
 
-// A section's plain sliders, in their groups. `extra` puts something beside a group's title.
-// Glow, as Lightroom 16 lays it out: the amount, and an arrow for the rest.
+// Glow, as Lightroom 16 lays it out.
 function GlowGroup({ s, set, update }) {
-  const [open, setOpen] = useStored('flightroom-glow-open', { open: false });
-  const sl = SECTION.effects.groups.find((g) => g.title === 'Glow').sliders;
-  const show = (k) => k === 'glow' || (open.open && (!['glowDirection', 'glowSoftness'].includes(k) || DIRECTIONAL.includes(s.glowStyle)));
+  // Amount, the Style menu, then every slider, always shown.
+  const [amount, ...rest] = SECTION.effects.groups.find((g) => g.title === 'Glow').sliders;
   return (
     <div className="dev-group">
-      <div className="dev-group-title dev-line">
-        <button className="dev-glow-toggle" title={open.open ? 'Hide Glow options' : 'Show Glow options: style, range, spread, warmth'} onClick={() => setOpen({ open: !open.open })}>
-          <Icon name={open.open ? 'chevD' : 'chevR'} size={11} />Glow
-        </button>
+      <div className="dev-group-title">Glow</div>
+      <Slider sl={amount} value={s[amount.key]} def={amount.def} onSet={set} />
+      <div className="dev-line dev-wb"><span className="muted">Style</span>
+        <Dropdown value={s.glowStyle || DEFAULT_STYLE} options={GLOW_STYLES.map(([value, label]) => ({ value, label }))} onChange={(v) => update({ glowStyle: v })} />
       </div>
-      {open.open && (
-        <div className="dev-line dev-wb"><span className="muted">Style</span>
-          <Dropdown value={s.glowStyle || 1} options={GLOW_STYLES.map(([value, label]) => ({ value, label }))} onChange={(v) => update({ glowStyle: v })} />
-        </div>
-      )}
-      {sl.filter((x) => show(x.key)).map((x) => <Slider key={x.key} sl={x} value={s[x.key]} def={x.def} onSet={set} />)}
+      {rest.map((x) => <Slider key={x.key} sl={x} value={s[x.key]} def={x.def} onSet={set} />)}
     </div>
   );
 }
+
+// A section's plain sliders, in their groups. `extra` puts something beside a group's title.
 
 function Groups({ sec, s, asShot, set, only, hide = [], untitled = [], extra = {}, before = {} }) {
   const groups = only ? sec.groups.filter(only) : sec.groups;
