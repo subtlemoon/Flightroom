@@ -519,6 +519,7 @@ impl Develop {
             }
         }
         let d = Arc::new(read_denoised(&path, raw.w, raw.h)?);
+        touch(&path);
         *cur = Some((name, raw.path.clone(), d.clone()));
         drop(cur);
         // It counts against the RAWs' budget: neighbours may have to go.
@@ -650,6 +651,8 @@ pub async fn develop_open(app: AppHandle, id: String, sidecar: Option<String>) -
     tauri::async_runtime::spawn_blocking(move || {
         let p = app.state::<Photos>().allowed(&id).ok_or("This photo's folder isn't open")?;
         let raw = app.state::<Develop>().raw(&p, true)?;
+        // Opening a denoised photo counts as using its result (the filmstrip's peeks don't).
+        touch(&denoise_file(&app, &raw));
         opened(&app, &p, &raw, sidecar)
     })
     .await
@@ -759,7 +762,40 @@ pub fn develop_close(app: AppHandle) {
 
 // --- AI Denoise ------------------------------------------------------------------
 
-const DENOISE_KEPT: usize = 12;
+// Results kept on disk: the most recently used first, up to this many and this
+// much space (about 150 MB for a 24 MP photo, 270 MB at 45 MP). It was the 12
+// most recently *made* before 3.4.2, so denoising a shoot of more than 12
+// photos quietly lost the first ones: going back, Denoise was off again.
+const DENOISE_KEPT: usize = 40;
+const DENOISE_BUDGET: u64 = 6 << 30;
+
+/// Marks a denoise result as just used (its modified time), so it's the last to go.
+fn touch(path: &Path) {
+    if let Ok(f) = std::fs::File::options().write(true).open(path) {
+        let _ = f.set_modified(std::time::SystemTime::now());
+    }
+}
+
+/// Lets go of the least recently used results beyond DENOISE_KEPT / DENOISE_BUDGET (the newest one always stays).
+fn prune_denoised(dir: &Path) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let mut files: Vec<_> = rd
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "frdn"))
+        .filter_map(|e| {
+            let m = e.metadata().ok()?;
+            Some((m.modified().ok()?, m.len(), e.path()))
+        })
+        .collect();
+    files.sort_by_key(|f| std::cmp::Reverse(f.0));
+    let mut used = 0u64;
+    for (i, (_, len, f)) in files.into_iter().enumerate() {
+        used += len;
+        if i > 0 && (i >= DENOISE_KEPT || used > DENOISE_BUDGET) {
+            let _ = std::fs::remove_file(f);
+        }
+    }
+}
 
 /// Where a photo's AI Denoise result is kept (about 6 bytes a pixel, so only the last few photos).
 fn denoise_file(app: &AppHandle, raw: &Raw) -> PathBuf {
@@ -804,14 +840,7 @@ pub async fn develop_denoise(app: AppHandle, id: String) -> Result<bool, String>
         *dev.denoised.lock().unwrap() = Some((file.to_string_lossy().to_string(), raw.path.clone(), Arc::new(out)));
         dev.overviews.lock().unwrap().clear();
         dev.trim_raws();
-        // Only the newest few results stay on disk.
-        if let Ok(rd) = std::fs::read_dir(dir) {
-            let mut files: Vec<_> = rd.flatten().filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path()))).collect();
-            files.sort_by_key(|f| std::cmp::Reverse(f.0));
-            for (_, f) in files.into_iter().skip(DENOISE_KEPT) {
-                let _ = std::fs::remove_file(f);
-            }
-        }
+        prune_denoised(dir);
         // The model takes a lot of memory; it loads again next time.
         ai.release();
         Ok(true)
@@ -1133,6 +1162,31 @@ mod tests {
             "adobe": crate::adobe::for_camera(&crate::adobe::camera_names(&raw.make, &raw.model, &raw.exif_model), Some(text.as_str()), &std::env::temp_dir()),
         });
         std::fs::write(p.with_extension("json"), info.to_string()).unwrap();
+    }
+
+    #[test]
+    fn denoise_results_go_least_recently_used_first() {
+        let dir = std::env::temp_dir().join(format!("fr-dn-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let t0 = std::time::SystemTime::now() - std::time::Duration::from_secs(100_000);
+        let n = DENOISE_KEPT + 5;
+        for i in 0..n {
+            let f = dir.join(format!("{i}.frdn"));
+            std::fs::write(&f, b"x").unwrap();
+            std::fs::File::options().write(true).open(&f).unwrap().set_modified(t0 + std::time::Duration::from_secs(i as u64)).unwrap();
+        }
+        // The oldest made, opened again just now: it stays.
+        touch(&dir.join("0.frdn"));
+        std::fs::write(dir.join("other.txt"), b"x").unwrap();
+        prune_denoised(&dir);
+        let left = |i: usize| dir.join(format!("{i}.frdn")).exists();
+        assert!(left(0));
+        assert!(left(n - 1));
+        assert_eq!((0..n).filter(|&i| left(i)).count(), DENOISE_KEPT);
+        assert!(!left(1) && !left(5) && left(6));
+        assert!(dir.join("other.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

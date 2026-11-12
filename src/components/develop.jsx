@@ -25,9 +25,9 @@ import {
   COLORS, COLOR_HUES, CURVE_PRESETS, PROFILES, SECTIONS, SLIDER, SLIDERS, TONE_MAPPERS, VIGNETTE_STYLES, WB_PRESETS,
   curveName, defaults, fromXmp, isEdited, rememberProfile, resetSection, sectionEdited, toXmp,
 } from '../develop/params.js';
-import { asShotTempTint, inv3, neutralToXy, xyToTempTint } from '../develop/color.js';
+import { asShotTempTint, inv3 } from '../develop/color.js';
 import { adobeRendering } from '../develop/adobe.js';
-import { Geometry, Renderer, ap, cameraTransform, constrainedCrop, fitScale, lookFor, mat, mm, outToFrame, parseFrame, sourceMap } from '../develop/renderer.js';
+import { Geometry, Renderer, ap, cameraTransform, tempTintFor, constrainedCrop, fitScale, lookFor, mat, mm, outToFrame, parseFrame, sourceMap } from '../develop/renderer.js';
 import { lightGraphics } from '../develop/graphics.js';
 import { engineKind, watchResets } from '../develop/gpu/engine.js';
 import { ExportModal } from './export.jsx';
@@ -239,7 +239,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const wbFrom = (camRgb, name) => {
     const info = opened?.info;
     if (!info || !camRgb || camRgb.some((v) => !(v > 0))) { setToast('Pick a spot that isn\'t pure black or clipped'); return; }
-    const t = xyToTempTint(neutralToXy(info.matrices, camRgb));
+    const t = tempTintFor(info, s?.profile, camRgb);
     const temp = Math.min(50000, Math.max(2000, Math.round(t.temp / 50) * 50)), tint = Math.min(150, Math.max(-150, Math.round(t.tint)));
     update({ wb: name, temp, tint });
   };
