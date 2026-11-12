@@ -82,14 +82,15 @@ export function Vectorscope() {
       const img = new ImageData(n, n), lmax = Math.log1p(max);
       for (let k = 0; k < n * n; k++) {
         const m = count[k];
-        if (!m) continue;
-        const t = Math.log1p(m) / lmax, lift = 0.3 + 0.45 * t;
+        if (m < 0.05) continue;
+        const t = Math.max(0, Math.log1p(m) / lmax), lift = 0.3 + 0.45 * t;
         for (let j = 0; j < 3; j++) img.data[k * 4 + j] = Math.round(((col[k * 3 + j] / m) * (1 - lift) + lift) * 255);
-        img.data[k * 4 + 3] = Math.round((0.4 + 0.6 * t) * 255);
+        img.data[k * 4 + 3] = Math.round(Math.min(1, 0.25 + 0.75 * t + m * 0.5) * 255);
       }
       const off = new OffscreenCanvas(n, n);
       off.getContext('2d').putImageData(img, 0, 0);
-      ctx.imageSmoothingEnabled = false;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(off, cx - R, cy - R, 2 * R, 2 * R);
     }
 

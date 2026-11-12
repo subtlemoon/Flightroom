@@ -1797,7 +1797,7 @@ function smoothBins(bins) {
 }
 
 // Lightroom's histogram colours, measured from its panel.
-const HIST_FILLS = [[0, 'rgba(223,44,44,0.76)'], [2, 'rgba(14,99,203,0.76)'], [1, 'rgba(53,158,77,0.76)']];
+const HIST_FILLS = [[0, 'rgba(236,40,40,0.82)'], [2, 'rgba(10,100,225,0.82)'], [1, 'rgba(46,172,74,0.82)']];
 const HIST_GREY = 'rgb(194,194,194)';
 
 let lastHistogram = null;

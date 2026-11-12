@@ -43,26 +43,29 @@ let LIN = null;
  * scope's square (-1..1 both ways, +y up). Each cell keeps a count and the sum
  * of its pixels' sRGB colours (what the dots are drawn in).
  */
-export function scopeGrid(px, spaceId = 'srgb', n = 112) {
+export function scopeGrid(px, spaceId = 'srgb', n = 220) {
   const sp = SCOPE_SPACES.find((x) => x.id === spaceId) || SCOPE_SPACES[0];
   if (!LIN) { LIN = new Float32Array(256); for (let i = 0; i < 256; i++) LIN[i] = decodeS(i / 255); }
   const enc = encoder(sp.trc), toS = SCOPE_SPACES[0].m, encS = encoder('srgb'), m = sp.m;
-  const count = new Uint32Array(n * n), col = new Float32Array(n * n * 3);
+  const count = new Float32Array(n * n), col = new Float32Array(n * n * 3);
   const e = (t, v) => t[Math.round((v <= 0 ? 0 : v >= 1 ? 1 : v) * ENC)];
-  let max = 0;
   for (let i = 0; i < px.length; i += 4) {
     const r = LIN[px[i]], g = LIN[px[i + 1]], b = LIN[px[i + 2]];
     const R = e(enc, m[0] * r + m[1] * g + m[2] * b), G = e(enc, m[3] * r + m[4] * g + m[5] * b), B = e(enc, m[6] * r + m[7] * g + m[8] * b);
     const [x, y] = chroma(R, G, B);
-    const cx = Math.floor((x * 0.5 + 0.5) * n), cy = Math.floor((0.5 - y * 0.5) * n);
-    if (cx < 0 || cy < 0 || cx >= n || cy >= n) continue;
-    const k = cy * n + cx;
-    const c = ++count[k];
-    if (c > max) max = c;
-    col[k * 3] += e(encS, toS[0] * r + toS[1] * g + toS[2] * b);
-    col[k * 3 + 1] += e(encS, toS[3] * r + toS[4] * g + toS[5] * b);
-    col[k * 3 + 2] += e(encS, toS[6] * r + toS[7] * g + toS[8] * b);
+    // Spread over the four nearest cells (bilinear), so the scope is smooth rather than blocky.
+    const fx = (x * 0.5 + 0.5) * n - 0.5, fy = (0.5 - y * 0.5) * n - 0.5;
+    const x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
+    if (x0 < 0 || y0 < 0 || x0 + 1 >= n || y0 + 1 >= n) continue;
+    const sr = e(encS, toS[0] * r + toS[1] * g + toS[2] * b), sg = e(encS, toS[3] * r + toS[4] * g + toS[5] * b), sb = e(encS, toS[6] * r + toS[7] * g + toS[8] * b);
+    for (let q = 0; q < 4; q++) {
+      const cx = x0 + (q & 1), cy = y0 + (q >> 1), wgt = (q & 1 ? tx : 1 - tx) * (q >> 1 ? ty : 1 - ty);
+      const k = cy * n + cx;
+      count[k] += wgt; col[k * 3] += sr * wgt; col[k * 3 + 1] += sg * wgt; col[k * 3 + 2] += sb * wgt;
+    }
   }
+  let max = 0;
+  for (let k = 0; k < n * n; k++) if (count[k] > max) max = count[k];
   return { n, count, col, max };
 }
 
