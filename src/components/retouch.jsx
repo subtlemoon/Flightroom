@@ -569,12 +569,17 @@ export function useRetouch(ctx) {
   const filterItems = (menu) => Object.values(FILTER_DEF).filter((f) => f.menu === menu).map((f) => ({ label: f.label, run: () => applyFilter(f.type) }));
   const M = [
     { label: 'File', items: [
+      ...(ctx.newDoc ? [
+        { label: 'New…', key: 'Ctrl+N', run: ctx.newDoc },
+        { label: 'Open…', key: 'Ctrl+O', run: ctx.openDoc },
+        null,
+      ] : []),
       { label: 'Place…', key: 'Shift+Ctrl+P', run: () => placeFile.current?.click() },
       null,
       { label: 'Export…', key: 'Alt+Shift+Ctrl+W', run: ctx.exportNow },
       { label: 'Revert', key: 'F12', run: ctx.revert },
       null,
-      { label: 'Close (back to Develop)', key: 'Ctrl+W', run: () => onMode('develop') },
+      { label: 'Develop this document', key: 'Ctrl+W', run: () => onMode('develop') },
     ] },
     { label: 'Edit', items: [
       { label: 'Undo', key: 'Ctrl+Z', run: () => ctx.undo(false) },
@@ -662,10 +667,10 @@ export function useRetouch(ctx) {
       { label: 'New Adjustment Layer', items: ADJ_ITEMS.map((t) => (t ? { label: `${ADJ_LABEL[t]}…`, run: () => acts.addAdjustment(t, selection) } : null)) },
       null,
       { label: 'Layer Mask', items: [
-        { label: 'Reveal All', disabled: noLayer, run: () => acts.addMask(cur.id, null, false) },
-        { label: 'Hide All', disabled: noLayer, run: () => acts.addMask(cur.id, null, true) },
-        { label: 'Reveal Selection', disabled: noLayer || !has.sel, run: () => acts.addMask(cur.id, selection, false) },
-        { label: 'Hide Selection', disabled: noLayer || !has.sel, run: () => acts.addMask(cur.id, selection, true) },
+        { label: 'Reveal All', disabled: !has.layer, run: () => acts.addMask(cur.id, null, false) },
+        { label: 'Hide All', disabled: !has.layer, run: () => acts.addMask(cur.id, null, true) },
+        { label: 'Reveal Selection', disabled: !has.layer || !has.sel, run: () => acts.addMask(cur.id, selection, false) },
+        { label: 'Hide Selection', disabled: !has.layer || !has.sel, run: () => acts.addMask(cur.id, selection, true) },
         null,
         { label: 'Delete', disabled: !has.mask, run: () => { acts.deleteMask(cur.id); setEditMask(false); } },
         { label: cur?.mask?.off ? 'Enable' : 'Disable', disabled: !has.mask, run: () => acts.change(cur.id, { mask: { ...cur.mask, off: !cur.mask.off } }, 'Mask') },

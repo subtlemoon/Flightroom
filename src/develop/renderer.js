@@ -787,7 +787,7 @@ export class Renderer {
    * Renders into `target` (null = the canvas). `out2frame` maps output pixels
    * to the crop frame; geo/frame say where that frame sits in the photo.
    */
-  render(info, s, geo, frame, out2frame, { target = null, showClip = false, maskView = null, live = null } = {}) {
+  render(info, s, geo, frame, out2frame, { target = null, showClip = false, maskView = null, live = null, drawList = null } = {}) {
     if (!this.src) return;
     if (!target && this.display) {
       this.renderScreen(info, s, geo, frame, out2frame, { showClip, maskView, live });
@@ -802,10 +802,12 @@ export class Renderer {
     this.measure(s);
     const out2ori = mm(geo.frameToOriented(frame), out2frame);
     // Retouch layers on top (compose.js); `live` is a stroke still being painted.
-    const layers = renderLayers(s.layers || [], live?.layerId);
+    // drawList: layers to draw instead (saving a Retouch document: hidden ones too, drawn but not shown).
+    const layers = drawList || renderLayers(s.layers || [], live?.layerId);
     setLayerDoc(info?.file);
     if (!layers.length) { this.drawPhoto(info, s, geo, frame, out2frame, out2ori, target, showClip, maskView, null); return; }
     this.composer ||= new Composer(this);
+    this.composer.capture = this.capture || null;
     this.composer.render((t, extra) => (extra
       ? this.drawPhoto(info, s, geo, frame, out2frame, mm(mat(1, 0, extra.shift[0], 0, 1, extra.shift[1]), extra.out2ori || out2ori), t, false, null, extra.op && this.opHi?.get(extra.op.id))
       : this.drawPhoto(info, s, geo, frame, out2frame, out2ori, t, showClip, maskView, null)), layers, geo, out2ori, target, live,
@@ -1129,9 +1131,9 @@ export class Renderer {
   }
 
   /** Renders a w x h tile and returns its 8-bit pixels (bottom row first): a promise on WebGPU. */
-  renderTile(info, s, geo, frame, out2frame, w, h) {
+  renderTile(info, s, geo, frame, out2frame, w, h, drawList = null) {
     const t = this.target(w, h, 'rgba8');
-    this.render(info, s, geo, frame, out2frame, { target: t });
+    this.render(info, s, geo, frame, out2frame, { target: t, drawList });
     const px = this.readAll(t, false);
     if (px instanceof Promise) return px.finally(() => this.free(t));
     this.free(t);

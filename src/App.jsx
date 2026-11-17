@@ -47,8 +47,12 @@ export default function App() {
   else if (view.name === 'settings') main = <SettingsView store={store} />;
   else if (view.name === 'library') main = <LibraryView store={store} onCull={() => setView({ name: 'cull' })} onDevelop={() => setView({ name: 'develop' })} />;
   else if (view.name === 'cull') main = <CullView store={store} onDevelop={() => setView({ name: 'develop' })} />;
-  // Develop and Retouch are one view in two modes, so switching keeps the photo loaded.
-  else if (view.name === 'develop') main = <DevelopView store={store} mode={view.mode} onMode={(mode) => setView({ name: 'develop', mode })} onCull={() => setView({ name: 'cull' })} />;
+  // Develop and Retouch are one view in two modes. Retouch has its own documents
+  // (space 'retouch'); Develop and Retouch switch over the same photo within a space.
+  else if (view.name === 'develop') {
+    main = <DevelopView key={view.space || 'library'} store={store} mode={view.mode} space={view.space}
+      onMode={(mode, space = view.space) => setView({ name: 'develop', mode, space })} onCull={() => setView({ name: 'cull' })} />;
+  }
   else if (view.name === 'news') main = <NewsView store={store} onOpenGear={openGear} />;
   else if (group && preset) main = <PresetView key={preset.id} group={group} preset={preset} store={store} onOpenGear={openGear} onBack={() => setView({ name: 'group', groupId: group.id })} />;
   else if (group) main = <GroupView group={group} store={store} onOpenPreset={(presetId) => setView({ name: 'group', groupId: group.id, presetId })} />;
@@ -94,8 +98,8 @@ export default function App() {
         <div className="nav-label">Photos</div>
         {navBtn('library', 'Library', 'library')}
         {navBtn('cull', 'Culling', 'photo')}
-        {navBtn('develop', 'Develop', 'develop', null, { name: 'develop' }, view.name === 'develop' && view.mode !== 'retouch')}
-        {navBtn('retouch', 'Retouch', 'heal', null, { name: 'develop', mode: 'retouch' }, view.name === 'develop' && view.mode === 'retouch')}
+        {navBtn('develop', 'Develop', 'develop', null, { name: 'develop' }, view.name === 'develop' && view.space !== 'retouch')}
+        {navBtn('retouch', 'Retouch', 'heal', null, { name: 'develop', mode: 'retouch', space: 'retouch' }, view.name === 'develop' && view.space === 'retouch')}
         <div className="nav-label">Groups<button className="icon-btn tiny" onClick={() => setNewGroup(true)} aria-label="New group"><Icon name="plus" size={14} /></button></div>
         <div className="group-list">
           {state.groups.map((g) => (

@@ -651,7 +651,7 @@ impl Develop {
 }
 
 /// Pixels as a PNG (fast to make: they're only read back by the window).
-fn png(w: usize, h: usize, px: &[u8], color: image::ExtendedColorType) -> Result<Vec<u8>, String> {
+pub fn png(w: usize, h: usize, px: &[u8], color: image::ExtendedColorType) -> Result<Vec<u8>, String> {
     use image::codecs::png::{CompressionType, FilterType, PngEncoder};
     use image::ImageEncoder;
     let mut out = Vec::new();
@@ -662,6 +662,11 @@ fn png(w: usize, h: usize, px: &[u8], color: image::ExtendedColorType) -> Result
 /// A Photoshop layer's pixels (RGBA) or its mask (grey, at most `edge` px on its long side), as PNG.
 fn psd_part(bytes: &[u8], i: usize, mask: bool, edge: usize) -> Result<Vec<u8>, String> {
     let doc = crate::psd::Doc::parse(bytes)?;
+    if !mask {
+        if let Some(png) = crate::psdwrite::asset(&doc, &format!("psd:{i}")) {
+            return Ok(png.to_vec());
+        }
+    }
     let l = doc.layers.get(i).ok_or("No such layer")?;
     if mask {
         let (w, h, grey) = doc.mask_grey(l)?.ok_or("This layer has no mask")?;

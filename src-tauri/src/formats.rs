@@ -55,7 +55,7 @@ pub fn decode_deep(bytes: &[u8], ext: &str) -> Result<Deep, String> {
     let wide = |p: Picture| Deep { w: p.w, h: p.h, rgb: p.rgb.iter().map(|&v| v as u16 * 257).collect(), icc: p.icc, psd: None };
     if crate::psd::is_psd(ext) {
         let doc = crate::psd::Doc::parse(bytes)?;
-        return Ok(Deep { w: doc.w, h: doc.h, rgb: doc.base()?, icc: doc.icc.map(|i| i.to_vec()), psd: Some(crate::psd::describe(&doc)) });
+        return Ok(Deep { w: doc.w, h: doc.h, rgb: doc.base()?, icc: doc.icc.map(|i| i.to_vec()), psd: Some(described(&doc)) });
     }
     if lib::JPEG_EXTS.contains(&ext) {
         use zune_jpeg::zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
@@ -518,4 +518,14 @@ mod tests {
             }
         }
     }
+}
+
+/// A Photoshop document's layers for Retouch, with the layers Flightroom saved in it (if any):
+/// `saved.ok` is false when Photoshop has changed the file since.
+fn described(doc: &crate::psd::Doc) -> serde_json::Value {
+    let mut d = crate::psd::describe(doc);
+    if let Some((v, ok)) = crate::psdwrite::saved_state(doc) {
+        d["saved"] = serde_json::json!({ "layers": v.get("layers"), "ok": ok });
+    }
+    d
 }

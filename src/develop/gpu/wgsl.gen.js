@@ -1835,9 +1835,9 @@ export const WGSL = {
   "nearest": 0
  },
  "style": {
-  "hash": "82981543",
-  "frag": "diagnostic(off, derivative_uniformity);\nstruct FrU {\n    uOutSize: vec2<f32>,\n    uScale: vec2<f32>,\n    uG0_: vec2<f32>,\n    uG1_: vec2<f32>,\n    uFill: f32,\n    uUseStroke: f32,\n    uUseOverlay: f32,\n    uOverlayA: f32,\n    uStrokeA: f32,\n    uUseInner: f32,\n    uUseGrad: f32,\n    uGradA: f32,\n    uGradRadial: f32,\n    uStrokeC: vec3<f32>,\n    uOverlayC: vec3<f32>,\n    uGC0_: vec3<f32>,\n    uGC1_: vec3<f32>,\n    frFlip: f32,\n    frH: f32,\n}\n\nstruct FragmentOutput {\n    @location(0) o: vec4<f32>,\n}\n\n@group(0) @binding(0) \nvar<uniform> global: FrU;\n@group(0) @binding(1) \nvar uTex: texture_2d<f32>;\n@group(0) @binding(2) \nvar uTex_s: sampler;\n@group(0) @binding(3) \nvar uDil: texture_2d<f32>;\n@group(0) @binding(4) \nvar uDil_s: sampler;\n@group(0) @binding(5) \nvar uInner: texture_2d<f32>;\n@group(0) @binding(6) \nvar uInner_s: sampler;\nvar<private> frFC: vec4<f32>;\nvar<private> o: vec4<f32>;\nvar<private> gl_FragCoord_1: vec4<f32>;\n\nfn main_1() {\n    var local: f32;\n    var c0_: vec4<f32>;\n    var c: vec4<f32>;\n    var i: vec4<f32>;\n    var d: vec2<f32>;\n    var p: vec2<f32>;\n    var local_1: f32;\n    var g: f32;\n    var d_1: f32;\n    var s: f32;\n\n    let _e47 = gl_FragCoord_1;\n    let _e49 = global.frFlip;\n    if (_e49 > 0.5f) {\n        let _e52 = global.frH;\n        let _e53 = gl_FragCoord_1;\n        local = (_e52 - _e53.y);\n    } else {\n        let _e56 = gl_FragCoord_1;\n        local = _e56.y;\n    }\n    let _e59 = local;\n    let _e60 = gl_FragCoord_1;\n    let _e61 = _e60.zw;\n    frFC = vec4<f32>(_e47.x, _e59, _e61.x, _e61.y);\n    let _e65 = frFC;\n    let _e69 = textureLoad(uTex, vec2<i32>(_e65.xy), 0i);\n    c0_ = _e69;\n    let _e71 = c0_;\n    c = _e71;\n    let _e73 = global.uUseInner;\n    if (_e73 > 0.5f) {\n        {\n            let _e76 = frFC;\n            let _e80 = textureLoad(uInner, vec2<i32>(_e76.xy), 0i);\n            i = _e80;\n            let _e82 = c;\n            let _e84 = i;\n            let _e86 = c;\n            let _e89 = i;\n            let _e91 = c;\n            let _e98 = (_e84.xyz + (_e86.xyz * (1f - (_e89.w / max(_e91.w, 0.00001f)))));\n            c.x = _e98.x;\n            c.y = _e98.y;\n            c.z = _e98.z;\n        }\n    }\n    let _e105 = global.uUseGrad;\n    if (_e105 > 0.5f) {\n        {\n            let _e108 = global.uG1_;\n            let _e109 = global.uG0_;\n            d = (_e108 - _e109);\n            let _e112 = frFC;\n            let _e114 = global.uG0_;\n            p = (_e112.xy - _e114);\n            let _e117 = global.uGradRadial;\n            if (_e117 > 0.5f) {\n                let _e120 = p;\n                let _e122 = d;\n                local_1 = (length(_e120) / max(length(_e122), 0.001f));\n            } else {\n                let _e127 = p;\n                let _e128 = d;\n                let _e130 = d;\n                let _e131 = d;\n                local_1 = (dot(_e127, _e128) / max(dot(_e130, _e131), 0.001f));\n            }\n            let _e137 = local_1;\n            g = clamp(_e137, 0f, 1f);\n            let _e142 = c;\n            let _e144 = c;\n            let _e146 = global.uGC0_;\n            let _e147 = global.uGC1_;\n            let _e148 = g;\n            let _e151 = c;\n            let _e154 = global.uGradA;\n            let _e156 = mix(_e144.xyz, (mix(_e146, _e147, vec3(_e148)) * _e151.w), vec3(_e154));\n            c.x = _e156.x;\n            c.y = _e156.y;\n            c.z = _e156.z;\n        }\n    }\n    let _e163 = global.uUseOverlay;\n    if (_e163 > 0.5f) {\n        let _e166 = c;\n        let _e168 = c;\n        let _e170 = global.uOverlayC;\n        let _e171 = c;\n        let _e174 = global.uOverlayA;\n        let _e176 = mix(_e168.xyz, (_e170 * _e171.w), vec3(_e174));\n        c.x = _e176.x;\n        c.y = _e176.y;\n        c.z = _e176.z;\n    }\n    let _e183 = c;\n    let _e184 = global.uFill;\n    c = (_e183 * _e184);\n    let _e186 = global.uUseStroke;\n    if (_e186 > 0.5f) {\n        {\n            let _e189 = frFC;\n            let _e191 = global.uOutSize;\n            let _e193 = global.uScale;\n            let _e195 = textureSample(uDil, uDil_s, ((_e189.xy / _e191) * _e193));\n            d_1 = clamp(_e195.w, 0f, 1f);\n            let _e202 = d_1;\n            let _e203 = c0_;\n            let _e207 = global.uStrokeA;\n            s = (max(0f, (_e202 - _e203.w)) * _e207);\n            let _e210 = c;\n            let _e211 = global.uStrokeC;\n            let _e212 = s;\n            let _e213 = (_e211 * _e212);\n            let _e214 = s;\n            let _e220 = c;\n            c = (_e210 + (vec4<f32>(_e213.x, _e213.y, _e213.z, _e214) * (1f - _e220.w)));\n        }\n    }\n    let _e225 = c;\n    o = _e225;\n    return;\n}\n\n@fragment \nfn main(@builtin(position) gl_FragCoord: vec4<f32>) -> FragmentOutput {\n    gl_FragCoord_1 = gl_FragCoord;\n    main_1();\n    let _e57 = o;\n    return FragmentOutput(_e57);\n}\n",
-  "size": 160,
+  "hash": "c7a2629f",
+  "frag": "diagnostic(off, derivative_uniformity);\nstruct FrU {\n    uOutSize: vec2<f32>,\n    uScale: vec2<f32>,\n    uG0_: vec2<f32>,\n    uG1_: vec2<f32>,\n    uFill: f32,\n    uUseStroke: f32,\n    uUseOverlay: f32,\n    uOverlayA: f32,\n    uStrokeA: f32,\n    uUseInner: f32,\n    uUseGrad: f32,\n    uGradA: f32,\n    uGradRadial: f32,\n    uUsePat: f32,\n    uPatA: f32,\n    uStrokeC: vec3<f32>,\n    uOverlayC: vec3<f32>,\n    uGC0_: vec3<f32>,\n    uGC1_: vec3<f32>,\n    uOut2Ori: mat3x3<f32>,\n    uPatTile: vec4<f32>,\n    frFlip: f32,\n    frH: f32,\n}\n\nstruct FragmentOutput {\n    @location(0) o: vec4<f32>,\n}\n\n@group(0) @binding(0) \nvar<uniform> global: FrU;\n@group(0) @binding(1) \nvar uTex: texture_2d<f32>;\n@group(0) @binding(2) \nvar uTex_s: sampler;\n@group(0) @binding(3) \nvar uDil: texture_2d<f32>;\n@group(0) @binding(4) \nvar uDil_s: sampler;\n@group(0) @binding(5) \nvar uInner: texture_2d<f32>;\n@group(0) @binding(6) \nvar uInner_s: sampler;\n@group(0) @binding(7) \nvar uPat: texture_2d<f32>;\n@group(0) @binding(8) \nvar uPat_s: sampler;\nvar<private> frFC: vec4<f32>;\nvar<private> o: vec4<f32>;\nvar<private> gl_FragCoord_1: vec4<f32>;\n\nfn main_1() {\n    var local: f32;\n    var c0_: vec4<f32>;\n    var c: vec4<f32>;\n    var i: vec4<f32>;\n    var q: vec2<f32>;\n    var pc: vec4<f32>;\n    var d: vec2<f32>;\n    var p: vec2<f32>;\n    var local_1: f32;\n    var g: f32;\n    var d_1: f32;\n    var s: f32;\n\n    let _e57 = gl_FragCoord_1;\n    let _e59 = global.frFlip;\n    if (_e59 > 0.5f) {\n        let _e62 = global.frH;\n        let _e63 = gl_FragCoord_1;\n        local = (_e62 - _e63.y);\n    } else {\n        let _e66 = gl_FragCoord_1;\n        local = _e66.y;\n    }\n    let _e69 = local;\n    let _e70 = gl_FragCoord_1;\n    let _e71 = _e70.zw;\n    frFC = vec4<f32>(_e57.x, _e69, _e71.x, _e71.y);\n    let _e75 = frFC;\n    let _e79 = textureLoad(uTex, vec2<i32>(_e75.xy), 0i);\n    c0_ = _e79;\n    let _e81 = c0_;\n    c = _e81;\n    let _e83 = global.uUseInner;\n    if (_e83 > 0.5f) {\n        {\n            let _e86 = frFC;\n            let _e90 = textureLoad(uInner, vec2<i32>(_e86.xy), 0i);\n            i = _e90;\n            let _e92 = c;\n            let _e94 = i;\n            let _e96 = c;\n            let _e99 = i;\n            let _e101 = c;\n            let _e108 = (_e94.xyz + (_e96.xyz * (1f - (_e99.w / max(_e101.w, 0.00001f)))));\n            c.x = _e108.x;\n            c.y = _e108.y;\n            c.z = _e108.z;\n        }\n    }\n    let _e115 = global.uUsePat;\n    if (_e115 > 0.5f) {\n        {\n            let _e118 = global.uOut2Ori;\n            let _e119 = frFC;\n            let _e120 = _e119.xy;\n            let _e127 = global.uPatTile;\n            q = ((_e118 * vec3<f32>(_e120.x, _e120.y, 1f)).xy - _e127.zw);\n            let _e131 = q;\n            let _e132 = global.uPatTile;\n            let _e136 = textureSample(uPat, uPat_s, fract((_e131 / _e132.xy)));\n            pc = _e136;\n            let _e138 = c;\n            let _e140 = c;\n            let _e142 = pc;\n            let _e144 = pc;\n            let _e150 = c;\n            let _e153 = global.uPatA;\n            let _e154 = pc;\n            let _e158 = mix(_e140.xyz, ((_e142.xyz / vec3(max(_e144.w, 0.00001f))) * _e150.w), vec3((_e153 * _e154.w)));\n            c.x = _e158.x;\n            c.y = _e158.y;\n            c.z = _e158.z;\n        }\n    }\n    let _e165 = global.uUseGrad;\n    if (_e165 > 0.5f) {\n        {\n            let _e168 = global.uG1_;\n            let _e169 = global.uG0_;\n            d = (_e168 - _e169);\n            let _e172 = frFC;\n            let _e174 = global.uG0_;\n            p = (_e172.xy - _e174);\n            let _e177 = global.uGradRadial;\n            if (_e177 > 0.5f) {\n                let _e180 = p;\n                let _e182 = d;\n                local_1 = (length(_e180) / max(length(_e182), 0.001f));\n            } else {\n                let _e187 = p;\n                let _e188 = d;\n                let _e190 = d;\n                let _e191 = d;\n                local_1 = (dot(_e187, _e188) / max(dot(_e190, _e191), 0.001f));\n            }\n            let _e197 = local_1;\n            g = clamp(_e197, 0f, 1f);\n            let _e202 = c;\n            let _e204 = c;\n            let _e206 = global.uGC0_;\n            let _e207 = global.uGC1_;\n            let _e208 = g;\n            let _e211 = c;\n            let _e214 = global.uGradA;\n            let _e216 = mix(_e204.xyz, (mix(_e206, _e207, vec3(_e208)) * _e211.w), vec3(_e214));\n            c.x = _e216.x;\n            c.y = _e216.y;\n            c.z = _e216.z;\n        }\n    }\n    let _e223 = global.uUseOverlay;\n    if (_e223 > 0.5f) {\n        let _e226 = c;\n        let _e228 = c;\n        let _e230 = global.uOverlayC;\n        let _e231 = c;\n        let _e234 = global.uOverlayA;\n        let _e236 = mix(_e228.xyz, (_e230 * _e231.w), vec3(_e234));\n        c.x = _e236.x;\n        c.y = _e236.y;\n        c.z = _e236.z;\n    }\n    let _e243 = c;\n    let _e244 = global.uFill;\n    c = (_e243 * _e244);\n    let _e246 = global.uUseStroke;\n    if (_e246 > 0.5f) {\n        {\n            let _e249 = frFC;\n            let _e251 = global.uOutSize;\n            let _e253 = global.uScale;\n            let _e255 = textureSample(uDil, uDil_s, ((_e249.xy / _e251) * _e253));\n            d_1 = clamp(_e255.w, 0f, 1f);\n            let _e262 = d_1;\n            let _e263 = c0_;\n            let _e267 = global.uStrokeA;\n            s = (max(0f, (_e262 - _e263.w)) * _e267);\n            let _e270 = c;\n            let _e271 = global.uStrokeC;\n            let _e272 = s;\n            let _e273 = (_e271 * _e272);\n            let _e274 = s;\n            let _e280 = c;\n            c = (_e270 + (vec4<f32>(_e273.x, _e273.y, _e273.z, _e274) * (1f - _e280.w)));\n        }\n    }\n    let _e285 = c;\n    o = _e285;\n    return;\n}\n\n@fragment \nfn main(@builtin(position) gl_FragCoord: vec4<f32>) -> FragmentOutput {\n    gl_FragCoord_1 = gl_FragCoord;\n    main_1();\n    let _e69 = o;\n    return FragmentOutput(_e69);\n}\n",
+  "size": 224,
   "uniforms": {
    "uOutSize": [
     0,
@@ -1904,6 +1904,16 @@ export const WGSL = {
     "float",
     0
    ],
+   "uUsePat": [
+    68,
+    "float",
+    0
+   ],
+   "uPatA": [
+    72,
+    "float",
+    0
+   ],
    "uStrokeC": [
     80,
     "vec3",
@@ -1924,13 +1934,23 @@ export const WGSL = {
     "vec3",
     0
    ],
+   "uOut2Ori": [
+    144,
+    "mat3",
+    0
+   ],
+   "uPatTile": [
+    192,
+    "vec4",
+    0
+   ],
    "frFlip": [
-    140,
+    208,
     "float",
     0
    ],
    "frH": [
-    144,
+    212,
     "float",
     0
    ]
@@ -1953,6 +1973,12 @@ export const WGSL = {
     5,
     6,
     false
+   ],
+   [
+    "uPat",
+    7,
+    8,
+    true
    ]
   ],
   "nearest": 0
@@ -2093,6 +2119,176 @@ export const WGSL = {
    ]
   },
   "textures": [],
+  "nearest": 0
+ },
+ "bevel": {
+  "hash": "d439c8cd",
+  "frag": "diagnostic(off, derivative_uniformity);\nstruct FrU {\n    uOutSize: vec2<f32>,\n    uScale: vec2<f32>,\n    uLight: vec2<f32>,\n    uColor: vec3<f32>,\n    uStyle: f32,\n    uDepth: f32,\n    uAlt: f32,\n    uWhich: f32,\n    uOpacity: f32,\n    uDown: f32,\n    frFlip: f32,\n    frH: f32,\n}\n\nstruct FragmentOutput {\n    @location(0) o: vec4<f32>,\n}\n\n@group(0) @binding(0) \nvar<uniform> global: FrU;\n@group(0) @binding(1) \nvar uTex: texture_2d<f32>;\n@group(0) @binding(2) \nvar uTex_s: sampler;\n@group(0) @binding(3) \nvar uBlur: texture_2d<f32>;\n@group(0) @binding(4) \nvar uBlur_s: sampler;\nvar<private> frFC: vec4<f32>;\nvar<private> o: vec4<f32>;\nvar<private> gl_FragCoord_1: vec4<f32>;\n\nfn hgt(p: vec2<f32>) -> f32 {\n    var p_1: vec2<f32>;\n    var b: f32;\n    var local: f32;\n    var local_1: f32;\n\n    p_1 = p;\n    let _e32 = p_1;\n    let _e33 = global.uOutSize;\n    let _e35 = global.uScale;\n    let _e37 = textureSample(uBlur, uBlur_s, ((_e32 / _e33) * _e35));\n    b = _e37.w;\n    let _e40 = global.uStyle;\n    if (_e40 < 0.5f) {\n        let _e44 = b;\n        local_1 = clamp(((2f * _e44) - 1f), 0f, 1f);\n    } else {\n        let _e51 = global.uStyle;\n        if (_e51 < 1.5f) {\n            let _e55 = b;\n            local = clamp((2f * _e55), 0f, 1f);\n        } else {\n            let _e60 = b;\n            local = _e60;\n        }\n        let _e62 = local;\n        local_1 = _e62;\n    }\n    let _e64 = local_1;\n    return _e64;\n}\n\nfn main_1() {\n    var local_2: f32;\n    var p_2: vec2<f32>;\n    var a0_: f32;\n    var g: vec2<f32>;\n    var local_3: f32;\n    var up: f32;\n    var n: vec3<f32>;\n    var L: vec3<f32>;\n    var shade: f32;\n    var local_4: f32;\n    var v: f32;\n    var local_5: f32;\n    var local_6: f32;\n    var m: f32;\n    var a: f32;\n\n    let _e31 = gl_FragCoord_1;\n    let _e33 = global.frFlip;\n    if (_e33 > 0.5f) {\n        let _e36 = global.frH;\n        let _e37 = gl_FragCoord_1;\n        local_2 = (_e36 - _e37.y);\n    } else {\n        let _e40 = gl_FragCoord_1;\n        local_2 = _e40.y;\n    }\n    let _e43 = local_2;\n    let _e44 = gl_FragCoord_1;\n    let _e45 = _e44.zw;\n    frFC = vec4<f32>(_e31.x, _e43, _e45.x, _e45.y);\n    let _e49 = frFC;\n    p_2 = _e49.xy;\n    let _e52 = p_2;\n    let _e55 = textureLoad(uTex, vec2<i32>(_e52), 0i);\n    a0_ = _e55.w;\n    let _e58 = p_2;\n    let _e63 = hgt((_e58 + vec2<f32>(1f, 0f)));\n    let _e64 = p_2;\n    let _e69 = hgt((_e64 - vec2<f32>(1f, 0f)));\n    let _e71 = p_2;\n    let _e76 = hgt((_e71 + vec2<f32>(0f, 1f)));\n    let _e77 = p_2;\n    let _e82 = hgt((_e77 - vec2<f32>(0f, 1f)));\n    g = (vec2<f32>((_e63 - _e69), (_e76 - _e82)) * 0.5f);\n    let _e88 = global.uDown;\n    if (_e88 > 0.5f) {\n        local_3 = -1f;\n    } else {\n        local_3 = 1f;\n    }\n    let _e95 = local_3;\n    up = _e95;\n    let _e97 = global.uStyle;\n    let _e100 = a0_;\n    if ((_e97 > 2.5f) && (_e100 < 0.5f)) {\n        let _e104 = up;\n        up = -(_e104);\n    }\n    let _e106 = g;\n    let _e108 = global.uDepth;\n    let _e110 = up;\n    let _e111 = ((-(_e106) * _e108) * _e110);\n    n = normalize(vec3<f32>(_e111.x, _e111.y, 1f));\n    let _e118 = global.uLight;\n    let _e119 = global.uAlt;\n    let _e121 = (_e118 * cos(_e119));\n    let _e122 = global.uAlt;\n    L = vec3<f32>(_e121.x, _e121.y, sin(_e122));\n    let _e128 = n;\n    let _e129 = L;\n    let _e131 = global.uAlt;\n    let _e135 = global.uAlt;\n    shade = ((dot(_e128, _e129) - sin(_e131)) / max((1f - (sin(_e135) * 0.5f)), 0.2f));\n    let _e144 = global.uWhich;\n    if (_e144 < 0.5f) {\n        let _e147 = shade;\n        local_4 = _e147;\n    } else {\n        let _e148 = shade;\n        local_4 = -(_e148);\n    }\n    let _e151 = local_4;\n    v = clamp((_e151 * 1.6f), 0f, 1f);\n    let _e158 = global.uStyle;\n    if (_e158 < 0.5f) {\n        let _e161 = a0_;\n        local_6 = _e161;\n    } else {\n        let _e162 = global.uStyle;\n        if (_e162 < 1.5f) {\n            let _e166 = a0_;\n            local_5 = (1f - _e166);\n        } else {\n            local_5 = 1f;\n        }\n        let _e170 = local_5;\n        local_6 = _e170;\n    }\n    let _e172 = local_6;\n    m = _e172;\n    let _e174 = v;\n    let _e175 = m;\n    let _e177 = global.uOpacity;\n    a = ((_e174 * _e175) * _e177);\n    let _e180 = global.uColor;\n    let _e181 = a;\n    let _e182 = (_e180 * _e181);\n    let _e183 = a;\n    o = vec4<f32>(_e182.x, _e182.y, _e182.z, _e183);\n    return;\n}\n\n@fragment \nfn main(@builtin(position) gl_FragCoord: vec4<f32>) -> FragmentOutput {\n    gl_FragCoord_1 = gl_FragCoord;\n    main_1();\n    let _e39 = o;\n    return FragmentOutput(_e39);\n}\n",
+  "size": 80,
+  "uniforms": {
+   "uOutSize": [
+    0,
+    "vec2",
+    0
+   ],
+   "uScale": [
+    8,
+    "vec2",
+    0
+   ],
+   "uLight": [
+    16,
+    "vec2",
+    0
+   ],
+   "uColor": [
+    32,
+    "vec3",
+    0
+   ],
+   "uStyle": [
+    44,
+    "float",
+    0
+   ],
+   "uDepth": [
+    48,
+    "float",
+    0
+   ],
+   "uAlt": [
+    52,
+    "float",
+    0
+   ],
+   "uWhich": [
+    56,
+    "float",
+    0
+   ],
+   "uOpacity": [
+    60,
+    "float",
+    0
+   ],
+   "uDown": [
+    64,
+    "float",
+    0
+   ],
+   "frFlip": [
+    68,
+    "float",
+    0
+   ],
+   "frH": [
+    72,
+    "float",
+    0
+   ]
+  },
+  "textures": [
+   [
+    "uTex",
+    1,
+    2,
+    false
+   ],
+   [
+    "uBlur",
+    3,
+    4,
+    true
+   ]
+  ],
+  "nearest": 0
+ },
+ "satin": {
+  "hash": "477a82f1",
+  "frag": "diagnostic(off, derivative_uniformity);\nstruct FrU {\n    uOff: vec2<f32>,\n    uOutSize: vec2<f32>,\n    uScale: vec2<f32>,\n    uColor: vec3<f32>,\n    uInvert: f32,\n    uOpacity: f32,\n    frFlip: f32,\n    frH: f32,\n}\n\nstruct FragmentOutput {\n    @location(0) o: vec4<f32>,\n}\n\n@group(0) @binding(0) \nvar<uniform> global: FrU;\n@group(0) @binding(1) \nvar uTex: texture_2d<f32>;\n@group(0) @binding(2) \nvar uTex_s: sampler;\n@group(0) @binding(3) \nvar uBlur: texture_2d<f32>;\n@group(0) @binding(4) \nvar uBlur_s: sampler;\nvar<private> frFC: vec4<f32>;\nvar<private> o: vec4<f32>;\nvar<private> gl_FragCoord_1: vec4<f32>;\n\nfn main_1() {\n    var local: f32;\n    var p: vec2<f32>;\n    var a0_: f32;\n    var s: f32;\n    var a: f32;\n\n    let _e23 = gl_FragCoord_1;\n    let _e25 = global.frFlip;\n    if (_e25 > 0.5f) {\n        let _e28 = global.frH;\n        let _e29 = gl_FragCoord_1;\n        local = (_e28 - _e29.y);\n    } else {\n        let _e32 = gl_FragCoord_1;\n        local = _e32.y;\n    }\n    let _e35 = local;\n    let _e36 = gl_FragCoord_1;\n    let _e37 = _e36.zw;\n    frFC = vec4<f32>(_e23.x, _e35, _e37.x, _e37.y);\n    let _e41 = frFC;\n    p = _e41.xy;\n    let _e44 = p;\n    let _e47 = textureLoad(uTex, vec2<i32>(_e44), 0i);\n    a0_ = _e47.w;\n    let _e50 = p;\n    let _e51 = global.uOff;\n    let _e53 = global.uOutSize;\n    let _e55 = global.uScale;\n    let _e57 = textureSample(uBlur, uBlur_s, (((_e50 - _e51) / _e53) * _e55));\n    let _e59 = p;\n    let _e60 = global.uOff;\n    let _e62 = global.uOutSize;\n    let _e64 = global.uScale;\n    let _e66 = textureSample(uBlur, uBlur_s, (((_e59 + _e60) / _e62) * _e64));\n    s = abs((_e57.w - _e66.w));\n    let _e71 = global.uInvert;\n    if (_e71 > 0.5f) {\n        let _e75 = s;\n        s = (1f - _e75);\n    }\n    let _e77 = s;\n    let _e81 = a0_;\n    let _e83 = global.uOpacity;\n    a = ((clamp(_e77, 0f, 1f) * _e81) * _e83);\n    let _e86 = global.uColor;\n    let _e87 = a;\n    let _e88 = (_e86 * _e87);\n    let _e89 = a;\n    o = vec4<f32>(_e88.x, _e88.y, _e88.z, _e89);\n    return;\n}\n\n@fragment \nfn main(@builtin(position) gl_FragCoord: vec4<f32>) -> FragmentOutput {\n    gl_FragCoord_1 = gl_FragCoord;\n    main_1();\n    let _e31 = o;\n    return FragmentOutput(_e31);\n}\n",
+  "size": 64,
+  "uniforms": {
+   "uOff": [
+    0,
+    "vec2",
+    0
+   ],
+   "uOutSize": [
+    8,
+    "vec2",
+    0
+   ],
+   "uScale": [
+    16,
+    "vec2",
+    0
+   ],
+   "uColor": [
+    32,
+    "vec3",
+    0
+   ],
+   "uInvert": [
+    44,
+    "float",
+    0
+   ],
+   "uOpacity": [
+    48,
+    "float",
+    0
+   ],
+   "frFlip": [
+    52,
+    "float",
+    0
+   ],
+   "frH": [
+    56,
+    "float",
+    0
+   ]
+  },
+  "textures": [
+   [
+    "uTex",
+    1,
+    2,
+    false
+   ],
+   [
+    "uBlur",
+    3,
+    4,
+    true
+   ]
+  ],
+  "nearest": 0
+ },
+ "maskMul": {
+  "hash": "38b4c93b",
+  "frag": "diagnostic(off, derivative_uniformity);\nstruct FrU {\n    frFlip: f32,\n    frH: f32,\n}\n\nstruct FragmentOutput {\n    @location(0) o: vec4<f32>,\n}\n\n@group(0) @binding(0) \nvar<uniform> global: FrU;\n@group(0) @binding(1) \nvar uTex: texture_2d<f32>;\n@group(0) @binding(2) \nvar uTex_s: sampler;\nvar<private> frFC: vec4<f32>;\nvar<private> o: vec4<f32>;\nvar<private> gl_FragCoord_1: vec4<f32>;\n\nfn main_1() {\n    var local: f32;\n\n    let _e9 = gl_FragCoord_1;\n    let _e11 = global.frFlip;\n    if (_e11 > 0.5f) {\n        let _e14 = global.frH;\n        let _e15 = gl_FragCoord_1;\n        local = (_e14 - _e15.y);\n    } else {\n        let _e18 = gl_FragCoord_1;\n        local = _e18.y;\n    }\n    let _e21 = local;\n    let _e22 = gl_FragCoord_1;\n    let _e23 = _e22.zw;\n    frFC = vec4<f32>(_e9.x, _e21, _e23.x, _e23.y);\n    let _e27 = frFC;\n    let _e31 = textureLoad(uTex, vec2<i32>(_e27.xy), 0i);\n    let _e32 = _e31.xxx;\n    o = vec4<f32>(_e32.x, _e32.y, _e32.z, 1f);\n    return;\n}\n\n@fragment \nfn main(@builtin(position) gl_FragCoord: vec4<f32>) -> FragmentOutput {\n    gl_FragCoord_1 = gl_FragCoord;\n    main_1();\n    let _e15 = o;\n    return FragmentOutput(_e15);\n}\n",
+  "size": 16,
+  "uniforms": {
+   "frFlip": [
+    0,
+    "float",
+    0
+   ],
+   "frH": [
+    4,
+    "float",
+    0
+   ]
+  },
+  "textures": [
+   [
+    "uTex",
+    1,
+    2,
+    false
+   ]
+  ],
   "nearest": 0
  }
 };

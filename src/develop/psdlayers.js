@@ -1,13 +1,14 @@
 // A Photoshop document's layers, as the desktop side reads them (psd.rs),
-// made into Retouch's own: pixel layers (text, shapes and smart objects as
-// the pixels Photoshop drew) become picture layers whose pixels stay in the
+// made into Retouch's own: type layers become text layers, pixel layers
+// (shapes and smart objects as the pixels Photoshop drew) become picture layers whose pixels stay in the
 // document ("psd:<layer>", raster.js), adjustment layers become Retouch's
 // live ones with the same settings, Solid Color fills become fill layers,
-// groups stay groups, and layer masks become masks. Blend mode, opacity,
+// groups stay groups (with their masks), and layer masks become masks. Blend mode, opacity,
 // fill, clipping, visibility and layer styles come along.
 import { newId } from './masks.js';
 import { ADJUSTMENTS, newAdjustment, parseCube } from './adjust.js';
 import { bitmapShape } from './selection.js';
+import { TEXT_DEFAULT } from './raster.js';
 
 const KNOWN = new Set(ADJUSTMENTS.map(([k]) => k));
 
@@ -70,7 +71,13 @@ export async function psdLayers(psd, loadMask) {
       if (!adj) return;
       l.adj = adj;
     } else if (e.kind === 'fill') l.fillDef = { type: 'solid', color: e.color };
-    else if (e.kind === 'image') {
+    else if (e.text && typeof e.text === 'object') {
+      // A type layer: editable text again (its font as the computer has it).
+      const { tf, ...t } = e.text;
+      l.kind = 'text';
+      l.text = { ...TEXT_DEFAULT, ...t };
+      if (tf) l.tf = tf;
+    } else if (e.kind === 'image') {
       const [x0, y0, x1, y1] = e.rect;
       l.image = { src: `psd:${e.index}`, w: e.size[0], h: e.size[1], x0, y0, x1, y1 };
     }
