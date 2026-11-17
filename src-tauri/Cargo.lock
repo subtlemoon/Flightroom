@@ -1415,7 +1415,7 @@ dependencies = [
 
 [[package]]
 name = "flightroom"
-version = "3.8.0"
+version = "3.9.0"
 dependencies = [
  "avif-decode",
  "base64 0.22.1",

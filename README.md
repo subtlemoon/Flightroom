@@ -88,7 +88,9 @@ WebP, PNG, TIFF, BMP, GIF) are decoded once by `src-tauri/src/formats.rs`
 (zune-heic, heifer for 4:2:2/4:4:4 HEIF, avif-decode, image) into a JPEG preview
 kept with the thumbnails (at most 6144 px, the newest 150). Their stars go in a
 sidecar. A RAW and a HEIC/TIFF with the same name pair up like RAW+JPEG. Canon
-CR3 previews come from its PRVW box and first track.
+CR3 previews come from its PRVW box and first track. Photoshop documents (.psd,
+.psb) show the flattened picture saved in them and are always photos of their
+own, with a `<name>.psd.xmp` sidecar (Flightroom never writes into them).
 
 ## Develop
 
@@ -98,6 +100,15 @@ colour matrices come from the file. The desktop side sends the window a
 screen-sized version of the photo as half-float linear RGB, plus full-resolution
 demosaiced crops when you zoom in, and all the adjustments run as WebGL2 shaders,
 so sliders update live.
+
+Pictures that aren't RAW files (JPEG, PNG, TIFF, HEIC, WebP, AVIF, BMP, GIF and
+Photoshop documents) open too. `Raw::picture` in `develop.rs` turns them into
+linear light with their colour profile's tone curves (`icc.rs`; sRGB when they
+have none) and gives the profile's primaries as their "camera matrix" with no
+white balance multipliers, and the window draws them with no camera profile,
+base look or highlight shoulder (`info.rendered`, tone map 4): at the defaults
+they look exactly as they are, and every slider works on them. AI Denoise is
+for RAW files only.
 
 Edits are never written into the RAW file. They are saved as Lightroom
 (Camera Raw) settings in the photo's `.xmp` sidecar (`crs:Exposure2012`,
@@ -145,6 +156,20 @@ Adjustments / Layers / History panels.
   type and shape layers, groups, layer masks, clipping masks, 27 blend modes,
   opacity and fill, locks, and layer styles (drop shadow, outer glow, stroke,
   color overlay).
+- Photoshop documents: `src-tauri/src/psd.rs` reads PSD and PSB files (8, 16
+  and 32-bit RGB, Grayscale and CMYK; raw, PackBits and ZIP data). The
+  background layer (or the flattened picture, when there are no layers) is
+  what Develop develops; the rest come in as Retouch layers the first time the
+  document is opened (`src/develop/psdlayers.js`): pixel, text, shape and smart
+  object layers as picture layers whose pixels stay in the document
+  (`psd:<layer>`, served by `develop/psdlayer`), all 15 adjustment layers with
+  their settings (Hue/Saturation's master only; Gradient Map's end colours;
+  Color Lookup when it holds a .cube), Solid Color fills, shape layers (their
+  fill, vector mask outline and stroke), groups, layer masks
+  (`develop/psdmask`, as bitmap selections), clipping, blend modes, opacity,
+  fill, visibility and layer styles (drop and inner shadow, outer and inner
+  glow, stroke, colour and gradient overlay). What doesn't come over (Bevel &
+  Emboss, Satin, Pattern Overlay, group masks) is listed when it opens.
 - Filters (Blur, Blur Gallery, Distort, Noise, Pixelate, Render, Sharpen,
   Stylize, Other) stay live on a layer like Smart Filters, clipped to the
   selection they were made with.

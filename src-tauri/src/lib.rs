@@ -8,6 +8,8 @@ pub mod catalog;
 pub mod develop;
 pub mod display;
 pub mod formats;
+pub mod icc;
+pub mod psd;
 pub mod lens;
 pub mod looks;
 pub mod migrate;

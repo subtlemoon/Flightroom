@@ -11,6 +11,7 @@ precision highp sampler2D;
 const vec3 W709 = vec3(0.2126, 0.7152, 0.0722);
 uniform vec3 uWB;
 uniform mat3 uCam;
+uniform float uPicture; // 1: a picture that isn't a RAW (nothing clipped to ease, it is shown as it is)
 // Camera RGB (sensor white = 1) -> linear sRGB. Where the sensor clips, one
 // channel (usually green) stops while the others keep rising, which tints
 // bright skies and white clothes pink; as any channel nears clipping the
@@ -22,7 +23,7 @@ uniform mat3 uCam;
 vec3 toLinear(vec3 cam) {
   vec3 c = max(cam, vec3(0.0));
   vec3 bal = min(cam * uWB, vec3(1.0));
-  float clip = smoothstep(0.88, 0.97, max(c.r, max(c.g, c.b)));
+  float clip = smoothstep(0.88, 0.97, max(c.r, max(c.g, c.b))) * (1.0 - uPicture);
   bal = mix(bal, vec3(max(bal.r, max(bal.g, bal.b))), clip);
   return uCam * bal;
 }
@@ -292,7 +293,7 @@ float conCurve(float x, float k) {
   t += k * (t * t * (3.0 - 2.0 * t) - t);
   return t < 0.5 ? 2.0 * p * t : p + (t - 0.5) * 2.0 * (1.0 - p);
 }
-uniform float uToneMap;   // 0: standard shoulder, 1: sigmoid, 2: AgX, 3: filmic RGB
+uniform float uToneMap;   // 0: standard shoulder, 1: sigmoid, 2: AgX, 3: filmic RGB, 4: none (a picture that isn't a RAW: shown as it is)
 uniform vec4 uTmA;        // tone mapper parameters A (precomputed in tonemap.js)
 uniform vec4 uTmB;        // tone mapper parameters B (filmic spline nodes)
 uniform float uTmHue;     // hue preservation factor (0..1)
@@ -628,7 +629,7 @@ vec3 easeWhite(vec3 x) {
 // tools/lr-tone.md), else the standard shoulder.
 float disp(float y) {
   y = max(y, 0.0);
-  return uDcp > 0.5 && uToneMap < 0.5 ? encS1(toneAt(y)) : encode(vec3(shoulder1(y))).r;
+  return uDcp > 0.5 && uToneMap < 0.5 ? encS1(toneAt(y)) : uToneMap > 3.5 ? encS1(min(y, 1.0)) : encode(vec3(shoulder1(y))).r;
 }
 
 // Colours outside the screen's range brought in by desaturating them, keeping
@@ -900,7 +901,7 @@ void main() {
     mapped = intoRange(uP2S * rgbTone(easeWhite(pp)));
   } else {
     lin = intoRange(lin);
-    mapped = uToneMap < 0.5 ? shoulder(lin) : uToneMap < 1.5 ? sigmoidMap(lin) : uToneMap < 2.5 ? agxMap(lin) : filmicMap(lin);
+    mapped = uToneMap < 0.5 ? shoulder(lin) : uToneMap < 1.5 ? sigmoidMap(lin) : uToneMap < 2.5 ? agxMap(lin) : uToneMap < 3.5 ? filmicMap(lin) : lin;
   }
   vec3 d = encode(mapped);
   if (glowAmt > 0.0 && uGlowMix.y < 1.5) {

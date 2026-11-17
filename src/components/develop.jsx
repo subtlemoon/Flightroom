@@ -42,7 +42,8 @@ import { RetouchStage } from './rtstage.jsx';
 import { OptionsBar, RetouchPanels, ToolRail } from './rtpanels.jsx';
 import { MenuBar, RetouchDialogs } from './rtmenus.jsx';
 import { findSpotSource, sourceRegions, visibleLayers } from '../develop/retouch.js';
-import { forgetPlacedImages } from '../develop/raster.js';
+import { forgetPlacedImages, setLayerUrls } from '../develop/raster.js';
+import { greyPixels, psdLayers } from '../develop/psdlayers.js';
 import { forgetSelectionImages } from '../develop/selection.js';
 
 // The Develop tab: the full RAW file with Lightroom-style controls. Edits are
@@ -50,7 +51,6 @@ import { forgetSelectionImages } from '../develop/selection.js';
 // in the .xmp file next to it (with the star rating), and Lightroom applies
 // them when it imports the photo or reads its metadata again.
 
-const isRaw = (p) => !!p.raw;
 const TRANSFORM_KEYS = ['perspVertical', 'perspHorizontal', 'perspRotate', 'perspAspect', 'perspScale', 'perspX', 'perspY', 'distortion', 'lensProfile'];
 const META_WINDOW = 20;
 // Stands in for a photo's as-shot colour when it isn't decoded (see applyPart).
@@ -59,6 +59,8 @@ const NO_SUGGESTIONS = {};
 const HISTORY_PHOTOS = 60;
 // The RAW data stays in memory a while after leaving, so coming straight back is instant.
 const RELEASE_AFTER = 120000;
+// A Photoshop document's layers read their pixels from the document (raster.js).
+setLayerUrls((file, i) => app?.develop.psdLayerUrl(file, i));
 let releaseTimer = 0;
 // Outlives the view, so a save still pending when Develop closes is written.
 let saveFailed = () => {};
@@ -157,7 +159,6 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
     setCrop(false);
     setSelState(null);
     rxRef.current?.reset();
-    if (!isRaw(photo)) { setOpened({ id: photo.id, error: 'notRaw' }); setS(null); return; }
     let live = true;
     setOpened((o) => (o?.id === photo.id ? o : { id: photo.id, loading: true }));
     app.develop.open(photo).then((info) => {
@@ -167,9 +168,28 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
       setOpened({ id: photo.id, info, asShot });
       // Settings whose save failed are saved again.
       dirty.current = session.unsaved.has(photo.id);
-      const st = settingsCache.current.get(photo.id) || fromXmp(info.settings, info.curves, asShot, info.own, info.look);
+      let st = settingsCache.current.get(photo.id);
+      if (!st) {
+        st = fromXmp(info.settings, info.curves, asShot, info.own, info.look);
+        // A JPEG, PNG or Photoshop document is already sharpened and clean: Lightroom starts those at 0.
+        if (info.rendered) {
+          if (info.settings?.Sharpness == null) st.sharpen = 0;
+          if (info.settings?.ColorNoiseReduction == null) st.nrColor = 0;
+        }
+      }
       setS(st);
       rxRef.current?.reset(st.layers);
+      // A Photoshop document opened for the first time: its layers rebuilt in Retouch.
+      if (info.psd && !settingsCache.current.has(photo.id) && info.own?.Layers == null && info.psd.layers.length) {
+        psdLayers(info.psd, (i) => greyPixels(app.develop.psdMaskUrl(photo.id, i))).then((layers) => {
+          if (!live || !layers.length) return;
+          setS((old) => (old && !old.layers?.length ? { ...old, layers } : old));
+          rxRef.current?.reset(layers);
+          const notes = info.psd.notes || [];
+          const more = notes.length > 2 ? ` and ${notes.length - 2} more` : '';
+          setToast(`${layers.length} Photoshop layer${layers.length === 1 ? '' : 's'} opened in Retouch${notes.length ? `. Not carried over: ${notes.slice(0, 2).join('; ')}${more}` : ''}`);
+        });
+      }
     });
     return () => { live = false; };
   }, [photo?.id]);
@@ -284,7 +304,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   // Puts settings onto photos. Others than the one on screen get them written
   // straight to their sidecars, without decoding their RAW files.
   const applyPart = async (part, what) => {
-    const list = targets().filter((p) => p.raw);
+    const list = targets();
     const changed = [];
     let n = 0;
     for (const p of list) {
@@ -341,7 +361,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   useEffect(() => {
     if (!app || !photos.length) return;
     const t = setTimeout(async () => {
-      const want = photos.filter((p) => p.developed && p.raw);
+      const want = photos.filter((p) => p.developed);
       if (!want.length) return;
       const missing = await app.cull.developedMissing(want);
       if (missing?.error || !builder.current) return;
@@ -627,8 +647,8 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
         }}>
           {photo && opened?.id === photo.id && opened.error ? (
             <div className="hero-empty dev-msg">
-              <h2>{opened.error === 'notRaw' ? 'Develop edits RAW files' : "This photo can't be developed"}</h2>
-              <p className="muted">{opened.error === 'notRaw' ? `${photo.name} is a ${fileKind(photo.name)} picture. Pick a RAW file (NEF, CR3, ARW and most other cameras' RAW) to edit it here.` : opened.error}</p>
+              <h2>This photo can't be developed</h2>
+              <p className="muted">{opened.error}</p>
             </div>
           ) : photo ? (
             <DevelopStage key={photo.id} photo={photo} meta={curMeta} info={info} s={shown} editS={s} cropMode={crop} cropOverlay={cropOverlay} clip={clip}
@@ -852,7 +872,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
       setReady(true);
       drawRef.current(); // a new source (AI Denoise amount) with nothing else changed still shows now
       // Only so the desktop side decodes it ahead: its answer is empty and let go at once.
-      if (nextPhoto?.raw) fetch(app.develop.imageUrl(nextPhoto, fitEdge(), true)).then((res) => res.body?.cancel(), () => {}).catch(() => {});
+      if (nextPhoto) fetch(app.develop.imageUrl(nextPhoto, fitEdge(), true)).then((res) => res.body?.cancel(), () => {}).catch(() => {});
     }, (err) => live && setError(String(err.message || err)));
     return () => { live = false; };
   }, [!!info, dn, glGen]);
@@ -976,7 +996,9 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
   const drawRef = useRef(draw);
   drawRef.current = draw;
   // A placed picture finished decoding (opened from the sidecar): draw it.
-  useEffect(() => { const on = () => drawRef.current(); window.addEventListener('retouch:image', on); return () => window.removeEventListener('retouch:image', on); }, []);
+  // A layer's picture finished loading: drawn again, and the navigator and filmstrip thumbnail made again.
+  const [pictures, setPictures] = useState(0);
+  useEffect(() => { const on = () => { drawRef.current(); setPictures((n) => n + 1); }; window.addEventListener('retouch:image', on); return () => window.removeEventListener('retouch:image', on); }, []);
   // Drawn right away, for the colour picker, which reads the canvas straight after.
   const drawNow = () => {
     refineGen.current++;
@@ -1244,7 +1266,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
       });
     }, 60);
     return () => { live = false; clearTimeout(t); };
-  }, [ready, s, info, previewKey]);
+  }, [ready, s, info, previewKey, pictures]);
   // The filmstrip's thumbnail of this photo as developed (crop and all), a
   // moment after the last change.
   useEffect(() => {
@@ -1262,7 +1284,7 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
         .then((blob) => { if (blob) keepThumb(photo, blob, keep ? saver.idle(photo.sidecar) : null); }, () => {});
     }, 400);
     return () => { live = false; clearTimeout(t); };
-  }, [ready, editS, info]);
+  }, [ready, editS, info, pictures]);
   useEffect(() => { apiRef.current.hist = hist; window.dispatchEvent(new CustomEvent('develop:hist', { detail: hist })); }, [hist]);
 
   // Zoom: the spot you click stays under the pointer, at 100%.
@@ -1425,8 +1447,8 @@ function DevelopStage({ photo, meta, info, s, editS, cropMode, cropOverlay, clip
         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
         onPointerLeave={() => window.dispatchEvent(new CustomEvent('develop:scope-hover', { detail: null }))} />
       <div className="stage-top">
-        {!ready && !error && <span className="pill-mini">Loading RAW…</span>}
-        {ready && <span className="pill-mini">{before ? 'Before' : 'RAW'} · {pct}%</span>}
+        {!ready && !error && <span className="pill-mini">Loading {fileKind(photo.name)}…</span>}
+        {ready && <span className="pill-mini">{before ? 'Before' : info?.rendered ? fileKind(photo.name) : 'RAW'} · {pct}%</span>}
         {clip && <span className="pill-mini clip">Clipping shown (J)</span>}
       </div>
       {error && <div className="stage-error"><b>Can't show the RAW here.</b> {error}. You're seeing the camera's preview instead. <button className="btn btn-sm" onClick={() => { setError(''); setReady(false); setGlTry((n) => n + 1); setGlGen((g) => g + 1); }}>Try again</button></div>}

@@ -7,7 +7,7 @@
 use crate::photolib::{self as lib, Source};
 use rayon::prelude::*;
 
-pub const IMAGE_EXTS: &[&str] = &[".heic", ".heif", ".hif", ".avif", ".webp", ".png", ".tif", ".tiff", ".bmp", ".gif"];
+pub const IMAGE_EXTS: &[&str] = &[".heic", ".heif", ".hif", ".avif", ".webp", ".png", ".tif", ".tiff", ".bmp", ".gif", ".psd", ".psb"];
 
 pub fn is_heif(ext: &str) -> bool {
     matches!(ext, ".heic" | ".heif" | ".hif")
@@ -30,9 +30,71 @@ pub fn decode(bytes: &[u8], ext: &str) -> Result<Picture, String> {
         heif(bytes)
     } else if ext == ".avif" {
         avif(bytes)
+    } else if crate::psd::is_psd(ext) {
+        // The flattened picture Photoshop saves with every document.
+        let doc = crate::psd::Doc::parse(bytes)?;
+        let rgb = doc.merged()?.iter().map(|&v| (v >> 8) as u8).collect();
+        Ok(Picture { w: doc.w, h: doc.h, rgb, icc: doc.icc.map(|i| i.to_vec()) })
     } else {
         other(bytes, ext)
     }
+}
+
+/// A picture for developing: 16-bit RGB (as stored, not turned upright, except
+/// HEIF and AVIF, whose decoders turn them), with its colour profile.
+pub struct Deep {
+    pub w: usize,
+    pub h: usize,
+    pub rgb: Vec<u16>,
+    pub icc: Option<Vec<u8>>,
+    /// A Photoshop document's layers, described for Retouch (psd::describe).
+    pub psd: Option<serde_json::Value>,
+}
+
+pub fn decode_deep(bytes: &[u8], ext: &str) -> Result<Deep, String> {
+    let wide = |p: Picture| Deep { w: p.w, h: p.h, rgb: p.rgb.iter().map(|&v| v as u16 * 257).collect(), icc: p.icc, psd: None };
+    if crate::psd::is_psd(ext) {
+        let doc = crate::psd::Doc::parse(bytes)?;
+        return Ok(Deep { w: doc.w, h: doc.h, rgb: doc.base()?, icc: doc.icc.map(|i| i.to_vec()), psd: Some(crate::psd::describe(&doc)) });
+    }
+    if lib::JPEG_EXTS.contains(&ext) {
+        use zune_jpeg::zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
+        let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB).set_max_width(1 << 16).set_max_height(1 << 16);
+        let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(bytes), opts);
+        d.decode_headers().map_err(|e| format!("Couldn't read this JPEG: {e:?}"))?;
+        let (w, h) = d.dimensions().ok_or("Couldn't read this JPEG")?;
+        if w == 0 || h == 0 || (w * h) as u64 > MAX_PIXELS {
+            return Err("This JPEG is too large or empty".into());
+        }
+        let px = d.decode().map_err(|e| format!("Couldn't decode this JPEG: {e:?}"))?;
+        return Ok(wide(Picture { w, h, rgb: px, icc: d.icc_profile() }));
+    }
+    if is_heif(ext) || ext == ".avif" {
+        return decode(bytes, ext).map(wide);
+    }
+    // PNG, TIFF and the rest: 16 bits a channel when the file has them.
+    use image::{DynamicImage, ImageDecoder};
+    let format = match ext {
+        ".png" => image::ImageFormat::Png,
+        ".tif" | ".tiff" => image::ImageFormat::Tiff,
+        ".webp" => image::ImageFormat::WebP,
+        ".bmp" => image::ImageFormat::Bmp,
+        ".gif" => image::ImageFormat::Gif,
+        _ => return Err(format!("{ext} files can't be developed")),
+    };
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(4 << 30);
+    reader.limits(limits);
+    let mut dec = reader.into_decoder().map_err(|e| format!("Couldn't read this file: {e}"))?;
+    let (w, h) = dec.dimensions();
+    if w as u64 * h as u64 > MAX_PIXELS {
+        return Err("This picture is too large".into());
+    }
+    let icc = dec.icc_profile().ok().flatten();
+    let img = DynamicImage::from_decoder(dec).map_err(|e| format!("Couldn't decode this file: {e}"))?;
+    let rgb = img.into_rgb16();
+    Ok(Deep { w: rgb.width() as usize, h: rgb.height() as usize, rgb: rgb.into_raw(), icc, psd: None })
 }
 
 /// `n`-channel 8-bit pixels (grey, grey + alpha, RGB, RGBA) as RGB.

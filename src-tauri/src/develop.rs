@@ -49,6 +49,11 @@ pub struct Raw {
     exif_model: String,
     /// The lens correction the camera wrote into the file.
     lens: Option<crate::lens::Lens>,
+    /// A picture that isn't a camera RAW (JPEG, PNG, HEIC, a Photoshop
+    /// document...): its linear RGB as half floats, w x h (`data` is empty).
+    rgb: Vec<u16>,
+    /// A Photoshop document's layers, for Retouch to rebuild.
+    psd: Option<serde_json::Value>,
 }
 
 fn illuminant_temp(name: &str) -> Option<f32> {
@@ -70,6 +75,10 @@ fn illuminant_temp(name: &str) -> Option<f32> {
 
 impl Raw {
     pub fn decode(path: &Path, key: String) -> Result<Raw, String> {
+        let ext = lib::ext_of(&path.to_string_lossy());
+        if !lib::RAW_EXTS.contains(&ext.as_str()) {
+            return Raw::picture(path, key, &ext);
+        }
         let raw = rawler::decode_file(path).map_err(|e| format!("Couldn't read the RAW data: {e}"))?;
         if raw.cpp != 1 || raw.camera.cfa.width != 2 || raw.camera.cfa.height != 2 || !raw.camera.cfa.is_rgb() {
             return Err(format!("{} {} files can't be developed yet (only standard Bayer sensors)", raw.clean_make, raw.clean_model));
@@ -143,7 +152,52 @@ impl Raw {
             lens: if raw.clean_make.eq_ignore_ascii_case("nikon") { crate::lens::nikon(path) } else { None },
             make: raw.clean_make,
             model: raw.clean_model,
+            rgb: Vec::new(),
+            psd: None,
         })
+    }
+
+    /// A picture that isn't a RAW: turned into light by its colour profile, and
+    /// given the profile's primaries as its "camera" colours, so that Develop
+    /// at its defaults shows it exactly as it is.
+    fn picture(path: &Path, key: String, ext: &str) -> Result<Raw, String> {
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        let pic = crate::formats::decode_deep(&bytes, ext)?;
+        drop(bytes);
+        let prof = crate::icc::read(pic.icc.as_deref());
+        let mut rgb = vec![0u16; pic.w * pic.h * 3];
+        rgb.par_chunks_mut(3 << 12).zip(pic.rgb.par_chunks(3 << 12)).for_each(|(o, i)| {
+            for (k, (o, &v)) in o.iter_mut().zip(i).enumerate() {
+                *o = f16::from_f32(prof.curves[k % 3][v as usize]).to_bits();
+            }
+        });
+        Ok(Raw {
+            path: path.to_path_buf(),
+            key,
+            data: Vec::new(),
+            stride: 0,
+            ox: 0,
+            oy: 0,
+            w: pic.w,
+            h: pic.h,
+            cfa: [[0, 1], [1, 2]],
+            black: [[0.0; 2]; 2],
+            scale: [[1.0; 2]; 2],
+            wb: [1.0, 1.0, 1.0],
+            // XYZ under D50 (as profiles state it) -> the picture's RGB.
+            matrices: vec![(5003.0, crate::icc::from_xyz(&prof))],
+            make: String::new(),
+            model: String::new(),
+            exif_model: String::new(),
+            lens: None,
+            rgb,
+            psd: pic.psd,
+        })
+    }
+
+    /// Not a camera RAW (no sensor data: nothing to demosaic or denoise).
+    pub fn rendered(&self) -> bool {
+        self.data.is_empty()
     }
 
     /// Normalized values of row y of the cropped image at columns `xs` (all inside it).
@@ -159,6 +213,9 @@ impl Raw {
     /// The whole photo with its long side at most `edge` pixels. Each 2x2 block
     /// of sensor pixels becomes one RGB pixel.
     pub fn overview(&self, edge: usize, dn: Option<(&[u16], f32)>) -> (usize, usize, Vec<u16>) {
+        if self.rendered() {
+            return self.overview_rgb(edge);
+        }
         let (bw, bh) = (self.w / 2, self.h / 2);
         let s = (edge as f64 / bw.max(bh) as f64).min(1.0);
         let dw = ((bw as f64 * s).round() as usize).max(1);
@@ -210,6 +267,34 @@ impl Raw {
         (dw, dh, out)
     }
 
+    /// A picture's overview: averaged down from its pixels.
+    fn overview_rgb(&self, edge: usize) -> (usize, usize, Vec<u16>) {
+        let (dw, dh) = crate::formats::shrunk_size(self.w, self.h, edge);
+        if (dw, dh) == (self.w, self.h) {
+            return (dw, dh, self.rgb.clone());
+        }
+        let (xw, yw) = (weights(self.w, dw), weights(self.h, dh));
+        let mut out = vec![0u16; dw * dh * 3];
+        out.par_chunks_mut(dw * 3).enumerate().for_each(|(oy, row)| {
+            let mut acc = vec![0f32; dw * 3];
+            for &(sy, wy) in &yw[oy] {
+                let line = &self.rgb[sy * self.w * 3..][..self.w * 3];
+                for (ox, taps) in xw.iter().enumerate() {
+                    for &(sx, wx) in taps {
+                        let w = wx * wy;
+                        for c in 0..3 {
+                            acc[ox * 3 + c] += f16::from_bits(line[sx * 3 + c]).to_f32() * w;
+                        }
+                    }
+                }
+            }
+            for (o, a) in row.iter_mut().zip(acc) {
+                *o = f16::from_f32(a).to_bits();
+            }
+        });
+        (dw, dh, out)
+    }
+
     /// Columns x0..x0 + w and the 2 more each side the 5x5 filter reads, mirrored at the photo's edges.
     fn cols(&self, x0: usize, w: usize) -> Vec<usize> {
         (0..w + 4).map(|i| mirror((x0 + i) as isize - 2, self.w)).collect()
@@ -219,6 +304,15 @@ impl Raw {
     /// row `top`, `xs` its cols(): the sensor values they read are normalized once,
     /// with the 2 rows above and below (mirrored at the photo's edges).
     fn demosaic_rows(&self, x0: usize, w: usize, top: usize, xs: &[usize], dn: Option<(&[u16], f32)>, out: &mut [f32]) {
+        if self.rendered() {
+            for (r, row) in out.chunks_exact_mut(w * 3).enumerate() {
+                let src = &self.rgb[((top + r) * self.w + x0) * 3..][..w * 3];
+                for (o, &v) in row.iter_mut().zip(src) {
+                    *o = f16::from_bits(v).to_f32();
+                }
+            }
+            return;
+        }
         let pw = w + 4;
         let mut norm = vec![0f32; pw * (out.len() / (w * 3) + 4)];
         for (i, line) in norm.chunks_exact_mut(pw).enumerate() {
@@ -433,6 +527,9 @@ fn trim<T>(q: &mut VecDeque<T>, max: usize, budget: usize, size: impl Fn(&T) -> 
     }
 }
 
+/// A file read whole: its path, its size and time (as a key), its bytes.
+type HeldFile = (PathBuf, String, Arc<Vec<u8>>);
+
 /// An AI Denoise result: its cache file, the photo, and the half floats (270 MB at 45 MP).
 type Denoised = (String, PathBuf, Arc<Vec<u16>>);
 
@@ -449,6 +546,8 @@ pub struct Develop {
     cancel_denoise: AtomicBool,
     /// An export sweeper is running (sweep_exports).
     sweeping: AtomicBool,
+    /// The Photoshop document whose layers are being read (its file, key and bytes).
+    psd: Mutex<Option<HeldFile>>,
 }
 
 impl Develop {
@@ -487,7 +586,7 @@ impl Develop {
 
     fn trim_raws(&self) {
         let denoised = self.denoised.lock().unwrap().as_ref().map_or(0, |d| d.2.len() * 2);
-        trim(&mut self.raws.lock().unwrap(), RAWS_KEPT, RAW_BUDGET.saturating_sub(denoised), |r| r.data.len() * 2);
+        trim(&mut self.raws.lock().unwrap(), RAWS_KEPT, RAW_BUDGET.saturating_sub(denoised), |r| (r.data.len() + r.rgb.len()) * 2);
     }
 
     fn overview(&self, app: &AppHandle, p: &Path, edge: usize, keep: bool, dn: usize) -> Result<Arc<Vec<u8>>, String> {
@@ -532,7 +631,66 @@ impl Develop {
         self.raws.lock().unwrap().clear();
         self.overviews.lock().unwrap().clear();
         *self.denoised.lock().unwrap() = None;
+        *self.psd.lock().unwrap() = None;
     }
+
+    /// A Photoshop document's bytes, kept while its layers are read (each its own request).
+    fn psd_bytes(&self, p: &Path) -> Result<Arc<Vec<u8>>, String> {
+        let key = std::fs::metadata(p).map(|m| format!("{}:{:?}", m.len(), m.modified().ok())).map_err(|e| e.to_string())?;
+        let mut cur = self.psd.lock().unwrap();
+        if let Some((cp, ck, b)) = cur.as_ref() {
+            if cp == p && *ck == key {
+                return Ok(b.clone());
+            }
+        }
+        *cur = None;
+        let b = Arc::new(std::fs::read(p).map_err(|e| e.to_string())?);
+        *cur = Some((p.to_path_buf(), key, b.clone()));
+        Ok(b)
+    }
+}
+
+/// Pixels as a PNG (fast to make: they're only read back by the window).
+fn png(w: usize, h: usize, px: &[u8], color: image::ExtendedColorType) -> Result<Vec<u8>, String> {
+    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+    use image::ImageEncoder;
+    let mut out = Vec::new();
+    PngEncoder::new_with_quality(&mut out, CompressionType::Fast, FilterType::Sub).write_image(px, w as u32, h as u32, color).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// A Photoshop layer's pixels (RGBA) or its mask (grey, at most `edge` px on its long side), as PNG.
+fn psd_part(bytes: &[u8], i: usize, mask: bool, edge: usize) -> Result<Vec<u8>, String> {
+    let doc = crate::psd::Doc::parse(bytes)?;
+    let l = doc.layers.get(i).ok_or("No such layer")?;
+    if mask {
+        let (w, h, grey) = doc.mask_grey(l)?.ok_or("This layer has no mask")?;
+        let (dw, dh) = crate::formats::shrunk_size(w, h, edge);
+        let grey = if (dw, dh) == (w, h) {
+            grey
+        } else {
+            let (xw, yw) = (weights(w, dw), weights(h, dh));
+            let mut out = vec![0u8; dw * dh];
+            for (oy, row) in out.chunks_exact_mut(dw).enumerate() {
+                for (ox, o) in row.iter_mut().enumerate() {
+                    let mut a = 0f32;
+                    for &(sy, wy) in &yw[oy] {
+                        for &(sx, wx) in &xw[ox] {
+                            a += grey[sy * w + sx] as f32 * wx * wy;
+                        }
+                    }
+                    *o = a.round().clamp(0.0, 255.0) as u8;
+                }
+            }
+            out
+        };
+        return png(dw, dh, &grey, image::ExtendedColorType::L8);
+    }
+    let (w, h, rgba) = doc.layer_rgba(l)?;
+    if w == 0 || h == 0 {
+        return Err("This layer is empty".into());
+    }
+    png(w, h, &rgba, image::ExtendedColorType::Rgba8)
 }
 
 /// A denoise cache file (width, height, then half floats) for a w x h photo, read
@@ -619,6 +777,14 @@ pub fn handle(app: &AppHandle, kind: &str, q: &HashMap<String, String>) -> HttpR
             let d = if dn > 0 { dev.denoised(app, &raw) } else { None };
             respond(200, "application/octet-stream", raw.region(x, y, w, h, ow, oh, d.as_deref().map(|d| (d.as_slice(), dn as f32 / 100.0))))
         }
+        "psdlayer" | "psdmask" => {
+            let i = num(q, "i").unwrap_or(usize::MAX);
+            let edge = num(q, "edge").unwrap_or(2048).clamp(16, 16384);
+            match dev.psd_bytes(&p).and_then(|b| psd_part(&b, i, kind == "psdmask", edge)) {
+                Ok(png) => respond(200, "image/png", png),
+                Err(e) => fail(e),
+            }
+        }
         _ => photos::not_found(),
     }
 }
@@ -643,6 +809,10 @@ pub struct Opened {
     denoised: bool,
     /// The camera's own lens correction, when the file has one.
     lens: Option<crate::lens::Lens>,
+    /// Not a camera RAW: a picture shown as it is at Develop's defaults.
+    rendered: bool,
+    /// A Photoshop document's layers (psd::describe), for Retouch.
+    psd: Option<serde_json::Value>,
 }
 
 /// Decodes a RAW file for developing and reads its saved settings.
@@ -675,8 +845,10 @@ fn opened(app: &AppHandle, p: &Path, raw: &Raw, sidecar: Option<String>) -> Resu
         camera: format!("{} {}", raw.make, raw.model),
         saved: saved(text.as_deref()),
         adobe,
-        denoised: denoise_file(app, raw).exists(),
+        denoised: !raw.rendered() && denoise_file(app, raw).exists(),
         lens: raw.lens.clone(),
+        rendered: raw.rendered(),
+        psd: raw.psd.clone(),
     })
 }
 
@@ -820,6 +992,9 @@ pub async fn develop_denoise(app: AppHandle, id: String) -> Result<bool, String>
         let p = app.state::<Photos>().allowed(&id).ok_or("This photo's folder isn't open")?;
         let dev = app.state::<Develop>();
         let raw = dev.raw(&p, true)?;
+        if raw.rendered() {
+            return Err("AI Denoise works on camera RAW files".into());
+        }
         if dev.denoised(&app, &raw).is_some() {
             return Ok(true);
         }
@@ -1334,6 +1509,8 @@ mod tests {
             model: String::new(),
             exif_model: String::new(),
             lens: None,
+            rgb: Vec::new(),
+            psd: None,
         }
     }
 
@@ -1596,6 +1773,8 @@ mod tests {
             adobe: crate::adobe::for_camera(&cameras, None, &out),
             denoised: false,
             lens: raw.lens.clone(),
+            rendered: raw.rendered(),
+            psd: raw.psd.clone(),
         };
         std::fs::write(out.join("opened.json"), serde_json::to_vec(&opened).unwrap()).unwrap();
         let (w, h, ov) = raw.overview(2560, None);
