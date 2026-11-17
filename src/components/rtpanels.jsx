@@ -9,7 +9,7 @@ import { CurveEditor } from './curve.jsx';
 import { BLEND_BREAKS, BLEND_MODES, PAINTABLE, histStats, histogramOf, inGroup, isIdent, kindOf, newLayer, nextName, tfPx } from '../develop/retouch.js';
 import { ADJUSTMENTS, ADJ_LABEL, CURVE_CHANNELS, PHOTO_FILTERS, SELECTIVE_COLORS, parseCube } from '../develop/adjust.js';
 import { FILTER_DEF, filterName } from '../develop/filters.js';
-import { FONTS } from '../develop/raster.js';
+import { FONTS, imageSrc } from '../develop/raster.js';
 import { BRUSHES, RETOUCH_DEFAULT, SELECTORS, SHAPE_TOOLS, TOOL, TOOL_GROUPS, hex, layerTree, unhex } from './retouch.jsx';
 
 /** A slider's settings; values with a fractional step show decimals. */
@@ -471,7 +471,7 @@ function LayersPanel({ rx, onDevelop }) {
                 <span className={`rt-thumb${l.id === active && !rx.editMask ? ' sel' : ''}`} title={l.kind === 'adjust' ? ADJ_LABEL[l.adj?.type] : undefined}
                   onClick={(e) => { e.stopPropagation(); rx.setActive(l.id); }}
                   onDoubleClick={(e) => { e.stopPropagation(); rx.setActive(l.id); if (['adjust', 'fill', 'text', 'shape'].includes(l.kind)) rx.showPanel('properties'); else if (l.kind !== 'group') rx.setDialog({ type: 'style', id: l.id, tab: 'blend' }); }}
-                  style={l.kind === 'fill' && l.fillDef?.type !== 'gradient' ? { background: hex(l.fillDef?.color || [0, 0, 0]) } : l.kind === 'image' ? { backgroundImage: `url(${l.image.src})` } : undefined}>
+                  style={l.kind === 'fill' && l.fillDef?.type !== 'gradient' ? { background: hex(l.fillDef?.color || [0, 0, 0]) } : l.kind === 'image' ? { backgroundImage: `url(${imageSrc(l.image.src)})` } : undefined}>
                   {l.kind !== 'image' && <Icon name={l.kind === 'adjust' ? ADJUSTMENTS.find((a) => a[0] === l.adj?.type)?.[2] || 'adjust' : KIND_ICON[kindOf(l)]} size={13} />}
                 </span>
                 {l.mask && (

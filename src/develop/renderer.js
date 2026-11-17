@@ -9,6 +9,7 @@ import { BASELINE_EXPOSURE, PP_TO_SRGB, SRGB_TO_PP, TONE_SIZE, adobeRendering, d
 import { CURVE_SIZE, HUE_SIZE, calibrationMatrix, curveTable, gradeTints, hueTable } from './luts.js';
 import { MAX_MASKS, POINT_DEFAULT, adjOf, lumRange, maskRaster, rasterChange } from './masks.js';
 import { tonemapUniforms } from './tonemap.js';
+import { setLayerDoc } from './raster.js';
 import { noiseModel } from './noise.js';
 import { Composer } from './compose.js';
 import { renderLayers } from './retouch.js';
@@ -61,11 +62,14 @@ export const LOOKS = {
   agx: { exposure: 1.0, contrast: 0.3, saturation: 1.3, agx: true },
 };
 
+export const RENDERED_LOOK = { exposure: 0, contrast: 0, saturation: 1, baseSat: 1, auto: 0 };
 export const BASE = { exposure: 0.08, contrast: 0.19, sat: 1.12, builtInSat: 1.05 };
 // (sat: on scene light, before the sliders and curves.)
 
 /** The base rendering: Lightroom's own profile when it's here, else the fitted look. */
 export function lookFor(info, s) {
+  // A JPEG, PNG, HEIC or Photoshop document: shown exactly as it is at the defaults.
+  if (info?.rendered) return RENDERED_LOOK;
   const r = adobeRendering(info, s.profile);
   // Lightroom's rendering with every slider at 0 has a little more exposure,
   // contrast and saturation than Adobe's DNG SDK steps alone: fitted to
@@ -414,7 +418,7 @@ export class Renderer {
     const key = `${s.profile}|${s.wb}|${s.temp}|${s.tint}|${s.redHue}|${s.redSat}|${s.greenHue}|${s.greenSat}|${s.blueHue}|${s.blueSat}`;
     if (this.colorKey !== key || this.colorInfo !== info) {
       const { wb, matrix, g } = cameraTransform(info, s);
-      this.color = { uWB: wb, uCam: glMat(mul3(calibrationMatrix(s), matrix)), ...this.profileUniforms(adobeRendering(info, s.profile), g) };
+      this.color = { uWB: wb, uPicture: info.rendered ? 1 : 0, uCam: glMat(mul3(calibrationMatrix(s), matrix)), ...this.profileUniforms(adobeRendering(info, s.profile), g) };
       this.colorKey = key;
       this.colorInfo = info;
     }
@@ -799,6 +803,7 @@ export class Renderer {
     const out2ori = mm(geo.frameToOriented(frame), out2frame);
     // Retouch layers on top (compose.js); `live` is a stroke still being painted.
     const layers = renderLayers(s.layers || [], live?.layerId);
+    setLayerDoc(info?.file);
     if (!layers.length) { this.drawPhoto(info, s, geo, frame, out2frame, out2ori, target, showClip, maskView, null); return; }
     this.composer ||= new Composer(this);
     this.composer.render((t, extra) => (extra
@@ -932,6 +937,8 @@ export class Renderer {
       uContrastSat: s.contrast / 100,
       uConPivot: s.contrast < 0 ? contrastPivot(span) : contrastPivot(null),
       ...tonemapUniforms(s),
+      // A rendered picture keeps its tones (no shoulder) unless a tone mapper is picked.
+      ...(info?.rendered && tonemapUniforms(s).uToneMap === 0 ? { uToneMap: 4 } : {}),
       uHighlights: s.highlights / 100,
       uHlTop: highlightTop(key),
       uShadows: (s.shadows > 0 ? s.shadows * lift : s.shadows) / 100,

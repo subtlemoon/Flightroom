@@ -253,7 +253,8 @@ export function setUseInstalledProfiles(on) { useInstalled = !!on; }
  * looks are used then).
  */
 export function adobeRendering(info, profile) {
-  if (!info) return null;
+  // Pictures that aren't RAW files are already rendered: no camera profile.
+  if (!info || info.rendered) return null;
   const a = useInstalled ? info.adobe || {} : {};
   const name = profile === 'camera' ? 'Camera Standard' : profile === 'adobe' || profile === 'standard' ? 'Adobe Standard' : null;
   const dcp = name && (a.profiles?.[name] || (name === 'Adobe Standard' ? builtInProfile(info) : null));

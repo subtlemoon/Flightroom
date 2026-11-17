@@ -101,7 +101,8 @@ export const bridge = inApp ? {
   },
   // Develop: full RAW decoding and develop settings in the .xmp sidecar.
   develop: {
-    open: (photo) => call('develop_open', { id: photo.id, sidecar: photo.sidecar }).then(withAdobe),
+    // `file`: which photo it is, for reading a Photoshop document's layers while it's drawn.
+    open: (photo) => call('develop_open', { id: photo.id, sidecar: photo.sidecar }).then((i) => (i?.error ? i : { ...withAdobe(i), file: photo.id })),
     read: (photo) => call('develop_read', { sidecar: photo.sidecar }),
     close: () => call('develop_close'),
     // A photo not on screen, for its filmstrip thumbnail: { info, frame } (its RAW data isn't kept).
@@ -110,12 +111,15 @@ export const bridge = inApp ? {
       if (r?.error) return r;
       const buf = r instanceof ArrayBuffer ? r : new Uint8Array(r).buffer;
       const n = new DataView(buf).getUint32(0, true);
-      return { info: withAdobe(JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)))), frame: buf.slice(4 + n) };
+      return { info: { ...withAdobe(JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)))), file: photo.id }, frame: buf.slice(4 + n) };
     },
     save: (sidecar, { set, remove, seqs, xml = {}, own = {} }) => call('develop_save', { args: { sidecar, set, remove, seqs, xml, own } }),
     // dn: how much AI Denoise to blend in (0-100), once worked out with denoise().
     imageUrl: (photo, edge, ahead, dn = 0) => fileUrl('develop/image', { p: photo.id, edge, ...(ahead ? { ahead: 1 } : {}), ...(dn ? { dn } : {}) }),
     regionUrl: (photo, r, dn = 0) => fileUrl('develop/region', { p: photo.id, ...r, ...(dn ? { dn } : {}) }),
+    // A Photoshop document's layer (PNG with transparency) and its mask (grey, at most `edge` px).
+    psdLayerUrl: (file, i) => fileUrl('develop/psdlayer', { p: file, i }),
+    psdMaskUrl: (file, i, edge = 2048) => fileUrl('develop/psdmask', { p: file, i, edge }),
     denoise: (photo) => call('develop_denoise', { id: photo.id }),
     cancelDenoise: () => call('develop_denoise_cancel'),
     onDenoise: (fn) => onEvent('ai:denoise', fn),

@@ -59,7 +59,20 @@ function keepImage(src, img) {
     if (k !== src && now - v.at > IMAGE_IN_USE_MS) IMAGES.delete(k);
   }
 }
-export function placedImage(src) {
+// A Photoshop document's layers keep "psd:<layer>" as their picture: its
+// pixels are read from the document being drawn (setLayerDoc), so nothing
+// big goes into the sidecar and the document can be moved with its sidecar.
+let layerDoc = null, layerUrl = null;
+/** How to reach a document's layer pixels: (file, layer) -> URL. */
+export function setLayerUrls(fn) { layerUrl = fn; }
+/** The document (photo file) whose layers are drawn now. */
+export function setLayerDoc(file) { layerDoc = file || null; }
+/** Where a layer's picture is read from (null: nowhere yet). */
+export const imageSrc = (src) => (src?.startsWith('psd:') ? (layerUrl && layerDoc ? layerUrl(layerDoc, src.slice(4)) : null) : src);
+
+export function placedImage(name) {
+  const src = imageSrc(name);
+  if (!src) return null;
   const hit = IMAGES.get(src);
   if (hit) {
     hit.at = Date.now();
@@ -71,6 +84,8 @@ export function placedImage(src) {
   const img = new Image();
   img.onload = () => { keepImage(src, img); window.dispatchEvent(new Event('retouch:image')); };
   img.onerror = () => IMAGES.delete(src);
+  // Read from the app's own files (not a data URL): asked for as shareable, so it can go to the graphics card.
+  if (!src.startsWith('data:')) img.crossOrigin = 'anonymous';
   img.src = src;
   return null;
 }

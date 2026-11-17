@@ -11,7 +11,7 @@
 import { BLEND_INDEX, REGION, SNAPSHOT, SOURCED, STROKED, isIdent, kindOf, layerBounds, opBounds, selectionCanvas, strokeDabs, stretchLine, stretchMap, tfPx, tfScale } from './retouch.js';
 import { adjustmentLut, adjustmentUniforms } from './adjust.js';
 import { filterPlan } from './filters.js';
-import { rasterize } from './raster.js';
+import { imageSrc, rasterize } from './raster.js';
 import { inv3 } from './color.js';
 import { ap, glMat, mm } from './renderer.js';
 
@@ -127,11 +127,13 @@ export class Composer {
   /** A text, shape or placed-picture layer drawn at about `scale` output px per oriented px (in steps, so zooming doesn't redraw it every frame). */
   rasterOf(l, geo, scale) {
     const step = 1.25 ** Math.ceil(Math.log(Math.max(scale, 1e-3)) / Math.log(1.25));
-    const what = l.kind === 'image' ? { ...l.image, src: l.image.src.length + l.image.src.slice(-48) } : l.kind === 'text' ? l.text : l.shape;
+    const src = l.kind === 'image' ? imageSrc(l.image.src) || l.image.src : '';
+    const what = l.kind === 'image' ? { ...l.image, src: src.length + src.slice(-120) } : l.kind === 'text' ? l.text : l.shape;
     const key = `${l.kind}|${JSON.stringify(what)}|${step.toFixed(4)}`;
     let hit = this.rasters.get(key);
     if (hit) { this.rasters.delete(key); this.rasters.set(key, hit); return hit; }
-    const ras = rasterize(l, geo.ow, geo.oh, step, Math.min(4096, this.r.maxTex));
+    // Pictures (a Photoshop document's layers among them) up to 8192 px, so they keep their detail in an export.
+    const ras = rasterize(l, geo.ow, geo.oh, step, Math.min(l.kind === 'image' ? 8192 : 4096, this.r.maxTex));
     if (!ras) return null;
     hit = { tex: this.texOf(ras.canvas, true), rect: ras.rect };
     this.rasters.set(key, hit);

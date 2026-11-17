@@ -624,6 +624,36 @@ fn read_image_info<S: Source + ?Sized>(src: &S, ext: &str, head: &[u8], info: &m
             .ok()
             .zip(head.get(22..26).map(|b| i32::from_le_bytes(b.try_into().unwrap()).unsigned_abs())),
         ".gif" => size = u16le(6).zip(u16le(8)),
+        ".psd" | ".psb" if head.starts_with(b"8BPS") => {
+            let be = |at: usize| head.get(at..at + 4).map(|b| u32::from_be_bytes(b.try_into().unwrap()));
+            size = be(18).zip(be(14));
+            // Image resources: Exif (1058) and XMP (1060).
+            let mode_len = be(26).unwrap_or(0) as u64;
+            let res_at = 30 + mode_len;
+            let res = src.get(res_at, 4);
+            let res_len = res.get(..4).map_or(0, |b| u32::from_be_bytes(b.try_into().unwrap())) as u64;
+            let (mut at, end) = (res_at + 4, res_at + 4 + res_len.min(64 << 20));
+            while at + 12 <= end {
+                let h = src.get(at, 7);
+                if h.len() < 7 || &h[..4] != b"8BIM" {
+                    break;
+                }
+                let id = u16::from_be_bytes([h[4], h[5]]);
+                let name = h[6] as u64;
+                let len_at = at + 6 + name + 1 + (name + 1) % 2;
+                let l = src.get(len_at, 4);
+                let Some(len) = l.get(..4).map(|b| u32::from_be_bytes(b.try_into().unwrap()) as u64) else { break };
+                let data = len_at + 4;
+                match id {
+                    1058 => read_tiff_exif(src, data, info),
+                    1060 if len < 4 << 20 => xmp = Some(src.get(data, len as usize)),
+                    _ => {}
+                }
+                at = data + len + (len & 1);
+            }
+            // Photoshop turns the picture upright when it opens a photo.
+            info.orientation = 1;
+        }
         _ => {}
     }
     if let Some(x) = xmp {
@@ -1144,6 +1174,7 @@ pub fn group_photos(names: &[String]) -> Vec<Group> {
     let rank = |ext: &str| if JPEG_EXTS.contains(&ext) { 0 } else { 1 };
     let mut order: Vec<String> = Vec::new();
     let mut by_base: HashMap<String, (Group, Vec<String>)> = HashMap::new();
+    let mut alone = Vec::new();
     for name in names {
         let ext = ext_of(name);
         let key = base_of(name).to_lowercase();
@@ -1151,7 +1182,13 @@ pub fn group_photos(names: &[String]) -> Vec<Group> {
             order.push(key.clone());
             (Group { base: base_of(name).to_string(), ..Default::default() }, Vec::new())
         });
-        if RAW_EXTS.contains(&ext.as_str()) && g.raw.is_none() {
+        if crate::psd::is_psd(&ext) {
+            // A Photoshop document is always a photo of its own (often the edit of a RAW beside it).
+            let own = format!("{name}.xmp");
+            let sidecar = names.iter().find(|n| n.eq_ignore_ascii_case(&own)).cloned();
+            let base = base_of(name).to_string();
+            alone.push(Group { base, sidecar, file: name.clone(), rating_in_file: false, own_sidecar: Some(own), jpeg: Some(name.clone()), raw: None });
+        } else if RAW_EXTS.contains(&ext.as_str()) && g.raw.is_none() {
             g.raw = Some(name.clone());
         } else if JPEG_EXTS.contains(&ext.as_str()) || IMAGE_EXTS.contains(&ext.as_str()) {
             pictures.push(name.clone());
@@ -1159,7 +1196,7 @@ pub fn group_photos(names: &[String]) -> Vec<Group> {
             g.sidecar = Some(name.clone());
         }
     }
-    let mut out: Vec<Group> = Vec::new();
+    let mut out: Vec<Group> = alone;
     for k in order {
         let Some((mut g, mut pictures)) = by_base.remove(&k) else { continue };
         pictures.sort_by(|a, b| rank(&ext_of(a)).cmp(&rank(&ext_of(b))).then_with(|| natural_cmp(a, b)));
