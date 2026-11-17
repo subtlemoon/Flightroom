@@ -12,6 +12,35 @@ import { TEXT_DEFAULT } from './raster.js';
 
 const KNOWN = new Set(ADJUSTMENTS.map(([k]) => k));
 
+let measurer = null;
+const measure = (font, s) => {
+  measurer ||= (typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(8, 8) : document.createElement('canvas')).getContext('2d');
+  measurer.font = font;
+  return measurer.measureText(s).width;
+};
+const SAMPLE = 'mmmmmmmmmmlli WQ@#';
+/** Whether this computer has the font (else the browser quietly draws another one). */
+export function hasFont(family, bold, italic) {
+  if (!family || typeof document === 'undefined') return true;
+  const st = `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}72px`;
+  return ['monospace', 'serif', 'sans-serif'].some((g) => measure(`${st} "${family}", ${g}`, SAMPLE) !== measure(`${st} ${g}`, SAMPLE));
+}
+
+/**
+ * Whether a type layer drawn as Retouch's text would look like Photoshop's: the font
+ * is here, and the widest line comes out about as wide as the pixels Photoshop drew.
+ */
+export function textMatches(t, rect, long) {
+  if (!hasFont(t.font, t.bold, t.italic)) return false;
+  if (t.boxed || !rect || !t.size || !long || t.tf) return true;
+  const px = t.size * long;
+  const font = `${t.italic ? 'italic ' : ''}${t.bold ? 'bold ' : ''}${px}px "${t.font}", sans-serif`;
+  const lines = String(t.text || '').split(/\r\n|\r|\n/);
+  const w = Math.max(...lines.map((s) => measure(font, s) + (s.length - 1) * ((t.tracking || 0) / 1000) * px));
+  const drawn = rect[2] - rect[0];
+  return !(drawn > 4 && w > 4) || Math.abs(w / drawn - 1) < 0.12;
+}
+
 /** An adjustment's settings over Retouch's defaults for its kind. */
 function adjustment(a) {
   if (!KNOWN.has(a.type)) return null;
@@ -58,6 +87,7 @@ export async function psdLayers(psd, loadMask) {
   const idOf = (g) => (g == null ? undefined : ids.get(g) || ids.set(g, newId()).get(g));
   const masks = await Promise.all(psd.layers.map((e) => (e.mask ? loadMask(e.index).catch(() => null) : null)));
   const out = [];
+  const missing = new Set();
   psd.layers.forEach((e, n) => {
     const l = {
       id: e.kind === 'group' ? idOf(e.id) : newId(), name: e.name || 'Layer', kind: e.kind, hidden: !!e.hidden,
@@ -71,13 +101,15 @@ export async function psdLayers(psd, loadMask) {
       if (!adj) return;
       l.adj = adj;
     } else if (e.kind === 'fill') l.fillDef = { type: 'solid', color: e.color };
-    else if (e.text && typeof e.text === 'object') {
-      // A type layer: editable text again (its font as the computer has it).
-      const { tf, ...t } = e.text;
+    else if (e.text && typeof e.text === 'object' && textMatches(e.text, e.rect, Math.max(psd.w || 0, psd.h || 0))) {
+      // A type layer: editable text again (when this computer has its font; else
+      // the pixels Photoshop drew, below, so it looks the same).
+      const { tf, boxed, ...t } = e.text;
       l.kind = 'text';
       l.text = { ...TEXT_DEFAULT, ...t };
       if (tf) l.tf = tf;
     } else if (e.kind === 'image') {
+      if (e.text && typeof e.text === 'object') missing.add(e.text.font);
       const [x0, y0, x1, y1] = e.rect;
       l.image = { src: `psd:${e.index}`, w: e.size[0], h: e.size[1], x0, y0, x1, y1 };
     }
@@ -86,6 +118,9 @@ export async function psdLayers(psd, loadMask) {
     if (e.style) l.style = e.style;
     out.push(l);
   });
+  if (missing.size && Array.isArray(psd.notes)) {
+    psd.notes.unshift(`editable type in ${[...missing].join(", ")} (not installed on this computer, so it stays exactly as Photoshop drew it)`);
+  }
   return out;
 }
 

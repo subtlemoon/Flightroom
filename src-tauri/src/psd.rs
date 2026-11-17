@@ -779,7 +779,7 @@ fn text_layer(doc: &Doc, l: &Layer, notes: &mut Vec<String>) -> Option<Value> {
     let mut out = json!({
         "text": text, "font": font, "bold": bold || get("FauxBold").and_then(Value::as_bool).unwrap_or(false),
         "italic": italic || get("FauxItalic").and_then(Value::as_bool).unwrap_or(false), "underline": get("Underline").and_then(Value::as_bool).unwrap_or(false),
-        "color": color.unwrap_or([0.0; 3]), "align": align, "tracking": get("Tracking").and_then(Value::as_f64).unwrap_or(0.0), "leading": leading,
+        "color": color.unwrap_or([0.0; 3]), "align": align, "boxed": boxed, "tracking": get("Tracking").and_then(Value::as_f64).unwrap_or(0.0), "leading": leading,
     });
     if plain {
         out["size"] = json!(size * xx / long);
@@ -1718,7 +1718,7 @@ pub fn describe(doc: &Doc) -> Value {
     if doc.mode == 4 {
         notes.push("CMYK colours are shown with a simple conversion, not the document's CMYK profile".into());
     }
-    json!({ "layers": out, "base": base.map(|i| doc.layers[i].name.clone()), "notes": notes })
+    json!({ "layers": out, "base": base.map(|i| doc.layers[i].name.clone()), "notes": notes, "w": doc.w, "h": doc.h })
 }
 
 #[cfg(test)]
