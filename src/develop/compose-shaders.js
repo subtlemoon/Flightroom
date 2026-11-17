@@ -219,13 +219,20 @@ void main() {
   o = vec4(uColor * a, a);
 }`;
 export const STYLE = `${HEAD}
-uniform sampler2D uTex, uDil, uInner;
+uniform sampler2D uTex, uDil, uInner, uPat;
 uniform vec2 uOutSize, uScale, uG0, uG1;
-uniform float uFill, uUseStroke, uUseOverlay, uOverlayA, uStrokeA, uUseInner, uUseGrad, uGradA, uGradRadial;
+uniform float uFill, uUseStroke, uUseOverlay, uOverlayA, uStrokeA, uUseInner, uUseGrad, uGradA, uGradRadial, uUsePat, uPatA;
 uniform vec3 uStrokeC, uOverlayC, uGC0, uGC1;
+uniform mat3 uOut2Ori;
+uniform vec4 uPatTile; // a pattern tile's size and where tiles start (oriented px)
 void main() {
   vec4 c0 = texelFetch(uTex, ivec2(gl_FragCoord.xy), 0), c = c0;
   if (uUseInner > 0.5) { vec4 i = texelFetch(uInner, ivec2(gl_FragCoord.xy), 0); c.rgb = i.rgb + c.rgb * (1.0 - i.a / max(c.a, 1e-5)); }
+  if (uUsePat > 0.5) {
+    vec2 q = (uOut2Ori * vec3(gl_FragCoord.xy, 1.0)).xy - uPatTile.zw;
+    vec4 pc = texture(uPat, fract(q / uPatTile.xy));
+    c.rgb = mix(c.rgb, pc.rgb / max(pc.a, 1e-5) * c.a, uPatA * pc.a);
+  }
   if (uUseGrad > 0.5) {
     vec2 d = uG1 - uG0, p = gl_FragCoord.xy - uG0;
     float g = clamp(uGradRadial > 0.5 ? length(p) / max(length(d), 1e-3) : dot(p, d) / max(dot(d, d), 1e-3), 0.0, 1.0);
@@ -241,7 +248,56 @@ void main() {
   o = c;
 }`;
 
-// The clipping base's shape, for layers clipped to it.
+// Bevel & Emboss: the layer's edge as a slope (its blurred shape), lit from
+// uLight (output px) at uAlt (radians) above. One pass makes the highlights
+// (uWhich 0), one the shadows (1), each laid on with its own blend mode.
+// Styles: 0 inner bevel (the slope inside the edge), 1 outer (outside it),
+// 2 emboss (across it), 3 pillow emboss (in on one side, out on the other).
+export const BEVEL = `${HEAD}
+uniform sampler2D uTex, uBlur;
+uniform vec2 uOutSize, uScale, uLight;
+uniform vec3 uColor;
+uniform float uStyle, uDepth, uAlt, uWhich, uOpacity, uDown;
+float hgt(vec2 p) {
+  float b = texture(uBlur, p / uOutSize * uScale).a;
+  return uStyle < 0.5 ? clamp(2.0 * b - 1.0, 0.0, 1.0) : uStyle < 1.5 ? clamp(2.0 * b, 0.0, 1.0) : b;
+}
+void main() {
+  vec2 p = gl_FragCoord.xy;
+  float a0 = texelFetch(uTex, ivec2(p), 0).a;
+  vec2 g = vec2(hgt(p + vec2(1.0, 0.0)) - hgt(p - vec2(1.0, 0.0)), hgt(p + vec2(0.0, 1.0)) - hgt(p - vec2(0.0, 1.0))) * 0.5;
+  float up = uDown > 0.5 ? -1.0 : 1.0;
+  if (uStyle > 2.5 && a0 < 0.5) up = -up;
+  vec3 n = normalize(vec3(-g * uDepth * up, 1.0));
+  vec3 L = vec3(uLight * cos(uAlt), sin(uAlt));
+  float shade = (dot(n, L) - sin(uAlt)) / max(1.0 - sin(uAlt) * 0.5, 0.2);
+  float v = clamp((uWhich < 0.5 ? shade : -shade) * 1.6, 0.0, 1.0);
+  float m = uStyle < 0.5 ? a0 : uStyle < 1.5 ? 1.0 - a0 : 1.0;
+  float a = v * m * uOpacity;
+  o = vec4(uColor * a, a);
+}`;
+
+// Satin: the layer's blurred shape against itself shifted both ways along the
+// angle, the difference (inverted, as Photoshop starts it) inside the layer.
+export const SATIN = `${HEAD}
+uniform sampler2D uTex, uBlur;
+uniform vec2 uOff, uOutSize, uScale;
+uniform vec3 uColor;
+uniform float uInvert, uOpacity;
+void main() {
+  vec2 p = gl_FragCoord.xy;
+  float a0 = texelFetch(uTex, ivec2(p), 0).a;
+  float s = abs(texture(uBlur, (p - uOff) / uOutSize * uScale).a - texture(uBlur, (p + uOff) / uOutSize * uScale).a);
+  if (uInvert > 0.5) s = 1.0 - s;
+  float a = clamp(s, 0.0, 1.0) * a0 * uOpacity;
+  o = vec4(uColor * a, a);
+}`;
+
+// A group's mask laid over a layer's own (multiplied in).
+export const MASKMUL = `${HEAD}
+uniform sampler2D uTex;
+void main() { o = vec4(texelFetch(uTex, ivec2(gl_FragCoord.xy), 0).rrr, 1.0); }`;
+
 export const CLIPA = `${HEAD}
 uniform sampler2D uTex, uMask;
 uniform float uUseMask, uDensity, uOpacity;

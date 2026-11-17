@@ -18,7 +18,7 @@
 //         text    a type layer (text)
 //         shape   a shape layer (shape)
 //         group   a group; layers in it have `parent`
-//   mask     { base: 1 reveal | 0 hide, ops, off, density, feather }
+//   mask     { base: 1 reveal | 0 hide, ops, off, density, feather } (a group's hides all in it)
 //   filters  [{ id, type, on, ... }] (filters.js), style (layer styles),
 //   tf       an affine transform in long-edge units (selection.js),
 //   clip     clipped to the layer below, lock { all, pixels, position, alpha }.
@@ -115,12 +115,21 @@ export function renderLayers(layers, liveId) {
   for (const l of layers) {
     if (l.kind === 'group') continue;
     let hidden = l.hidden, k = 1;
-    for (let p = byId.get(l.parent), n = 0; p && n < 32; p = byId.get(p.parent), n++) { if (p.hidden) hidden = true; k *= p.opacity / 100; }
+    const gm = [];
+    for (let p = byId.get(l.parent), n = 0; p && n < 32; p = byId.get(p.parent), n++) {
+      if (p.hidden) hidden = true;
+      k *= p.opacity / 100;
+      if (p.mask && !p.mask.off) gm.push(p.mask);
+    }
     const shown = !hidden && l.opacity * k > 0 && (hasContent(l) || l.id === liveId);
     if (!l.clip) base = shown;
     else if (!base) continue;
     if (!shown) continue;
-    out.push(k === 1 ? l : { ...l, opacity: l.opacity * k });
+    if (k === 1 && !gm.length) { out.push(l); continue; }
+    const o = { ...l, opacity: l.opacity * k };
+    // A group's mask hides what's in it: laid over each layer's own mask.
+    if (gm.length) { o.groupMasks = gm; if (!l.mask || l.mask.off) o.mask = { base: 1, ops: [] }; }
+    out.push(o);
   }
   return out;
 }

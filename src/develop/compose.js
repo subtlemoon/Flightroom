@@ -11,7 +11,7 @@
 import { BLEND_INDEX, REGION, SNAPSHOT, SOURCED, STROKED, isIdent, kindOf, layerBounds, opBounds, selectionCanvas, strokeDabs, stretchLine, stretchMap, tfPx, tfScale } from './retouch.js';
 import { adjustmentLut, adjustmentUniforms } from './adjust.js';
 import { filterPlan } from './filters.js';
-import { imageSrc, rasterize } from './raster.js';
+import { imageSrc, placedImage, rasterize } from './raster.js';
 import { inv3 } from './color.js';
 import { ap, glMat, mm } from './renderer.js';
 
@@ -20,9 +20,10 @@ const MEM_CAP = 1024; // the heal fill is worked out at up to this size
 const KIND = { paint: 0, erase: 1, clone: 2, heal: 3, patch: 3, fill: 4, clear: 5, gradient: 6, dodge: 8, burn: 9, sponge: 10, blur: 11, sharpen: 12, smudge: 13, redeye: 14 };
 const GRAD = { linear: 0, radial: 1, angle: 2, reflected: 3, diamond: 4 };
 // Full-size buffers per output size, each made the first time it's needed.
-const BUFFERS = ['acc0', 'acc1', 'src', 'layer', 'tmp', 'snap', 'mask', 'clipA', 'fxA', 'fxB', 'cov'];
+const BUFFERS = ['acc0', 'acc1', 'src', 'layer', 'tmp', 'snap', 'mask', 'gmask', 'clipA', 'fxA', 'fxB', 'cov'];
 const on = (x) => !!x && x.on !== false;
-const STYLE_KEYS = ['shadow', 'glow', 'innerShadow', 'innerGlow', 'gradient', 'overlay', 'stroke'];
+const STYLE_KEYS = ['shadow', 'glow', 'innerShadow', 'innerGlow', 'satin', 'pattern', 'gradient', 'overlay', 'stroke', 'bevel'];
+const BEVEL_STYLE = { inner: 0, outer: 1, emboss: 2, pillow: 3 };
 
 export class Composer {
   constructor(r) {
@@ -32,12 +33,14 @@ export class Composer {
     this.progs = {
       dab: 'dab', op: 'op', covsel: 'covsel', inside: 'inside', healL0: 'healL0', pull: 'pull', push: 'push', comp: 'comp',
       adj: 'adj', blur: 'fxBlur', fx: 'fx', shade: 'shade', style: 'style', inner: 'inner', clipa: 'clipa', stretch: 'stretch',
+      bevel: 'bevel', satin: 'satin', maskMul: 'maskMul',
     };
     this.sets = new Map(); // "WxH" -> buffers for that output size
     this.bufs = new Map(); // op -> { buf, n } (its dabs on the graphics card)
     this.sels = new Map(); // selection -> texture
     this.luts = new Map(); // adjustment -> lookup texture
     this.rasters = new Map(); // text / shape / placed picture key -> { tex, rect }
+    this.pats = new Map(); // a Pattern Overlay's picture -> its texture
     this.fillOps = new WeakMap(); // a gradient fill layer's settings -> its op
     this.bounds = new WeakMap(); // op -> its box (oriented px)
   }
@@ -124,6 +127,18 @@ export class Composer {
     return t;
   }
 
+  /** A Pattern Overlay's picture as a texture (null until it's decoded). */
+  patTex(src) {
+    let t = this.pats.get(src);
+    if (t) return t;
+    const img = placedImage(src);
+    if (!img) return null;
+    t = this.texOf(img);
+    this.pats.set(src, t);
+    this.trim(this.pats, 8);
+    return t;
+  }
+
   /** A text, shape or placed-picture layer drawn at about `scale` output px per oriented px (in steps, so zooming doesn't redraw it every frame). */
   rasterOf(l, geo, scale) {
     const step = 1.25 ** Math.ceil(Math.log(Math.max(scale, 1e-3)) / Math.log(1.25));
@@ -154,6 +169,7 @@ export class Composer {
     if (this.liveBuf) dev.freeBuffer(this.liveBuf);
     for (const t of [...this.sels.values(), ...this.luts.values()]) dev.free(t);
     for (const h of this.rasters.values()) dev.free(h.tex);
+    for (const t of this.pats.values()) dev.free(t);
     for (const t of [...(this.pyr?.L || []), ...(this.pyr?.F || [])]) r.free(t);
     this.dropHeld();
   }
@@ -231,6 +247,14 @@ export class Composer {
       const last = li === layers.length - 1;
       this.finish(layer, T, ctx, lc, last ? target : null, last, layers[li + 1]);
     }
+    // Saving a document: the masks of groups (drawn on their own).
+    for (const g of this.capture?.groups || []) {
+      const v = g.mask.base ?? 1;
+      dev.clear(T.gmask, [v, v, v, 1]);
+      const lc = this.layerCtx(ctx, null);
+      for (const op of g.mask.ops) this.drawOp(op, T, lc, T.gmask);
+      this.capture.mask(g, T.gmask);
+    }
     dev.setScissor(null);
     this.sweep();
   }
@@ -290,6 +314,16 @@ export class Composer {
     this.dev.setScissor(null);
     this.dev.clear(T.mask, [v, v, v, 1]);
     for (const op of layer.mask.ops) this.drawOp(op, T, lc, T.mask);
+    // The masks of the groups it's in (renderLayers), multiplied in.
+    this.capture?.mask(layer, T.mask);
+    for (const g of layer.groupMasks || []) {
+      const gv = g.base ?? 1;
+      this.dev.clear(T.gmask, [gv, gv, gv, 1]);
+      for (const op of g.ops) this.drawOp(op, T, lc, T.gmask);
+      this.dev.setBlend('multiply');
+      this.r.draw(this.progs.maskMul, T.mask, { uTex: T.gmask.tex });
+      this.dev.setBlend(null);
+    }
   }
 
   /** Filters, mask feather and layer styles, then the layer onto what's below. */
@@ -297,6 +331,9 @@ export class Composer {
     const dev = this.dev;
     dev.setScissor(null);
     for (const f of layer.filters || []) if (on(f)) this.filter(f, T, ctx);
+    // Saving a document: each layer's own pixels; a hidden layer is drawn for them, but not shown.
+    this.capture?.layer(layer, T.layer);
+    if (layer._ghost) { if (last) this.r.dev.blit(T.acc[this.cur], target, false); return; }
     const masked = !!layer.mask && !layer.mask.off;
     const L = Math.max(ctx.geo.ow, ctx.geo.oh);
     if (masked && layer.mask.feather > 0) {
@@ -359,14 +396,42 @@ export class Composer {
       g1 = ap(lc.ori2out, cx + dx * ext, cy + dy * ext);
     }
     const gr = st.gradient || {};
+    const pt = on(st.pattern) && st.pattern.src ? st.pattern : null;
+    const pat = pt && this.patTex(pt.src);
+    const tile = pat ? [Math.max(1, (pt.w || 64) * (pt.scale ?? 100) / 100), Math.max(1, (pt.h || 64) * (pt.scale ?? 100) / 100)] : [1, 1];
     this.r.draw(this.progs.style, T.fxB, {
+      uUsePat: pat ? 1 : 0, uPat: pat || T.layer.tex, uPatA: (pt?.opacity ?? 100) / 100, uPatTile: [...tile, (pt?.x || 0) * tile[0], (pt?.y || 0) * tile[1]], uOut2Ori: lc.uOut2Ori,
       uTex: T.layer.tex, uDil: dil ? dil.tex : T.layer.tex, uInner: inner ? T.tmp.tex : T.layer.tex, uUseInner: inner ? 1 : 0, uOutSize: [ctx.W, ctx.H], uScale: [1, 1],
       uFill: fill, uUseStroke: dil ? 1 : 0, uStrokeC: st.stroke?.color || [0, 0, 0], uStrokeA: (st.stroke?.opacity ?? 100) / 100,
       uUseOverlay: on(st.overlay) ? 1 : 0, uOverlayC: st.overlay?.color || [1, 0, 0], uOverlayA: (st.overlay?.opacity ?? 100) / 100,
       uUseGrad: on(st.gradient) ? 1 : 0, uG0: g0, uG1: g1, uGC0: gr.reverse ? gr.c1 || [1, 1, 1] : gr.c0 || [0, 0, 0], uGC1: gr.reverse ? gr.c0 || [0, 0, 0] : gr.c1 || [1, 1, 1],
       uGradA: (gr.opacity ?? 100) / 100, uGradRadial: gr.style === 'radial' ? 1 : 0,
     });
-    comp(T.fxB.tex, layer.blend, opacity, last);
+    // Satin and Bevel & Emboss: laid on top of the layer, each with its own blend mode.
+    const post = [];
+    if (on(st.satin)) post.push(['satin', st.satin]);
+    if (on(st.bevel)) post.push(['hi', st.bevel], ['lo', st.bevel]);
+    comp(T.fxB.tex, layer.blend, opacity, last && !post.length);
+    let bev = null;
+    post.forEach(([fx, v], i) => {
+      const final = last && i === post.length - 1;
+      if (fx === 'satin') {
+        const b = this.blur(T, T.layer, Math.max(0.01, v.size * L * ctx.k * 0.5), 0);
+        this.r.draw(this.progs.satin, T.tmp, { uTex: T.layer.tex, uBlur: b.tex, uOff: shift(v), uOutSize: [ctx.W, ctx.H], ...this.blurScale(b, ctx), uColor: v.color, uInvert: v.invert === false ? 0 : 1, uOpacity: v.opacity / 100 });
+        comp(T.tmp.tex, v.blend || 'multiply', opacity, final);
+        return;
+      }
+      const size = Math.max(0.5, v.size * L * ctx.k);
+      if (!bev) bev = this.blur(T, T.layer, Math.max(0.5, size * 0.5 + (v.soften || 0) * L * ctx.k * 0.5), 0);
+      const ang = ((v.angle ?? 120) * Math.PI) / 180, ld = lin(Math.cos(ang), -Math.sin(ang)), n = Math.hypot(ld[0], ld[1]) || 1;
+      const hi = fx === 'hi';
+      this.r.draw(this.progs.bevel, T.tmp, {
+        uTex: T.layer.tex, uBlur: bev.tex, uOutSize: [ctx.W, ctx.H], ...this.blurScale(bev, ctx), uLight: [ld[0] / n, ld[1] / n],
+        uColor: hi ? v.hiColor || [1, 1, 1] : v.loColor || [0, 0, 0], uStyle: BEVEL_STYLE[v.style] ?? 0, uDepth: size * (v.depth ?? 100) / 100,
+        uAlt: ((v.altitude ?? 30) * Math.PI) / 180, uWhich: hi ? 0 : 1, uOpacity: (hi ? v.hiOpacity ?? 75 : v.loOpacity ?? 75) / 100, uDown: v.down ? 1 : 0,
+      });
+      comp(T.tmp.tex, hi ? v.hiBlend || 'screen' : v.loBlend || 'multiply', opacity, final);
+    });
   }
 
   blurScale(b, ctx) { return { uScale: [ctx.W / b.f / b.w, ctx.H / b.f / b.h] }; }

@@ -138,8 +138,15 @@ Lightroom to apply.
 
 ## Retouch
 
-Retouch is Develop's other mode (Ctrl+E switches, like Lightroom's "Edit in
-Photoshop", but nothing is exported), laid out like Photoshop: menu bar (File,
+Retouch has its own documents, apart from the folder open in Culling and
+Develop: Photoshop files in Pictures\Flightroom Retouch (`src-tauri/src/retouchdocs.rs`,
+`src/components/rtdocs.jsx`). File > New (Ctrl+N) makes a blank one (size and
+background colour); File > Open (Ctrl+O) and Develop's "Edit in Retouch"
+(Ctrl+E) copy a picture or a Photoshop file in (a RAW, or a picture with
+Develop edits, is developed full size first); the original is never changed.
+Photos that already had Retouch layers before 3.10 still edit them in place.
+Within Retouch, Ctrl+E switches between the document's layers and Develop's
+adjustments under them. It is laid out like Photoshop: menu bar (File,
 Edit, Image, Layer, Type, Select, Filter, View, Window, Help) with Photoshop's
 Windows shortcuts, options bar, tool bar and Color / Swatches / Properties /
 Adjustments / Layers / History panels.
@@ -154,13 +161,27 @@ Adjustments / Layers / History panels.
   Color Balance, Black & White, Photo Filter, Channel Mixer, Selective Color,
   Invert, Posterize, Threshold, Gradient Map), solid and gradient fill layers,
   type and shape layers, groups, layer masks, clipping masks, 27 blend modes,
-  opacity and fill, locks, and layer styles (drop shadow, outer glow, stroke,
-  color overlay).
+  opacity and fill, locks, and layer styles (bevel & emboss, stroke, inner
+  shadow, inner glow, satin, color / gradient / pattern overlay, outer glow,
+  drop shadow; `src/develop/patterns.js` holds the built-in patterns).
+- Saving: a document saves itself about 2.5 s after the last change, and at
+  once on moving to another one or leaving (`src/develop/psdsave.js`). The
+  window renders each layer's own pixels, each mask and the flattened picture
+  in tiles (the export path, with a sink); layers unchanged since the last
+  save come from memory. `src-tauri/src/psdwrite.rs` writes a real layered
+  Photoshop file: pixel layers, groups (with masks), masks, blend modes,
+  opacity/fill, clipping, live adjustment layers Photoshop has (others as
+  pixels), Solid Color fills, layer styles (lfx2) and patterns, plus
+  Flightroom's own layer list (resource 7000, fingerprinted against the layer
+  data) and the pictures image layers draw from (7001). Reopened, the layers
+  come back from 7000, all editable (text stays text); if Photoshop changed the
+  file since, its layers are read again instead. In Photoshop, text and
+  filters arrive as pixels.
 - Photoshop documents: `src-tauri/src/psd.rs` reads PSD and PSB files (8, 16
   and 32-bit RGB, Grayscale and CMYK; raw, PackBits and ZIP data). The
   background layer (or the flattened picture, when there are no layers) is
   what Develop develops; the rest come in as Retouch layers the first time the
-  document is opened (`src/develop/psdlayers.js`): pixel, text, shape and smart
+  document is opened (`src/develop/psdlayers.js`): pixel, shape and smart
   object layers as picture layers whose pixels stay in the document
   (`psd:<layer>`, served by `develop/psdlayer`), all 15 adjustment layers with
   their settings (Hue/Saturation's master only; Gradient Map's end colours;
@@ -168,8 +189,10 @@ Adjustments / Layers / History panels.
   fill, vector mask outline and stroke), groups, layer masks
   (`develop/psdmask`, as bitmap selections), clipping, blend modes, opacity,
   fill, visibility and layer styles (drop and inner shadow, outer and inner
-  glow, stroke, colour and gradient overlay). What doesn't come over (Bevel &
-  Emboss, Satin, Pattern Overlay, group masks) is listed when it opens.
+  glow, stroke, satin, bevel & emboss, colour, gradient and pattern overlay),
+  group masks, and type layers as editable text (font, size, colour, style,
+  alignment, tracking and leading; a layer with mixed styles takes its first).
+  What doesn't come over is listed when it opens.
 - Filters (Blur, Blur Gallery, Distort, Noise, Pixelate, Render, Sharpen,
   Stylize, Other) stay live on a layer like Smart Filters, clipped to the
   selection they were made with.

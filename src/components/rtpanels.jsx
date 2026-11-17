@@ -517,7 +517,7 @@ function LayersPanel({ rx, onDevelop }) {
       </div>
       <div className="rt-layer-btns">
         <button className="icon-btn" title="Add a layer style" disabled={!cur || cur.kind === 'group'} onClick={() => rx.setDialog({ type: 'style', id: cur.id, tab: 'blend' })}><Icon name="fx" size={15} /></button>
-        <button className="icon-btn" title={rx.selection ? 'Add a layer mask from the selection' : 'Add a layer mask'} disabled={!cur || cur.kind === 'group' || !!cur.mask} onClick={() => { acts.addMask(cur.id, rx.selection, false); rx.setEditMask(true); }}><Icon name="mask" size={15} /></button>
+        <button className="icon-btn" title={rx.selection ? 'Add a layer mask from the selection' : 'Add a layer mask'} disabled={!cur || !!cur.mask} onClick={() => { acts.addMask(cur.id, rx.selection, false); rx.setEditMask(true); }}><Icon name="mask" size={15} /></button>
         <PopMenu icon="adjust" title="New fill or adjustment layer" items={[
           { label: 'Solid Color…', icon: 'palette', run: () => { const id = acts.addFill({ type: 'solid', color: rx.rt.fg }, rx.selection); rx.setDialog({ type: 'solid', id }); } },
           { label: 'Gradient…', icon: 'gradient', run: () => acts.addFill({ type: 'gradient', g: { style: 'linear', x0: 0.5, y0: 1, x1: 0.5, y1: 0, c0: [...rx.rt.fg, 1], c1: [...rx.rt.fg, 0] } }, rx.selection) },

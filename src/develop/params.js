@@ -369,6 +369,11 @@ export function toXmp(s) {
 }
 
 /** True when the settings differ from what the photo looked like straight from the camera. */
+/** Whether `s` differs from `base` (the photo's settings as it comes, e.g. a JPEG's) anywhere but white balance. */
+export function editedFrom(s, base) {
+  return !!s.crop || !!s.masks?.length || !!s.layers?.length || SECTIONS.some((sec) => SECTION_KEYS[sec.id].some((k) => k !== 'temp' && k !== 'tint' && !same(s[k], base[k])));
+}
+
 export function isEdited(s, asShot) {
   return !!s.crop || !!s.masks?.length || !!s.layers?.length || SECTIONS.some((sec) => sectionEdited(s, sec.id, asShot));
 }

@@ -6,6 +6,7 @@ import { Dropdown, Icon } from './ui.jsx';
 import { Slider } from './slider.jsx';
 import { BLEND_MODES, COLOR_RANGES, bitmapSelection, colorRange } from '../develop/retouch.js';
 import { FILTER_DEF } from '../develop/filters.js';
+import { PATTERN_NAMES, builtInPattern, patternFromFile } from '../develop/patterns.js';
 import { TOOLS, hex } from './retouch.jsx';
 import { ColorInput, FilterParams, sl } from './rtpanels.jsx';
 
@@ -209,9 +210,13 @@ export const STYLE_DEFAULTS = {
   glow: { on: true, color: [1, 1, 0.75], opacity: 75, size: 0.006, spread: 0, blend: 'screen' },
   stroke: { on: true, color: [1, 0, 0], opacity: 100, size: 0.002 },
   overlay: { on: true, color: [1, 0, 0], opacity: 100 },
+  bevel: { on: true, style: 'inner', depth: 100, down: false, size: 0.005, soften: 0, angle: 120, altitude: 30, hiColor: [1, 1, 1], hiOpacity: 75, hiBlend: 'screen', loColor: [0, 0, 0], loOpacity: 75, loBlend: 'multiply' },
+  satin: { on: true, color: [0, 0, 0], opacity: 50, angle: 19, distance: 0.005, size: 0.007, invert: true, blend: 'multiply' },
+  pattern: { on: true, name: 'Checker', src: null, w: 64, h: 64, scale: 100, opacity: 100 },
 };
-export const STYLE_TABS = [['blend', 'Blending Options'], ['stroke', 'Stroke'], ['innerShadow', 'Inner Shadow'], ['innerGlow', 'Inner Glow'],
-  ['overlay', 'Color Overlay'], ['gradient', 'Gradient Overlay'], ['glow', 'Outer Glow'], ['shadow', 'Drop Shadow']];
+const BEVEL_STYLES = [['inner', 'Inner Bevel'], ['outer', 'Outer Bevel'], ['emboss', 'Emboss'], ['pillow', 'Pillow Emboss']];
+export const STYLE_TABS = [['blend', 'Blending Options'], ['bevel', 'Bevel & Emboss'], ['stroke', 'Stroke'], ['innerShadow', 'Inner Shadow'], ['innerGlow', 'Inner Glow'], ['satin', 'Satin'],
+  ['overlay', 'Color Overlay'], ['gradient', 'Gradient Overlay'], ['pattern', 'Pattern Overlay'], ['glow', 'Outer Glow'], ['shadow', 'Drop Shadow']];
 
 function StyleDialog({ rx, d, close }) {
   const l = rx.acts.byId(d.id);
@@ -219,7 +224,12 @@ function StyleDialog({ rx, d, close }) {
   const [tab, setTab] = useState(d.tab);
   const L = rx.L;
   const style = l?.style || {};
-  const set = (fx, patch) => rx.acts.change(d.id, { style: { ...style, [fx]: { ...STYLE_DEFAULTS[fx], ...style[fx], ...patch } } }, 'Layer Style');
+  const set = (fx, patch) => {
+    const v = { ...STYLE_DEFAULTS[fx], ...style[fx], ...patch };
+    if (fx === 'pattern' && !v.src) Object.assign(v, builtInPattern(v.name || 'Checker'));
+    rx.acts.change(d.id, { style: { ...style, [fx]: v } }, 'Layer Style');
+  };
+  const patFile = useRef(null);
   useEffect(() => { if (d.enable && d.tab !== 'blend' && !(style[d.tab]?.on)) set(d.tab, { on: true }); }, []);
   if (!l) return null;
   const fx = style[tab] || { ...STYLE_DEFAULTS[tab], on: false };
@@ -246,8 +256,31 @@ function StyleDialog({ rx, d, close }) {
           ) : (
             <>
               <label className="dev-check"><input type="checkbox" checked={!!fx.on} onChange={(e) => set(tab, { on: e.target.checked })} />{STYLE_TABS.find(([k]) => k === tab)[1]}</label>
-              {(tab === 'shadow' || tab === 'glow') && row('Blend Mode', <Dropdown value={fx.blend} onChange={(blend) => set(tab, { blend })} options={BLEND_MODES.map(([value, label]) => ({ value, label }))} />)}
-              {tab === 'gradient' ? (
+              {(tab === 'shadow' || tab === 'glow' || tab === 'satin') && row('Blend Mode', <Dropdown value={fx.blend} onChange={(blend) => set(tab, { blend })} options={BLEND_MODES.map(([value, label]) => ({ value, label }))} />)}
+              {tab === 'bevel' ? (
+                <>
+                  {row('Style', <Dropdown value={fx.style} onChange={(v) => set(tab, { style: v })} options={BEVEL_STYLES.map(([value, label]) => ({ value, label }))} />)}
+                  <Slider sl={sl('depth', 'Depth (%)', 1, 1000)} value={fx.depth} def={100} onSet={(k, v) => set(tab, { depth: v })} />
+                  <div className="seg small">{[[false, 'Up'], [true, 'Down']].map(([v, n]) => <button key={n} className={!!fx.down === v ? 'on' : ''} onClick={() => set(tab, { down: v })}>{n}</button>)}</div>
+                  {pxSl('size', 'Size')}
+                  {pxSl('soften', 'Soften', 16)}
+                  <Slider sl={sl('altitude', 'Altitude', 0, 90)} value={fx.altitude} def={30} onSet={(k, v) => set(tab, { altitude: v })} />
+                  {row('Highlight', <><Dropdown value={fx.hiBlend} onChange={(v) => set(tab, { hiBlend: v })} options={BLEND_MODES.map(([value, label]) => ({ value, label }))} /><ColorInput value={fx.hiColor} onChange={(v) => set(tab, { hiColor: v })} /></>)}
+                  <Slider sl={sl('hiOpacity', 'Highlight Opacity', 0, 100)} value={fx.hiOpacity} def={75} onSet={(k, v) => set(tab, { hiOpacity: v })} />
+                  {row('Shadow', <><Dropdown value={fx.loBlend} onChange={(v) => set(tab, { loBlend: v })} options={BLEND_MODES.map(([value, label]) => ({ value, label }))} /><ColorInput value={fx.loColor} onChange={(v) => set(tab, { loColor: v })} /></>)}
+                  <Slider sl={sl('loOpacity', 'Shadow Opacity', 0, 100)} value={fx.loOpacity} def={75} onSet={(k, v) => set(tab, { loOpacity: v })} />
+                </>
+              ) : tab === 'pattern' ? (
+                <>
+                  <div className="rt-patterns">
+                    {PATTERN_NAMES.map((n) => { const p = builtInPattern(n); return <button key={n} title={n} className={`rt-pattern${fx.name === n ? ' on' : ''}`} style={{ backgroundImage: `url(${p.src})` }} onClick={() => set(tab, { ...p })} />; })}
+                    {fx.src && !PATTERN_NAMES.includes(fx.name) && <button title={fx.name} className="rt-pattern on" style={{ backgroundImage: `url(${fx.src})` }} />}
+                    <button className="btn btn-small" onClick={() => patFile.current?.click()}>From a picture…</button>
+                    <input ref={patFile} type="file" accept="image/*" hidden onChange={async (e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) set(tab, await patternFromFile(f)); }} />
+                  </div>
+                  <Slider sl={sl('scale', 'Scale (%)', 1, 1000)} value={fx.scale} def={100} onSet={(k, v) => set(tab, { scale: v })} />
+                </>
+              ) : tab === 'gradient' ? (
                 <>
                   {row('From', <ColorInput value={fx.c0} onChange={(c0) => set(tab, { c0 })} />)}
                   {row('To', <ColorInput value={fx.c1} onChange={(c1) => set(tab, { c1 })} />)}
@@ -256,12 +289,13 @@ function StyleDialog({ rx, d, close }) {
                   <label className="dev-check"><input type="checkbox" checked={!!fx.reverse} onChange={(e) => set(tab, { reverse: e.target.checked })} />Reverse</label>
                 </>
               ) : row('Colour', <ColorInput value={fx.color} onChange={(color) => set(tab, { color })} />)}
-              <Slider sl={sl('opacity', 'Opacity', 0, 100)} value={fx.opacity} def={STYLE_DEFAULTS[tab].opacity} onSet={(k, v) => set(tab, { opacity: v })} />
-              {['shadow', 'innerShadow', 'gradient'].includes(tab) && <Slider sl={sl('angle', 'Angle', -180, 180)} value={fx.angle} def={STYLE_DEFAULTS[tab].angle} onSet={(k, v) => set(tab, { angle: v })} />}
-              {(tab === 'shadow' || tab === 'innerShadow') && pxSl('distance', 'Distance', 500)}
+              {tab !== 'bevel' && <Slider sl={sl('opacity', 'Opacity', 0, 100)} value={fx.opacity} def={STYLE_DEFAULTS[tab].opacity} onSet={(k, v) => set(tab, { opacity: v })} />}
+              {['shadow', 'innerShadow', 'gradient', 'satin', 'bevel'].includes(tab) && <Slider sl={sl('angle', 'Angle', -180, 180)} value={fx.angle} def={STYLE_DEFAULTS[tab].angle} onSet={(k, v) => set(tab, { angle: v })} />}
+              {(tab === 'shadow' || tab === 'innerShadow' || tab === 'satin') && pxSl('distance', 'Distance', 500)}
+              {tab === 'satin' && <label className="dev-check"><input type="checkbox" checked={fx.invert !== false} onChange={(e) => set(tab, { invert: e.target.checked })} />Invert</label>}
               {(tab === 'shadow' || tab === 'glow') && <Slider sl={sl('spread', 'Spread', 0, 100)} value={fx.spread} def={0} onSet={(k, v) => set(tab, { spread: v })} />}
               {(tab === 'innerShadow' || tab === 'innerGlow') && <Slider sl={sl('choke', 'Choke', 0, 100)} value={fx.choke} def={0} onSet={(k, v) => set(tab, { choke: v })} />}
-              {tab !== 'overlay' && tab !== 'gradient' && pxSl('size', 'Size')}
+              {['shadow', 'glow', 'innerShadow', 'innerGlow', 'stroke', 'satin'].includes(tab) && pxSl('size', 'Size')}
             </>
           )}
         </div>

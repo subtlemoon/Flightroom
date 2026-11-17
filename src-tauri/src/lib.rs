@@ -10,6 +10,8 @@ pub mod display;
 pub mod formats;
 pub mod icc;
 pub mod psd;
+pub mod psdwrite;
+pub mod retouchdocs;
 pub mod lens;
 pub mod looks;
 pub mod migrate;
@@ -164,6 +166,7 @@ pub fn run() {
             let thumbs = app.path().app_local_data_dir()?.join("thumbs");
             app.manage(photos::Photos::new(thumbs));
             app.manage(updater::Updater::default());
+            app.manage(retouchdocs::Docs::default());
             app.manage(develop::Develop::default());
             app.manage(catalog::Catalog::default());
             app.manage(ai::Ai::new(ai::models_dir(&handle)));
@@ -208,6 +211,12 @@ pub fn run() {
             develop::export_begin,
             develop::export_tile,
             develop::export_finish,
+            retouchdocs::retouch_folder,
+            retouchdocs::retouch_new,
+            retouchdocs::retouch_import,
+            retouchdocs::retouch_save_begin,
+            retouchdocs::retouch_save_tile,
+            retouchdocs::retouch_save_finish,
             develop::save_text_file,
             develop::develop_denoise,
             develop::develop_denoise_cancel,

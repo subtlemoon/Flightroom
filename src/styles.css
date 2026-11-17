@@ -841,6 +841,9 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 .rt-props .seg { align-self: flex-start; }
 .rt-textedit { width: 100%; resize: vertical; font: inherit; font-size: 13px; padding: 6px 8px; border-radius: var(--r-sm); border: 1px solid var(--line-2); background: var(--bg); color: var(--text); outline: none; }
 .rt-gradbar { height: 14px; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--line-2); }
+.rt-patterns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.rt-pattern { width: 34px; height: 34px; border-radius: 4px; border: 0; background-size: 34px; box-shadow: inset 0 0 0 1px var(--line-2); cursor: pointer; }
+.rt-pattern.on { box-shadow: 0 0 0 2px var(--accent); }
 .rt-dialog { position: fixed; top: 120px; left: 50%; transform: translateX(-50%); width: 360px; max-height: calc(100vh - 160px); display: flex; flex-direction: column; background: var(--raised); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow); z-index: 70; animation: fade 0.15s var(--ease); }
 .rt-dialog.wide { width: 620px; }
 .rt-dialog.side { left: auto; right: 336px; transform: none; }
@@ -1028,3 +1031,18 @@ button.lib-chip.some { padding: 0 8px; cursor: pointer; }
 .lib-kw-add input:focus { border-color: var(--focus); }
 .lib-open { display: flex; gap: 6px; margin-top: 12px; }
 @media (max-width: 1100px) { .lib { grid-template-columns: 190px 1fr 220px; } }
+
+/* Retouch documents: File > New (rtdocs.jsx) */
+.rt-newdoc { display: flex; flex-direction: column; gap: 12px; }
+.rt-newdoc label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.rt-newdoc input:not([type=color]) { background: var(--bg-2); border: 1px solid var(--line-2); border-radius: var(--r); padding: 7px 9px; color: var(--text); outline: none; font-size: 13px; }
+.rt-newdoc input:focus { border-color: var(--focus); }
+.rt-newdoc input[type=number] { width: 110px; }
+.rt-newdoc-sizes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.rt-newdoc-sizes .chip { height: auto; padding: 6px 10px; border-radius: var(--r); display: flex; flex-direction: column; align-items: flex-start; gap: 2px; color: var(--text); }
+.rt-newdoc-row { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
+.rt-newdoc-row > span { font-size: 12px; color: var(--muted); padding-bottom: 8px; }
+.rt-newdoc-row .chip { display: inline-flex; align-items: center; gap: 6px; flex-direction: row; font-size: 12px; color: var(--text); }
+.rt-newdoc-row label.chip input[type=color] { width: 16px; height: 16px; padding: 0; border: none; background: none; cursor: pointer; }
+.rt-docswatch { display: inline-block; vertical-align: middle; flex: none; width: 12px; height: 12px; margin-right: 6px; border-radius: 3px; border: 1px solid var(--line-2); }
+.rt-docbtns { margin-right: 8px; }

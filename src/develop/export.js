@@ -31,9 +31,19 @@ export function tileGrid(EW, EH, reach, maxPadded = MAX_PADDED) {
   return { pad, tiles };
 }
 
+/** How far past its own pixels a layer's styles, filters and feathered mask reach (output px). */
+export function layerReach(l, long, k) {
+  const st = l.style || {}, on = (x) => x && x.on !== false;
+  const styles = Math.max(on(st.shadow) ? (st.shadow.distance + st.shadow.size) * long : 0, on(st.glow) ? st.glow.size * long : 0, on(st.stroke) ? st.stroke.size * long : 0,
+    on(st.bevel) ? (st.bevel.size + (st.bevel.soften || 0)) * long : 0, on(st.satin) ? (st.satin.distance + st.satin.size) * long : 0);
+  const filters = (l.filters || []).filter((x) => x.on !== false).reduce((m, x) => m + (DISTORT.has(x.type) ? (x.rad || 0) * long : filterReach(x)), 0);
+  const smear = l.ops.some((op) => SNAPSHOT.has(op.t)) ? 8 : 0;
+  return (styles * 1.5 + filters + (l.mask && !l.mask.off ? (l.mask.feather || 0) * long : 0)) * k + smear;
+}
+
 const healRing = (long, k) => Math.max(16, long * k * 0.004);
 /** The w x h middle of a padded tile's pixels (rows bottom first, as read back). */
-function inner(px, pw, pad, w, h) {
+export function inner(px, pw, pad, w, h) {
   const out = new Uint8Array(w * h * 4);
   for (let y = 0; y < h; y++) out.set(px.subarray(((y + pad) * pw + pad) * 4, ((y + pad) * pw + pad + w) * 4), y * w * 4);
   return out;
@@ -54,7 +64,7 @@ export function exportSize(frame, longEdge) {
 
 /**
  * Renders and saves one photo. opts: { folder, longEdge, quality, onProgress(0-1), cancelled(),
- * renderer (one to reuse for a batch; else one is made for this photo) }.
+ * renderer (one to reuse for a batch; else one is made for this photo), tag (false: not marked as exported) }.
  * Returns the saved file's path.
  */
 export async function exportPhoto(photo, info, s, opts) {
@@ -71,13 +81,20 @@ export async function exportPhoto(photo, info, s, opts) {
     const f = geo.frame(s.crop);
     const { scale, w: EW, h: EH } = exportSize(f, opts.longEdge);
     const k = scale; // output px per oriented px
-    const started = await dev.exportBegin({ job, folder: opts.folder, name: photo.copy ? photo.name.replace(/(\.[^.]*)?$/, ` Copy ${photo.copy}$1`) : photo.name, width: EW, height: EH, quality: opts.quality, source: photo.id, replace: !!opts.replace });
+    // Where the tiles go: a JPEG, or (opts.sink) a Retouch document being saved (psdsave.js).
+    const sink = opts.sink || {
+      begin: () => dev.exportBegin({ job, folder: opts.folder, name: photo.copy ? photo.name.replace(/(\.[^.]*)?$/, ` Copy ${photo.copy}$1`) : photo.name, width: EW, height: EH, quality: opts.quality, source: opts.tag === false ? null : photo.id, replace: !!opts.replace }),
+      tile: (x, y, w, h, px) => dev.exportTile(job, x, y, w, h, px),
+      finish: () => dev.exportFinish(job),
+      cancel: () => dev.exportFinish(job, true),
+    };
+    const started = await sink.begin(EW, EH);
     if (started?.error) throw new Error(started.error);
     begun = true;
     const toOriented = geo.frameToOriented(f);
     const toSource = sourceMap(geo, s);
     const margin = 16 + 4 * s.sharpenRadius + (s.removeCA || s.defringePurple || s.defringeGreen ? 8 : 0);
-    const layers = visibleLayers(s);
+    const layers = opts.drawList || visibleLayers(s);
     // A heal works out its colour from all around its edge, and filters, layer
     // styles and feathered masks reach for pixels around them, so a tile is
     // drawn with room around it for what crosses into the next one.
@@ -87,13 +104,7 @@ export async function exportPhoto(photo, info, s, opts) {
       const b = opBounds(op, geo.ow, geo.oh);
       return b ? Math.max(b[2] - b[0], b[3] - b[1]) * k * 0.5 + healRing(long, k) : 0;
     })) : 0;
-    const reach = (l) => {
-      const st = l.style || {}, on = (x) => x && x.on !== false;
-      const styles = Math.max(on(st.shadow) ? (st.shadow.distance + st.shadow.size) * long : 0, on(st.glow) ? st.glow.size * long : 0, on(st.stroke) ? st.stroke.size * long : 0);
-      const filters = (l.filters || []).filter((x) => x.on !== false).reduce((m, x) => m + (DISTORT.has(x.type) ? (x.rad || 0) * long : filterReach(x)), 0);
-      const smear = l.ops.some((op) => SNAPSHOT.has(op.t)) ? 8 : 0;
-      return (styles * 1.5 + filters + (l.mask && !l.mask.off ? (l.mask.feather || 0) * long : 0)) * k + smear;
-    };
+    const reach = (l) => layerReach(l, long, k);
     const { pad: P, tiles } = tileGrid(EW, EH, Math.max(healPad, ...layers.map(reach), 0), Math.min(MAX_PADDED, r.maxTex));
     for (let i = 0; i < tiles.length; i++) {
       if (opts.cancelled?.()) throw new Error('cancelled');
@@ -127,18 +138,19 @@ export async function exportPhoto(photo, info, s, opts) {
         for (const g of regions) frames.push(await fetchFrame(dev.regionUrl(photo, g, dn)));
         r.setOpHi(new Map(regions.map((g, i) => [g.id, { frame: frames[i], rect: [g.x / geo.sw, g.y / geo.sh, g.w / geo.sw, g.h / geo.sh] }])));
       }
-      let px = await r.renderTile(info, s, geo, f, out2frame, tw, th);
+      sink.startTile?.(r);
+      let px = await r.renderTile(info, s, geo, f, out2frame, tw, th, opts.drawList);
       if (P) px = inner(px, tw, P, itw, ith);
-      const res = await dev.exportTile(job, itx, ity, itw, ith, px);
+      const res = await sink.tile(itx, ity, itw, ith, px, { tw, P });
       if (res?.error) throw new Error(res.error);
       opts.onProgress?.((i + 1) / (tiles.length + 1));
     }
-    const path = await dev.exportFinish(job);
+    const path = await sink.finish();
     if (path?.error) throw new Error(path.error);
     opts.onProgress?.(1);
     return path;
   } catch (err) {
-    if (begun) dev.exportFinish(job, true);
+    if (begun) (opts.sink || { cancel: () => dev.exportFinish(job, true) }).cancel();
     throw err;
   } finally {
     if (r !== opts.renderer) r.dispose();

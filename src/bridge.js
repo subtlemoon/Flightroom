@@ -128,6 +128,16 @@ export const bridge = inApp ? {
     exportTile: (job, x, y, w, h, rgba) => call('export_tile', rgba, { headers: { 'x-job': job, 'x-x': String(x), 'x-y': String(y), 'x-w': String(w), 'x-h': String(h) } }),
     exportFinish: (job, cancel = false) => call('export_finish', { job, cancel }),
   },
+  // Retouch's own documents (Photoshop files in their own folder) and saving work into them.
+  retouch: {
+    folder: () => call('retouch_folder'),
+    newDoc: (name, width, height, colour) => call('retouch_new', { name, width, height, colour }),
+    importDoc: (path, remove = false) => call('retouch_import', { path, remove }),
+    pickFile: () => open({ title: 'Open a picture or Photoshop file', multiple: false, filters: [{ name: 'Pictures and Photoshop files', extensions: ['psd', 'psb', 'jpg', 'jpeg', 'png', 'tif', 'tiff', 'heic', 'heif', 'hif', 'avif', 'webp', 'bmp', 'gif'] }] }).catch(() => null),
+    saveBegin: (args) => call('retouch_save_begin', { args }),
+    saveTile: (job, kind, slot, x, y, w, h, rgba) => call('retouch_save_tile', rgba, { headers: { 'x-job': job, 'x-kind': kind, 'x-slot': String(slot), 'x-x': String(x), 'x-y': String(y), 'x-w': String(w), 'x-h': String(h) } }),
+    saveFinish: (job, cancel = false) => call('retouch_save_finish', { job, cancel }),
+  },
   // On-device AI: models download on first use; photos never leave the computer.
   ai: {
     status: () => invoke('ai_status'),

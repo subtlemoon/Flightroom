@@ -24,7 +24,7 @@ import { createSaver } from '../develop/saver.js';
 import { RESERVED_KEYS, keyLabel, normKey, ratingForKey, ratingKeys, zoomKey } from '../cull/keys.js';
 import {
   COLORS, COLOR_HUES, CURVE_PRESETS, PROFILES, SECTIONS, SLIDER, SLIDERS, TONE_MAPPERS, VIGNETTE_STYLES, WB_PRESETS,
-  curveName, defaults, fromXmp, isEdited, rememberProfile, resetSection, sectionEdited, toXmp,
+  curveName, defaults, editedFrom, fromXmp, isEdited, rememberProfile, resetSection, sectionEdited, toXmp,
 } from '../develop/params.js';
 import { asShotTempTint, inv3 } from '../develop/color.js';
 import { adobeRendering } from '../develop/adobe.js';
@@ -41,9 +41,10 @@ import { screenColorOn, screenProfile } from '../develop/icc.js';
 import { RetouchStage } from './rtstage.jsx';
 import { OptionsBar, RetouchPanels, ToolRail } from './rtpanels.jsx';
 import { MenuBar, RetouchDialogs } from './rtmenus.jsx';
-import { findSpotSource, sourceRegions, visibleLayers } from '../develop/retouch.js';
+import { findSpotSource, layersFromText, sourceRegions, visibleLayers } from '../develop/retouch.js';
 import { forgetPlacedImages, setLayerUrls } from '../develop/raster.js';
 import { greyPixels, psdLayers } from '../develop/psdlayers.js';
+import { NewDocDialog, RetouchEmpty, copyToRetouch, openIntoRetouch, retouchFolder, saveOnOpen, takePending, useAutosave } from './rtdocs.jsx';
 import { forgetSelectionImages } from '../develop/selection.js';
 
 // The Develop tab: the full RAW file with Lightroom-style controls. Edits are
@@ -69,11 +70,20 @@ const saver = createSaver((sidecar, s) => app.develop.save(sidecar, toXmp(s)), {
   onError: (p, err) => saveFailed(p, err),
 });
 
-export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
+let rtDir = null; // the Retouch documents folder, once known
+
+export function DevelopView({ store, onCull, mode = 'develop', onMode, space }) {
   const retouch = mode === 'retouch';
+  // Retouch's own documents (rtdocs.jsx), apart from the folder open in Culling.
+  const docs = space === 'retouch';
   const bridge = app?.cull;
   const { state, actions } = store;
-  const folder = state.cull?.folder;
+  const [docsDir, setDocsDir] = useState(rtDir);
+  const [docsErr, setDocsErr] = useState('');
+  useEffect(() => {
+    if (docs && !docsDir && app) retouchFolder().then((d) => { rtDir = d; setDocsDir(d); }, (e) => setDocsErr(e.message || String(e)));
+  }, []);
+  const folder = docs ? docsDir : state.cull?.folder;
   const keys = ratingKeys(state.settings);
   const zKey = zoomKey(state.settings);
 
@@ -91,7 +101,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const [exporting, setExporting] = useState(null); // modal state
   const [clipboard, setClipboard] = useState(null); // { part, groups }
   const [copyGroups, setCopyGroups] = useStored('flightroom-copy-groups', { groups: null });
-  const [dialog, setDialog] = useState(null); // 'copy' | 'preset'
+  const [dialog, setDialog] = useState(null); // 'copy' | 'preset' | 'newdoc'
   const [presets, setPresets] = useStored('flightroom-presets', { list: [], open: true });
   const [hoverPreset, setHoverPreset] = useState(null);
   const [hoverLook, setHoverLook] = useState(null); // a look tile under the pointer: shown on the photo
@@ -112,7 +122,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   // Shared with Culling; its "Likely rejects" is Culling's own.
   const [filter, setFilter] = useState(() => (seen?.filter && seen.filter !== 'rejects' ? seen.filter : 'all')); // see inFilter
   // Same folder and position as the Culling tab.
-  const { list, setList, meta, requestMeta } = useFolder(bridge, folder, seen, filter, (res) => setCurrentId(res.photos[startAt(res, state.cull?.positions)]?.id ?? null));
+  const { list, setList, meta, requestMeta, open: readFolder } = useFolder(bridge, folder, seen, filter, (res) => setCurrentId(res.photos[startAt(res, state.cull?.positions)]?.id ?? null));
   const layout = useLayout();
   // The crop tool lives in the right panel, so cropping shows the panel.
   useEffect(() => { if (crop && !layout.panel) toggle('panel'); }, [crop]);
@@ -136,6 +146,11 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   const { picked, setPicked, selectInStrip } = useStripPick(photos, index, (i) => go(i));
 
   usePosition(actions, list?.folder, photo ? allPhotos.findIndex((p) => p.id === photo.id) : -1);
+  // A Retouch document just made or opened: shown as soon as the list has it.
+  useEffect(() => {
+    const id = docs && takePending(list?.photos);
+    if (id) { setFilter('all'); setCurrentId(id); }
+  }, [list]);
   useEffect(() => {
     if (!photo) return;
     requestMeta([photo.id, ...photos.slice(Math.max(0, index - 3), index + META_WINDOW).map((p) => p.id)]);
@@ -177,13 +192,21 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
           if (info.settings?.ColorNoiseReduction == null) st.nrColor = 0;
         }
       }
+      // A Photoshop document Flightroom saved: its layers as they were (Retouch's own, all editable).
+      const fresh = !settingsCache.current.has(photo.id);
+      const saved = info.psd?.saved;
+      if (fresh && saved?.ok && info.own?.Layers == null) st = { ...st, layers: layersFromText(saved.layers) };
       setS(st);
       rxRef.current?.reset(st.layers);
-      // A Photoshop document opened for the first time: its layers rebuilt in Retouch.
-      if (info.psd && !settingsCache.current.has(photo.id) && info.own?.Layers == null && info.psd.layers.length) {
+      // A Photoshop document opened for the first time, or changed in Photoshop since
+      // Flightroom saved it: its layers rebuilt in Retouch.
+      const changed = !!saved && !saved.ok;
+      if (info.psd && fresh && (changed || (!saved && info.own?.Layers == null)) && info.psd.layers.length) {
+        if (docs) saveOnOpen(photo.id);
         psdLayers(info.psd, (i) => greyPixels(app.develop.psdMaskUrl(photo.id, i))).then((layers) => {
           if (!live || !layers.length) return;
-          setS((old) => (old && !old.layers?.length ? { ...old, layers } : old));
+          if (changed) dirty.current = true;
+          setS((old) => (old && (changed || !old.layers?.length) ? { ...old, layers } : old));
           rxRef.current?.reset(layers);
           const notes = info.psd.notes || [];
           const more = notes.length > 2 ? ` and ${notes.length - 2} more` : '';
@@ -422,7 +445,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
         { label: 'Zoom in / fit', hint: keyLabel(zKey), onClick: () => stageApi.current.toggleZoom?.() },
         '-',
       ] : []),
-      onMode && { label: retouch ? 'Back to Develop' : 'Edit in Retouch', icon: retouch ? 'develop' : 'layers', hint: 'Ctrl+E', disabled: !s, onClick: () => onMode(retouch ? 'develop' : 'retouch') },
+      onMode && { label: retouch ? 'Back to Develop' : docs ? 'Back to Retouch' : 'Edit in Retouch', icon: retouch ? 'develop' : 'layers', hint: 'Ctrl+E', disabled: !s || copying, onClick: switchMode },
       onCull && { label: 'Show in Culling', icon: 'photo', hint: 'G', onClick: onCull },
       { label: many ? `Export ${many} photos…` : 'Export…', icon: 'export', hint: 'Ctrl+Shift+E', disabled: !s, onClick: () => setExporting({}) },
       '-',
@@ -482,8 +505,35 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   // Retouch: Photoshop's tools, layers, selections, menus and keys (retouch.jsx).
   const info = photo && opened?.id === photo.id ? opened.info : null;
   const geo = info && (geoCache.current?.info === info ? geoCache.current.geo : (geoCache.current = { info, geo: new Geometry(info.width, info.height, info.orientation, info.lens) }).geo);
+  // Retouch documents: a new one, a picture or Photoshop file opened as one, and
+  // Develop's "Edit in Retouch" (a copy of the photo, developed, as a document).
+  const docFailed = (e) => setToast(`Couldn't open that in Retouch: ${e?.message || e}`);
+  const newDoc = () => setDialog('newdoc');
+  const openDoc = () => openIntoRetouch().then((path) => { if (path) readFolder(folder); }, docFailed);
+  const [copying, setCopying] = useState(false);
+  const toRetouch = async () => {
+    if (!s || !info || copying) return;
+    // Layers made on the photo itself before Retouch had its own documents stay editable there.
+    if (info.own?.Layers != null && s.layers?.length) { onMode('retouch'); return; }
+    setCopying(true);
+    setToast(info.rendered ? 'Opening a copy in Retouch…' : 'Developing a copy for Retouch…');
+    try {
+      saver.flush();
+      // A picture is copied as it is unless Develop changed it (a RAW is always developed).
+      const base = fromXmp({}, null, opened.asShot, {}, info.look);
+      if (info.rendered) { base.sharpen = 0; base.nrColor = 0; }
+      await copyToRetouch(photo, info, s, editedFrom(s, base));
+      setToast('');
+      onMode('retouch', 'retouch');
+    } catch (e) { docFailed(e); } finally { setCopying(false); }
+  };
+  // Ctrl+E, the menu and the Develop / Retouch switch.
+  const switchMode = () => (retouch ? onMode('develop') : docs ? onMode('retouch') : toRetouch());
+  useAutosave(docs, photo, info, s, !!info, setToast);
+
   const rx = useRetouch({
     s, update, undo, info, geo, photo, stage: stageApi, toast: setToast, onMode, setCrop, autoTone,
+    ...(docs ? { newDoc, openDoc } : {}),
     aiMasks,
     exportNow: () => s && setExporting({}),
     revert: () => update((old) => ({ ...old, layers: [] }), 'Revert'),
@@ -519,7 +569,9 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
       // Ctrl+Shift+E: Export, as in Lightroom (Retouch has Photoshop's keys).
       if (ctrl && e.shiftKey && k === 'e' && !retouch) { e.preventDefault(); if (s) setExporting({}); return; }
       // Ctrl+E: Develop <-> Retouch (Lightroom's "Edit in Photoshop").
-      if (ctrl && k === 'e') { e.preventDefault(); if (s) onMode?.(retouch ? 'develop' : 'retouch'); return; }
+      if (ctrl && k === 'e') { e.preventDefault(); if (s && onMode) switchMode(); return; }
+      // Retouch documents: New (Ctrl+N) and Open (Ctrl+O), as in Photoshop.
+      if (docs && ctrl && !e.shiftKey && !e.altKey && (k === 'n' || k === 'o')) { e.preventDefault(); if (k === 'n') newDoc(); else openDoc(); return; }
       if (retouch && rx.onKey(e)) return;
       if (retouch && ctrl && (k === 'c' || k === 'v')) return;
       if (retouch && !ctrl && !e.altKey && (k.length === 1 || e.key === 'Delete') && !/^\d$/.test(e.key) && e.key !== '\\' && normKey(e.key) !== zKey) return;
@@ -570,6 +622,15 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
     return <div className="view"><div className="hero-empty"><div className="hero-icon"><Icon name="develop" size={40} /></div><h2>Develop runs in the desktop app</h2><p className="muted">Open Flightroom on your PC to edit RAW photos.</p></div></div>;
   }
 
+  if (docs && (!folder || list?.error)) {
+    return (
+      <div className="view"><div className="hero-empty">
+        <div className="hero-icon"><Icon name="heal" size={40} /></div>
+        <h2>{docsErr || list?.error ? 'The Retouch folder could not be opened' : 'Opening Retouch…'}</h2>
+        {(docsErr || list?.error) && <p className="muted">{docsErr || list.error}</p>}
+      </div></div>
+    );
+  }
   if (!folder || list?.error) {
     return (
       <div className="view"><div className="hero-empty">
@@ -608,6 +669,10 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
   return (
     <div className="develop">
       <header className="cull-bar">
+        {docs && <div className="dev-tools rt-docbtns">
+          <button className="icon-btn" title="New document (Ctrl+N)" onClick={newDoc}><Icon name="plus" size={16} /></button>
+          <button className="icon-btn" title="Open a picture or Photoshop file (Ctrl+O)" onClick={openDoc}><Icon name="folder" size={16} /></button>
+        </div>}
         <div className="grow cull-title">
           <div className="cull-folder" title={list?.folder || folder}>{photo ? <>{photoLabel(photo)}<ExportedTag id={photo.id} /></> : (list?.folder || folder).split(/[\\/]/).pop()}</div>
           <div className="cull-sub">{list?.loading ? 'Reading folder…' : `${photos.length ? index + 1 : 0} of ${photos.length}`}</div>
@@ -616,8 +681,8 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
           options={starOptions} />
         {onMode && (
           <div className="seg small dev-mode">
-            <button className={retouch ? '' : 'on'} onClick={() => onMode('develop')} title="Develop: Lightroom-style adjustments (Ctrl+E)">Develop</button>
-            <button className={retouch ? 'on' : ''} onClick={() => onMode('retouch')} title="Retouch: layers, brushes, clone and heal on the live photo (Ctrl+E)">Retouch</button>
+            <button className={retouch ? '' : 'on'} onClick={() => retouch && switchMode()} title={docs ? 'Develop this document: Lightroom-style adjustments under its layers (Ctrl+E)' : 'Develop: Lightroom-style adjustments (Ctrl+E)'}>Develop</button>
+            <button className={retouch ? 'on' : ''} disabled={copying} onClick={() => !retouch && switchMode()} title={docs || (info?.own?.Layers != null && s?.layers?.length) ? 'Retouch: layers, brushes, clone and heal (Ctrl+E)' : 'Edit in Retouch: opens a copy of this photo as a Photoshop document (Ctrl+E)'}>Retouch</button>
           </div>
         )}
         <div className="dev-tools">
@@ -656,6 +721,8 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
               maskView={editing && !retouch ? mainMaskView : null} previewView={layout.nav && !retouch ? maskView(selMask, overlay) || 'none' : null}
               maskTool={editing && selPart && !picker && !retouch ? { part: selPart, brush, hidden: overlay.pinsHidden, onPart: (patch) => acts.changePart(selMask.id, selPart.id, patch), setBrush } : null}
               retouch={retouch && s ? { rx, toast: setToast } : null} />
+          ) : docs && !(filter !== 'all' && allPhotos.length) ? (
+            <RetouchEmpty loading={list?.loading} onNew={newDoc} onOpen={openDoc} />
           ) : (
             <div className="hero-empty dev-msg"><h2>{list?.loading ? 'Reading folder…' : filter !== 'all' && allPhotos.length ? 'No photos with those stars' : 'No photos in this folder'}</h2></div>
           )}
@@ -685,6 +752,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
       {aiDialog}
       {aiMasks.lock}
       {mood.lock}
+      {dialog === 'newdoc' && <NewDocDialog onClose={() => setDialog(null)} onDone={() => { setDialog(null); readFolder(folder); }} />}
       {dialog === 'copy' && s && (
         <CopyDialog groups={copyGroups.groups} onClose={() => setDialog(null)} onDone={(groups) => {
           setCopyGroups({ groups });

@@ -58,6 +58,12 @@ pub struct Doc<'a> {
     pub global_angle: f64,
     /// Bottom layer first, as in the file.
     pub layers: Vec<Layer>,
+    /// The document's own tagged blocks (patterns among them).
+    pub globals: Vec<([u8; 4], Range<usize>)>,
+    /// Image resources by id (Flightroom keeps its own in 7000 and 7001).
+    pub resources: Vec<(u16, Range<usize>)>,
+    /// Where the layer records start and end (Flightroom's saves fingerprint them).
+    pub layer_span: Range<usize>,
     /// Where the flattened picture starts.
     merged: usize,
 }
@@ -196,6 +202,7 @@ impl<'a> Doc<'a> {
         let n = r.u32()? as usize;
         let res_end = r.i + n;
         let (mut icc, mut global_angle) = (None, 120.0);
+        let mut resources = Vec::new();
         while r.i + 12 <= res_end {
             if r.take(4)? != b"8BIM" {
                 break;
@@ -206,6 +213,7 @@ impl<'a> Doc<'a> {
             let size = r.u32()? as usize;
             let at = r.i;
             r.take(size + size % 2)?;
+            resources.push((id, at..at + size));
             match id {
                 1039 => icc = d.get(at..at + size),
                 1037 if size >= 4 => global_angle = i32::from_be_bytes(d[at..at + 4].try_into().unwrap()) as f64,
@@ -216,10 +224,13 @@ impl<'a> Doc<'a> {
         let n = r.len(psb)?;
         let lm_end = r.i.checked_add(n).ok_or(SHORT)?;
         let mut layers = Vec::new();
+        let mut globals = Vec::new();
+        let mut layer_span = 0..0;
         if n > 0 {
             let info = r.len(psb)?;
             let info_end = r.i + info;
             if info > 0 {
+                layer_span = r.i..info_end;
                 layers = layer_info(&mut Rd::new(d, r.i), info_end, psb)?;
             }
             r.i = info_end;
@@ -228,15 +239,17 @@ impl<'a> Doc<'a> {
                 let g = r.u32()? as usize;
                 r.i += g;
             }
+            globals = blocks(&mut r, lm_end, psb, 4);
             if layers.is_empty() {
-                for (k, at) in blocks(&mut r, lm_end, psb, 4) {
-                    if matches!(&k, b"Lr16" | b"Lr32" | b"Layr") {
+                for (k, at) in &globals {
+                    if matches!(k, b"Lr16" | b"Lr32" | b"Layr") {
+                        layer_span = at.clone();
                         layers = layer_info(&mut Rd::new(d, at.start), at.end, psb)?;
                     }
                 }
             }
         }
-        Ok(Doc { d, psb, w, h, channels, depth, mode, icc, global_angle, layers, merged: lm_end })
+        Ok(Doc { d, psb, w, h, channels, depth, mode, icc, global_angle, layers, globals, resources, layer_span, merged: lm_end })
     }
 
     /// The colour channels a layer of this document has (grey 1, RGB 3, CMYK 4).
@@ -448,6 +461,339 @@ impl<'a> Doc<'a> {
     }
 }
 
+/// A pattern from a document's Patt / Pat2 / Pat3 block: (id, name, w, h, RGBA).
+pub type Pattern = (String, String, usize, usize, Vec<u8>);
+
+/// The patterns kept in the document (what its Pattern Overlays fill with).
+pub fn patterns(doc: &Doc) -> Vec<Pattern> {
+    let mut out = Vec::new();
+    for (k, at) in &doc.globals {
+        if !matches!(k, b"Patt" | b"Pat2" | b"Pat3") {
+            continue;
+        }
+        let b = &doc.d[at.clone()];
+        let mut i = 0;
+        while i + 4 <= b.len() {
+            let n = u32::from_be_bytes(b[i..i + 4].try_into().unwrap()) as usize;
+            let Some(p) = b.get(i + 4..i + 4 + n) else { break };
+            if let Some(pat) = pattern(p) {
+                out.push(pat);
+            }
+            i = (i + 4 + n).div_ceil(4) * 4;
+        }
+    }
+    out
+}
+
+fn pattern(b: &[u8]) -> Option<Pattern> {
+    let mut r = Rd::new(b, 0);
+    if r.u32().ok()? != 1 {
+        return None;
+    }
+    let mode = r.u32().ok()?;
+    let (ph, pw) = (r.u16().ok()? as usize, r.u16().ok()? as usize);
+    let name = r.unicode().ok()?;
+    let n = r.u8().ok()? as usize;
+    let id = String::from_utf8_lossy(r.take(n).ok()?).into_owned();
+    let mut palette = None;
+    if mode == 2 {
+        palette = Some(r.take(768).ok()?.to_vec());
+        r.take(4).ok()?;
+    }
+    // A virtual memory array list: the picture's channels.
+    if r.u32().ok()? != 3 {
+        return None;
+    }
+    r.u32().ok()?;
+    let rect = [r.i32().ok()?, r.i32().ok()?, r.i32().ok()?, r.i32().ok()?];
+    let (w, h) = ((rect[3] - rect[1]).max(0) as usize, (rect[2] - rect[0]).max(0) as usize);
+    let _ = (pw, ph);
+    if w == 0 || h == 0 || w * h > 16_000_000 {
+        return None;
+    }
+    let nch = r.u32().ok()? as usize;
+    let mut chans: Vec<Option<Vec<u8>>> = Vec::new();
+    for _ in 0..(nch + 2).min(64) {
+        if r.u32().ok()? == 0 {
+            chans.push(None);
+            continue;
+        }
+        let len = r.u32().ok()? as usize;
+        if len == 0 {
+            chans.push(None);
+            continue;
+        }
+        let start = r.i;
+        let depth = r.u32().ok()?;
+        r.take(16).ok()?;
+        r.u16().ok()?;
+        let comp = r.u8().ok()?;
+        let data = r.take((start + len).checked_sub(r.i)?).ok()?;
+        if depth != 8 {
+            chans.push(None);
+            continue;
+        }
+        let plane = if comp == 1 {
+            let counts: Vec<usize> = (0..h).map(|y| u16::from_be_bytes([data[y * 2], data[y * 2 + 1]]) as usize).collect();
+            let mut out = vec![0u8; w * h];
+            let mut at = h * 2;
+            for (y, c) in counts.iter().enumerate() {
+                packbits(data.get(at..at + c)?, &mut out[y * w..(y + 1) * w]);
+                at += c;
+            }
+            out
+        } else {
+            data.get(..w * h)?.to_vec()
+        };
+        chans.push(Some(plane));
+    }
+    let get = |i: usize| chans.get(i).cloned().flatten();
+    let mut rgba = vec![255u8; w * h * 4];
+    match mode {
+        1 | 8 => {
+            let g = get(0)?;
+            for (i, v) in g.iter().enumerate() {
+                rgba[i * 4..i * 4 + 3].fill(*v);
+            }
+        }
+        2 => {
+            let (ix, pal) = (get(0)?, palette?);
+            for (i, v) in ix.iter().enumerate() {
+                let k = *v as usize;
+                rgba[i * 4] = pal[k * 3];
+                rgba[i * 4 + 1] = pal[k * 3 + 1];
+                rgba[i * 4 + 2] = pal[k * 3 + 2];
+            }
+        }
+        _ => {
+            let (r_, g, b) = (get(0)?, get(1)?, get(2)?);
+            for i in 0..w * h {
+                rgba[i * 4] = r_[i];
+                rgba[i * 4 + 1] = g[i];
+                rgba[i * 4 + 2] = b[i];
+            }
+            if let Some(a) = get(3).filter(|_| nch > 3) {
+                for i in 0..w * h {
+                    rgba[i * 4 + 3] = a[i];
+                }
+            }
+        }
+    }
+    Some((id, name, w, h, rgba))
+}
+
+/// RGBA pixels as a PNG data URL.
+pub fn png_data_url(w: usize, h: usize, rgba: &[u8]) -> Option<String> {
+    use base64::Engine;
+    use image::ImageEncoder;
+    let mut png = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut png).write_image(rgba, w as u32, h as u32, image::ExtendedColorType::Rgba8).ok()?;
+    Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png)))
+}
+
+/// Photoshop's text engine data (a PostScript-like dictionary) as JSON.
+fn engine_data(b: &[u8]) -> Option<Value> {
+    let mut i = 0;
+    let v = engine_value(b, &mut i, 0)?;
+    Some(v)
+}
+
+fn engine_skip(b: &[u8], i: &mut usize) {
+    while *i < b.len() && (b[*i].is_ascii_whitespace() || b[*i] == 0) {
+        *i += 1;
+    }
+}
+
+fn engine_value(b: &[u8], i: &mut usize, depth: usize) -> Option<Value> {
+    if depth > 64 {
+        return None;
+    }
+    engine_skip(b, i);
+    let c = *b.get(*i)?;
+    if b[*i..].starts_with(b"<<") {
+        *i += 2;
+        let mut m = Map::new();
+        loop {
+            engine_skip(b, i);
+            if b.get(*i..)?.starts_with(b">>") {
+                *i += 2;
+                return Some(Value::Object(m));
+            }
+            if b[*i] != b'/' {
+                return None;
+            }
+            *i += 1;
+            let s = *i;
+            while *i < b.len() && !b[*i].is_ascii_whitespace() && !matches!(b[*i], b'/' | b'<' | b'[' | b'(' | b'>' | b']') {
+                *i += 1;
+            }
+            let k = String::from_utf8_lossy(&b[s..*i]).into_owned();
+            let v = engine_value(b, i, depth + 1)?;
+            m.insert(k, v);
+        }
+    }
+    match c {
+        b'[' => {
+            *i += 1;
+            let mut a = Vec::new();
+            loop {
+                engine_skip(b, i);
+                if *b.get(*i)? == b']' {
+                    *i += 1;
+                    return Some(Value::Array(a));
+                }
+                a.push(engine_value(b, i, depth + 1)?);
+            }
+        }
+        b'(' => {
+            *i += 1;
+            let mut raw = Vec::new();
+            while *i < b.len() && b[*i] != b')' {
+                if b[*i] == b'\\' && *i + 1 < b.len() {
+                    *i += 1;
+                }
+                raw.push(b[*i]);
+                *i += 1;
+            }
+            *i += 1;
+            let text = if raw.starts_with(&[0xFE, 0xFF]) {
+                let u: Vec<u16> = raw[2..].chunks(2).filter(|c| c.len() == 2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+                String::from_utf16_lossy(&u)
+            } else {
+                String::from_utf8_lossy(&raw).into_owned()
+            };
+            Some(Value::String(text))
+        }
+        b'/' => {
+            *i += 1;
+            let s = *i;
+            while *i < b.len() && !b[*i].is_ascii_whitespace() && !matches!(b[*i], b'/' | b'<' | b'[' | b'(' | b'>' | b']') {
+                *i += 1;
+            }
+            Some(Value::String(String::from_utf8_lossy(&b[s..*i]).into_owned()))
+        }
+        _ => {
+            let s = *i;
+            while *i < b.len() && !b[*i].is_ascii_whitespace() && !matches!(b[*i], b'/' | b'<' | b'[' | b'(' | b'>' | b']') {
+                *i += 1;
+            }
+            let t = std::str::from_utf8(&b[s..*i]).ok()?;
+            if *i == s {
+                return None;
+            }
+            Some(match t {
+                "true" => Value::Bool(true),
+                "false" => Value::Bool(false),
+                _ => t.parse::<f64>().map(|f| json!(f)).unwrap_or(Value::String(t.into())),
+            })
+        }
+    }
+}
+
+/// A PostScript font name as the family a computer knows it by, and whether it's bold and italic.
+fn font_family(ps: &str) -> (String, bool, bool) {
+    let (fam, style) = ps.split_once('-').unwrap_or((ps, ""));
+    let fam = fam.trim_end_matches("PSMT").trim_end_matches("MT").trim_end_matches("PS");
+    let mut out = String::new();
+    let cs: Vec<char> = fam.chars().collect();
+    for (i, c) in cs.iter().enumerate() {
+        if i > 0 && c.is_uppercase() && (cs[i - 1].is_lowercase() || cs.get(i + 1).is_some_and(|n| n.is_lowercase()) && cs[i - 1].is_uppercase()) {
+            out.push(' ');
+        }
+        out.push(*c);
+    }
+    let st = style.to_ascii_lowercase();
+    let bold = st.contains("bold") || st.contains("black") || st.contains("heavy") || ps.to_ascii_lowercase().contains("bold");
+    (out, bold, st.contains("italic") || st.contains("oblique"))
+}
+
+/// A type layer as Retouch's text: what it says, its font, size, colour and place.
+fn text_layer(doc: &Doc, l: &Layer, notes: &mut Vec<String>) -> Option<Value> {
+    let b = doc.block(l, b"TySh")?;
+    let mut r = Rd::new(b, 0);
+    r.u16().ok()?;
+    let t: Vec<f64> = (0..6).map(|_| r.f64()).collect::<R<_>>().ok()?;
+    r.u16().ok()?;
+    r.u32().ok()?;
+    let at = r.i;
+    let d = descriptor(&mut r, 0).ok()?;
+    let mut text = d.get("Txt").and_then(Value::as_str).unwrap_or("").to_string();
+    let range = d.get("EngineData").and_then(|e| e.get("data")).and_then(Value::as_array)?;
+    let (s, e) = (range.first()?.as_u64()? as usize, range.get(1)?.as_u64()? as usize);
+    // tdta positions are within the block.
+    let _ = at;
+    let ed = engine_data(b.get(s..e)?)?;
+    let eng = ed.get("EngineDict")?;
+    if text.is_empty() {
+        text = eng.get("Editor").and_then(|x| x.get("Text")).and_then(Value::as_str).unwrap_or("").to_string();
+    }
+    let text = text.trim_end_matches(['\r', '\n']).replace('\r', "\n");
+    let runs = eng.get("StyleRun").and_then(|x| x.get("RunArray")).and_then(Value::as_array);
+    let first = runs.and_then(|a| a.first()).and_then(|x| x.get("StyleSheet")).and_then(|x| x.get("StyleSheetData"));
+    let res = ed.get("ResourceDict").or_else(|| ed.get("DocumentResources"));
+    let def = res.and_then(|r| r.get("StyleSheetSet")).and_then(Value::as_array).and_then(|a| a.first()).and_then(|x| x.get("StyleSheetData"));
+    let get = |k: &str| first.and_then(|f| f.get(k)).or_else(|| def.and_then(|f| f.get(k)));
+    let fonts = res.and_then(|r| r.get("FontSet")).and_then(Value::as_array);
+    let ps = get("Font").and_then(Value::as_f64).and_then(|i| fonts?.get(i as usize)?.get("Name")?.as_str()).unwrap_or("ArialMT");
+    let (font, bold, italic) = font_family(ps);
+    let size = get("FontSize").and_then(Value::as_f64).unwrap_or(12.0);
+    let color = get("FillColor").and_then(|c| c.get("Values")).and_then(Value::as_array).map(|v| {
+        let f = |i: usize| v.get(i).and_then(Value::as_f64).unwrap_or(0.0);
+        [f(1), f(2), f(3)]
+    });
+    let leading = if get("AutoLeading").and_then(Value::as_bool).unwrap_or(true) { 1.2 } else { get("Leading").and_then(Value::as_f64).map(|v| v / size.max(0.01)).unwrap_or(1.2) };
+    let just = eng.get("ParagraphRun").and_then(|x| x.get("RunArray")).and_then(Value::as_array).and_then(|a| a.first())
+        .and_then(|x| x.get("ParagraphSheet")).and_then(|x| x.get("Properties")).and_then(|x| x.get("Justification")).and_then(Value::as_f64).unwrap_or(0.0) as i32;
+    let align = match just {
+        1 => "right",
+        2 => "center",
+        _ => "left",
+    };
+    if runs.is_some_and(|a| a.len() > 1) {
+        notes.push(format!("{}: text with mixed styles comes in with its first style", l.name));
+    }
+    // A text box (paragraph text): its lines start at the box's top.
+    let shape = eng.get("Rendered").and_then(|x| x.get("Shapes")).and_then(|x| x.get("Children")).and_then(Value::as_array).and_then(|a| a.first());
+    let boxed = shape.and_then(|x| x.get("ShapeType")).and_then(Value::as_f64) == Some(1.0);
+    let bounds = d.get("bounds").or_else(|| d.get("boundingBox"));
+    let bnum = |k: &str| bounds.and_then(|b| num(b, k)).unwrap_or(0.0);
+    // Text space -> the picture: x' = xx x + yx y + tx, y' = xy x + yy y + ty.
+    let [xx, xy, yx, yy, tx, ty] = [t[0], t[1], t[2], t[3], t[4], t[5]];
+    let lh = size * leading;
+    // From the top of a line to its baseline, as Retouch lays out a line (canvas 'top').
+    let base_drop = (lh - size) / 2.0 + 0.86 * size;
+    let x = if boxed {
+        let (l0, r0) = (bnum("Left"), bnum("Rght"));
+        match align {
+            "center" => (l0 + r0) / 2.0,
+            "right" => r0,
+            _ => l0,
+        }
+    } else {
+        0.0
+    };
+    let y = if boxed { bnum("Top") } else { -base_drop };
+    let (ow, oh) = (doc.w as f64, doc.h as f64);
+    let long = ow.max(oh);
+    let plain = xy.abs() < 1e-6 && yx.abs() < 1e-6 && (xx - yy).abs() < 1e-6 && xx > 0.0;
+    let mut out = json!({
+        "text": text, "font": font, "bold": bold || get("FauxBold").and_then(Value::as_bool).unwrap_or(false),
+        "italic": italic || get("FauxItalic").and_then(Value::as_bool).unwrap_or(false), "underline": get("Underline").and_then(Value::as_bool).unwrap_or(false),
+        "color": color.unwrap_or([0.0; 3]), "align": align, "tracking": get("Tracking").and_then(Value::as_f64).unwrap_or(0.0), "leading": leading,
+    });
+    if plain {
+        out["size"] = json!(size * xx / long);
+        out["x"] = json!((tx + x * xx) / ow);
+        out["y"] = json!((ty + y * xx) / oh);
+    } else {
+        out["size"] = json!(size / long);
+        out["x"] = json!(x / ow);
+        out["y"] = json!(y / oh);
+        out["tf"] = json!([xx, yx, tx / long, xy, yy, ty / long]);
+    }
+    Some(out)
+}
+
 /// Blocks that make a layer something other than plain pixels.
 fn is_special(k: &[u8; 4]) -> bool {
     ADJUST_KEYS.contains(&k) || matches!(k, b"lsct" | b"lsdk" | b"SoCo" | b"GdFl" | b"PtFl" | b"TySh" | b"lfx2" | b"lmfx" | b"vmsk" | b"vsms")
@@ -478,6 +824,11 @@ fn to_rgb(ch: &[Vec<u16>], mode: u16) -> [Vec<u16>; 3] {
         }
         _ => [ch[0].clone(), ch.get(1).unwrap_or(&ch[0]).clone(), ch.get(2).unwrap_or(&ch[0]).clone()],
     }
+}
+
+/// PackBits data unpacked into `out`.
+pub fn unpack_bits(src: &[u8], out: &mut [u8]) {
+    packbits(src, out)
 }
 
 fn packbits(src: &[u8], out: &mut [u8]) {
@@ -1156,7 +1507,7 @@ fn lab_to_srgb(lab: [f64; 3]) -> [f64; 3] {
 }
 
 /// Layer styles (lfx2) as Retouch's (sizes as fractions of the long side).
-fn styles(doc: &Doc, l: &Layer, notes: &mut Vec<String>) -> Option<Value> {
+fn styles(doc: &Doc, l: &Layer, notes: &mut Vec<String>, pats: &std::collections::HashMap<String, Value>) -> Option<Value> {
     let d = block_descriptor(doc.block(l, b"lfx2")?, 8)?;
     if d.get("masterFXSwitch").and_then(Value::as_bool) == Some(false) {
         return None;
@@ -1200,9 +1551,45 @@ fn styles(doc: &Doc, l: &Layer, notes: &mut Vec<String>) -> Option<Value> {
             "angle": num(&v, "Angl").unwrap_or(90.0), "style": style, "reverse": v.get("Rvrs").and_then(Value::as_bool).unwrap_or(false),
         }));
     }
-    for (k, name) in [("ebbl", "Bevel & Emboss"), ("ChFX", "Satin"), ("patternFill", "Pattern Overlay")] {
-        if d.get(k).and_then(|v| v.get("enab")).and_then(Value::as_bool) == Some(true) {
-            notes.push(format!("{}: {name} isn't in Retouch yet", l.name));
+    let mode = |v: &Value, k: &str, def: &'static str| v.get(k).and_then(Value::as_str).map(|m| style_blend(Some(m))).unwrap_or(def);
+    if let Some(v) = one("ebbl", "bevelEmbossMulti") {
+        let style = match v.get("bvlS").and_then(Value::as_str).unwrap_or("") {
+            s if s.ends_with("OtrB") => "outer",
+            s if s.ends_with("Embs") => "emboss",
+            s if s.ends_with("PlEb") => "pillow",
+            s if s.ends_with("strokeEmboss") => {
+                notes.push(format!("{}: Stroke Emboss comes in as Inner Bevel", l.name));
+                "inner"
+            }
+            _ => "inner",
+        };
+        let col = |k: &str, def: [f64; 3]| v.get(k).and_then(colour).unwrap_or(def);
+        st.insert("bevel".into(), json!({
+            "on": true, "style": style, "depth": num(&v, "srgR").unwrap_or(100.0), "down": v.get("bvlD").and_then(Value::as_str).is_some_and(|d| d.ends_with("Out")),
+            "size": px(&v, "blur"), "soften": px(&v, "Sftn"), "angle": angle(&v), "altitude": num(&v, "Lald").unwrap_or(30.0),
+            "hiColor": col("hglC", [1.0; 3]), "hiOpacity": num(&v, "hglO").unwrap_or(75.0), "hiBlend": mode(&v, "hglM", "screen"),
+            "loColor": col("sdwC", [0.0; 3]), "loOpacity": num(&v, "sdwO").unwrap_or(75.0), "loBlend": mode(&v, "sdwM", "multiply"),
+        }));
+        if v.get("useTexture").and_then(Value::as_bool) == Some(true) || v.get("useShape").and_then(Value::as_bool) == Some(true) {
+            notes.push(format!("{}: Bevel & Emboss's contour and texture", l.name));
+        }
+    }
+    if let Some(v) = one("ChFX", "satinMulti") {
+        st.insert("satin".into(), json!({
+            "on": true, "color": col(&v), "opacity": op(&v), "angle": num(&v, "lagl").unwrap_or(19.0), "distance": px(&v, "Dstn"), "size": px(&v, "blur"),
+            "invert": v.get("Invr").and_then(Value::as_bool).unwrap_or(true), "blend": mode(&v, "Md", "multiply"),
+        }));
+    }
+    if let Some(v) = one("patternFill", "patternFillMulti") {
+        let id = v.get("Ptrn").and_then(|p| p.get("Idnt")).and_then(Value::as_str).unwrap_or("");
+        if let Some(p) = pats.get(id) {
+            let mut p = p.clone();
+            p["on"] = json!(true);
+            p["scale"] = json!(num(&v, "Scl").unwrap_or(100.0));
+            p["opacity"] = json!(op(&v));
+            st.insert("pattern".into(), p);
+        } else {
+            notes.push(format!("{}: its Pattern Overlay's pattern isn't saved in the file", l.name));
         }
     }
     (!st.is_empty()).then_some(Value::Object(st))
@@ -1217,6 +1604,14 @@ pub fn describe(doc: &Doc) -> Value {
     let base = doc.background();
     let mut notes = Vec::new();
     let mut out = Vec::new();
+    let pats: std::collections::HashMap<String, Value> = patterns(doc)
+        .into_iter()
+        .filter_map(|(id, name, pw, ph, rgba)| {
+            // Photoshop's own patterns are named like "$$$/Patterns/Defaults/Water=Water".
+            let name = name.rsplit('=').next().unwrap_or(&name).to_string();
+            Some((id, json!({ "name": name, "w": pw, "h": ph, "src": png_data_url(pw, ph, &rgba)? })))
+        })
+        .collect();
     // Groups: their end marker comes first (below their layers), the group itself last.
     let mut open: Vec<usize> = Vec::new();
     let mut next_group = 0;
@@ -1249,8 +1644,10 @@ pub fn describe(doc: &Doc) -> Value {
                 e.insert("kind".into(), json!("group"));
                 e.insert("id".into(), json!(format!("g{g}")));
                 e.insert("parent".into(), json!(open.last().map(|g| format!("g{g}"))));
-                if doc.mask_of(l).is_some() {
-                    notes.push(format!("{}: group masks aren't in Retouch yet", l.name));
+                if let Some((_, m)) = doc.mask_of(l) {
+                    let rect = |r: [i32; 4]| json!([r[1] as f64 / w, r[0] as f64 / h, r[3] as f64 / w, r[2] as f64 / h]);
+                    let (mw, mh) = (m.rect[3] - m.rect[1], m.rect[2] - m.rect[0]);
+                    e.insert("mask".into(), json!({ "rect": rect(m.rect), "size": [mw.max(0), mh.max(0)], "default": m.default, "off": m.flags & 2 != 0 }));
                 }
                 out.push(Value::Object(e));
                 continue;
@@ -1275,7 +1672,10 @@ pub fn describe(doc: &Doc) -> Value {
                 e.insert("kind".into(), json!("pixel"));
             }
             if doc.block(l, b"TySh").is_some() {
-                e.insert("text".into(), json!(true));
+                match text_layer(doc, l, &mut notes) {
+                    Some(t) => e.insert("text".into(), t),
+                    None => e.insert("text".into(), json!(true)),
+                };
             }
         }
         let vector = doc.block(l, b"vmsk").or_else(|| doc.block(l, b"vsms")).and_then(vector_mask);
@@ -1303,7 +1703,7 @@ pub fn describe(doc: &Doc) -> Value {
             let (mw, mh) = (m.rect[3] - m.rect[1], m.rect[2] - m.rect[0]);
             e.insert("mask".into(), json!({ "rect": rect(m.rect), "size": [mw.max(0), mh.max(0)], "default": m.default, "off": m.flags & 2 != 0 }));
         }
-        let mut style = styles(doc, l, &mut notes);
+        let mut style = styles(doc, l, &mut notes, &pats);
         if let Some(o) = outline.filter(|o| o["size"].as_f64().unwrap_or(0.0) > 0.0) {
             let st = style.get_or_insert_with(|| json!({}));
             if st.get("stroke").is_none() {
