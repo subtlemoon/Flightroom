@@ -7,6 +7,7 @@ pub mod ai;
 pub mod catalog;
 pub mod develop;
 pub mod display;
+pub mod formats;
 pub mod lens;
 pub mod looks;
 pub mod migrate;

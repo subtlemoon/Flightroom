@@ -189,6 +189,45 @@ impl Photos {
         self.thumbs.join(format!("{}.jpg", hex::encode(h.finalize())))
     }
 
+    /// Where the JPEG made from a picture with none in it (HEIC, PNG...) is kept.
+    fn converted_path(&self, p: &Path, key: &str) -> PathBuf {
+        let mut h = Sha1::new();
+        h.update(format!("converted|{}|{}", p.to_string_lossy(), key).as_bytes());
+        self.thumbs.join(format!("c{}.jpg", hex::encode(h.finalize())))
+    }
+
+    /// The preview of a picture with no JPEG in it: the whole file decoded once
+    /// (a second or so for a phone's HEIC), kept with the thumbnails as a JPEG at
+    /// most CONVERTED_EDGE px long, and its thumbnail made with it.
+    pub fn converted(&self, p: &Path, key: &str) -> Result<Vec<u8>, String> {
+        let path = self.converted_path(p, key);
+        if let Ok(b) = fs::read(&path) {
+            return Ok(b);
+        }
+        // The preview and the thumbnail are often asked for together: decode once.
+        self.locked(&path, || {
+            if let Ok(b) = fs::read(&path) {
+                return Ok(b);
+            }
+            let ext = lib::ext_of(&p.to_string_lossy());
+            let pic = self.decode.run(|| fs::read(p).map_err(|e| e.to_string()).and_then(|b| crate::formats::decode(&b, &ext)))?;
+            let jpg = crate::formats::to_jpeg(&crate::formats::shrink(&pic, CONVERTED_EDGE), 92)?;
+            let thumb = crate::formats::to_jpeg(&crate::formats::shrink(&pic, 640), 85)?;
+            drop(pic);
+            let _ = fs::create_dir_all(&self.thumbs).and_then(|_| write_cache(&path, &jpg)).and_then(|_| write_cache(&self.thumb_path(p, key), &thumb));
+            prune_cache(&self.thumbs, 'c', CONVERTED_KEPT);
+            Ok(jpg)
+        })
+    }
+
+    /// The photo's biggest JPEG: the one in the file, or the one made from it.
+    fn preview(&self, p: &Path, key: &str, info: &PhotoInfo) -> Option<Vec<u8>> {
+        if info.decoded.is_some() {
+            return self.converted(p, key).ok();
+        }
+        info.preview.and_then(|part| read_part(p, &part).ok()).map(lib::strip_exif)
+    }
+
     /// Where the thumbnail of a photo as developed is kept: named after the
     /// photo (or virtual copy) and its sidecar as it is now, so an edit made
     /// anywhere else (Lightroom, a paste) leaves it unused until it's made again.
@@ -387,19 +426,23 @@ pub fn handle_photo(app: &AppHandle, kind: &str, q: &HashMap<String, String>) ->
     let Some(p) = q.get("p").and_then(|p| photos.allowed(p)) else { return respond(403, "text/plain", Vec::new()) };
     let Ok((key, info)) = photos.info(&p) else { return not_found() };
     if kind == "preview" {
-        return match info.preview.and_then(|part| read_part(&p, &part).ok()) {
-            Some(buf) => respond(200, "image/jpeg", lib::strip_exif(buf)),
-            None => not_found(),
-        };
+        return photos.preview(&p, &key, &info).map_or_else(not_found, |buf| respond(200, "image/jpeg", buf));
     }
     if kind == "gray" {
         let n = |k: &str| q.get(k).and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
-        let gray = info.preview.and_then(|part| photos.decode.run(|| read_part(&p, &part).ok().and_then(|jpg| jpeg_gray(&jpg, n("x"), n("y"), n("w"), n("h")))));
+        let gray = photos.preview(&p, &key, &info).and_then(|jpg| photos.decode.run(|| jpeg_gray(&jpg, n("x"), n("y"), n("w"), n("h"))));
         return gray.map_or_else(not_found, |g| respond(200, "application/octet-stream", g));
     }
     let cached = photos.thumb_path(&p, &key);
     if let Ok(hit) = fs::read(&cached) {
         return respond(200, "image/jpeg", hit);
+    }
+    if info.decoded.is_some() {
+        // Made along with the preview.
+        return match photos.converted(&p, &key).ok().and_then(|_| fs::read(&cached).ok()) {
+            Some(b) => respond(200, "image/jpeg", b),
+            None => not_found(),
+        };
     }
     let Some(part) = info.thumb else { return not_found() };
     match read_part(&p, &part) {
@@ -526,7 +569,7 @@ pub fn scan_photos(photos: &Photos, root: &Path, subfolders: bool) -> Result<Vec
                     modified,
                     keywords: text.map(lib::read_keywords).unwrap_or_default(),
                 };
-                let own = g.sidecar.clone().unwrap_or_else(|| format!("{}.xmp", g.base));
+                let own = g.sidecar.clone().or(g.own_sidecar.clone()).unwrap_or_else(|| format!("{}.xmp", g.base));
                 let mut out = vec![made(id.clone(), &own, text.as_deref(), None, if g.rating_in_file { "file" } else { "sidecar" })];
                 // Its virtual copies right after it (only RAW files are developed).
                 let Some(list) = g.raw.as_ref().and_then(|_| copies.get(&g.base.to_lowercase())) else { return out };
@@ -638,9 +681,12 @@ pub async fn cull_meta(app: AppHandle, ids: Vec<String>) -> Result<HashMap<Strin
                 let v = match photos.info(&p) {
                     Ok((_, info)) => {
                         let mut v = serde_json::to_value(&info).unwrap();
-                        v["width"] = info.preview.map(|x| x.width).into();
-                        v["height"] = info.preview.map(|x| x.height).into();
-                        v["hasThumb"] = info.thumb.is_some().into();
+                        // A decoded picture's preview is made at most CONVERTED_EDGE long: its size is that one's.
+                        let decoded = info.decoded.map(|(w, h)| crate::formats::shrunk_size(w as usize, h as usize, CONVERTED_EDGE)).map(|(w, h)| (w as u32, h as u32));
+                        let size = info.preview.map(|x| (x.width, x.height)).or(decoded).filter(|&(w, h)| w > 0 && h > 0);
+                        v["width"] = size.map(|s| s.0).into();
+                        v["height"] = size.map(|s| s.1).into();
+                        v["hasThumb"] = (info.thumb.is_some() || info.decoded.is_some()).into();
                         v
                     }
                     Err(_) => serde_json::json!({ "error": true }),
@@ -760,17 +806,27 @@ fn prune_developed(dir: &Path) {
     if SAVED.fetch_add(1, Ordering::Relaxed) % 100 != 99 {
         return;
     }
+    prune_cache(dir, 'd', DEVELOPED_KEPT);
+}
+
+/// JPEGs made from HEIC, PNG and other pictures without one (a few MB each) kept at most.
+const CONVERTED_KEPT: usize = 150;
+/// Their long side.
+const CONVERTED_EDGE: usize = 6144;
+
+/// Keeps the newest `kept` * 3/4 of the cache files whose names start with `prefix`, once there are more than `kept`.
+fn prune_cache(dir: &Path, prefix: char, kept: usize) {
     let Ok(rd) = fs::read_dir(dir) else { return };
     let mut files: Vec<(std::time::SystemTime, PathBuf)> = rd
         .flatten()
-        .filter(|e| e.file_name().to_string_lossy().starts_with('d'))
+        .filter(|e| e.file_name().to_string_lossy().starts_with(prefix))
         .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
         .collect();
-    if files.len() <= DEVELOPED_KEPT {
+    if files.len() <= kept {
         return;
     }
     files.sort();
-    for (_, p) in &files[..files.len() - DEVELOPED_KEPT * 3 / 4] {
+    for (_, p) in &files[..files.len() - kept * 3 / 4] {
         let _ = fs::remove_file(p);
     }
 }

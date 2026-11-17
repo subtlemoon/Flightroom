@@ -69,6 +69,12 @@ export function releaseFull(id) {
   drop(fullKey(id));
 }
 
+/** A file's kind by its name: "JPEG", "HEIF", "TIFF", "PNG"... */
+export const fileKind = (name) => {
+  const ext = (name.match(/\.([^.\\/]+)$/)?.[1] || '').toUpperCase();
+  return { JPG: 'JPEG', JPE: 'JPEG', HEIC: 'HEIF', HIF: 'HEIF', TIF: 'TIFF', WEBP: 'WebP' }[ext] || ext;
+};
+
 async function fetchBlob(url) {
   const res = await fetch(url);
   if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });

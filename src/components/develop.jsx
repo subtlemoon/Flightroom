@@ -14,7 +14,7 @@ import { applyTo, pick as pickSettings } from '../develop/copy.js';
 import { MASK_EDGE, POINT_DEFAULT, forgetMaskImages, newId } from '../develop/masks.js';
 import { toggle, useLayout } from '../layout.js';
 import { ExportedTag, Filmstrip, photoRating } from './cull.jsx';
-import { imgUrl, ROTATION } from '../cull/previews.js';
+import { fileKind, imgUrl, ROTATION } from '../cull/previews.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
 import { cachedFolder, startAt, startId, useFolder, usePosition, useStripPick } from '../cull/folder.js';
 import { keepThumb, pixelsToBlob, thumbSize } from '../develop/thumbs.js';
@@ -628,7 +628,7 @@ export function DevelopView({ store, onCull, mode = 'develop', onMode }) {
           {photo && opened?.id === photo.id && opened.error ? (
             <div className="hero-empty dev-msg">
               <h2>{opened.error === 'notRaw' ? 'Develop edits RAW files' : "This photo can't be developed"}</h2>
-              <p className="muted">{opened.error === 'notRaw' ? `${photo.name} is a JPEG. Pick a RAW file (NEF and most other cameras' RAW) to edit it here.` : opened.error}</p>
+              <p className="muted">{opened.error === 'notRaw' ? `${photo.name} is a ${fileKind(photo.name)} picture. Pick a RAW file (NEF, CR3, ARW and most other cameras' RAW) to edit it here.` : opened.error}</p>
             </div>
           ) : photo ? (
             <DevelopStage key={photo.id} photo={photo} meta={curMeta} info={info} s={shown} editS={s} cropMode={crop} cropOverlay={cropOverlay} clip={clip}

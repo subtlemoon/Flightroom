@@ -367,7 +367,7 @@ fn mirror(v: isize, n: usize) -> usize {
 
 /// Area-averaging weights: for each of `dst` output pixels, the source pixels it
 /// covers and how much of each.
-fn weights(src: usize, dst: usize) -> Vec<Vec<(usize, f32)>> {
+pub(crate) fn weights(src: usize, dst: usize) -> Vec<Vec<(usize, f32)>> {
     let s = src as f64 / dst as f64;
     (0..dst)
         .map(|i| {

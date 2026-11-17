@@ -83,6 +83,13 @@ decodes the neighbouring photos ahead of time. Thumbnails are cached in the app
 data folder. Star ratings are written as `xmp:Rating` to a `.xmp` sidecar next to
 each RAW file (Lightroom/Bridge/Capture One convention), or inside standalone JPEGs.
 
+Pictures with no JPEG inside (HEIC/HEIF including cameras' 10-bit `.HIF`, AVIF,
+WebP, PNG, TIFF, BMP, GIF) are decoded once by `src-tauri/src/formats.rs`
+(zune-heic, heifer for 4:2:2/4:4:4 HEIF, avif-decode, image) into a JPEG preview
+kept with the thumbnails (at most 6144 px, the newest 150). Their stars go in a
+sidecar. A RAW and a HEIC/TIFF with the same name pair up like RAW+JPEG. Canon
+CR3 previews come from its PRVW box and first track.
+
 ## Develop
 
 The Develop tab decodes the real RAW data (not the embedded JPEG) with
