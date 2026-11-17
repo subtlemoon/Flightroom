@@ -338,7 +338,7 @@ function Grid({ photos, sel, onClick, onOpen, onMenu, picked }) {
     }
   }
   return (
-    <div className="lib-grid" ref={ref} onScroll={(e) => setBox((b) => ({ ...b, top: e.currentTarget.scrollTop }))}>
+    <div className="lib-grid" ref={ref} onScroll={(e) => { const top = e.currentTarget.scrollTop; setBox((b) => (b.top === top ? b : { ...b, top })); }}>
       <div style={{ height: rows * CELL, position: 'relative' }}>{cells}</div>
     </div>
   );
