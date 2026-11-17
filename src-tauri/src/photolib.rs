@@ -6,8 +6,12 @@
 use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
 
-pub const RAW_EXTS: &[&str] = &[".nef", ".nrw", ".cr2", ".cr3", ".arw", ".dng", ".orf", ".pef", ".rw2", ".raf", ".srw"];
-pub const JPEG_EXTS: &[&str] = &[".jpg", ".jpeg"];
+pub const RAW_EXTS: &[&str] = &[
+    ".nef", ".nrw", ".cr2", ".cr3", ".arw", ".srf", ".sr2", ".dng", ".orf", ".pef", ".rw2", ".rwl", ".raw", ".raf", ".srw", ".3fr", ".fff", ".iiq", ".mef", ".mos", ".erf",
+    ".kdc", ".dcr",
+];
+pub const JPEG_EXTS: &[&str] = &[".jpg", ".jpeg", ".jpe"];
+pub use crate::formats::IMAGE_EXTS;
 const HEADER_BYTES: usize = 256 * 1024;
 
 /// Random access to a file's bytes. `get` returns fewer bytes at the end of the file.
@@ -278,6 +282,10 @@ pub struct PhotoInfo {
     pub preview: Option<JpegPart>,
     #[serde(skip)]
     pub thumb: Option<JpegPart>,
+    /// A picture with no JPEG in it (HEIC, AVIF, WebP, PNG, TIFF...): its size as
+    /// shown. Its preview is made by decoding the whole file (formats.rs).
+    #[serde(skip)]
+    pub decoded: Option<(u32, u32)>,
 }
 
 // Every JPEG the camera embedded, as (offset, length) in file bytes.
@@ -398,18 +406,231 @@ fn read_exif_info<S: Source + ?Sized>(tiff: &Tiff<S>, ifd0: &Ifd, info: &mut Pho
     info.orientation = tiff.num(ifd0, 0x112).map(|v| v as u32).filter(|&v| v > 0).unwrap_or(1);
     let exif = tiff.num(ifd0, 0x8769).and_then(|o| tiff.read_ifd(o as u32));
     if let Some(e) = &exif {
-        info.exposure = tiff.num(e, 0x829a);
-        info.f_number = tiff.num(e, 0x829d);
-        info.iso = tiff.num(e, 0x8827);
-        info.taken_at = tiff.str(e, 0x9003);
-        info.focal_length = tiff.num(e, 0x920a);
-        info.lens = tiff.str(e, 0xa434);
-        info.focus = read_focus(tiff, e, info.make.as_deref().unwrap_or(""));
+        read_exif_ifd(tiff, e, info);
     }
     if let Some(t) = ifd0.tags.get(&0x2bc) {
         info.file_rating = read_rating(&String::from_utf8_lossy(&tiff.raw(t)));
     }
     exif
+}
+
+fn read_exif_ifd<S: Source + ?Sized>(tiff: &Tiff<S>, e: &Ifd, info: &mut PhotoInfo) {
+    info.exposure = tiff.num(e, 0x829a);
+    info.f_number = tiff.num(e, 0x829d);
+    info.iso = tiff.num(e, 0x8827);
+    info.taken_at = tiff.str(e, 0x9003);
+    info.focal_length = tiff.num(e, 0x920a);
+    info.lens = tiff.str(e, 0xa434);
+    info.focus = read_focus(tiff, e, info.make.as_deref().unwrap_or(""));
+}
+
+/// The camera details in an Exif block that starts with a TIFF header at `at`.
+fn read_tiff_exif<S: Source + ?Sized>(src: &S, at: u64, info: &mut PhotoInfo) {
+    if let Some(tiff) = Tiff::open(src, at) {
+        if let Some(ifd0) = tiff.read_ifd(tiff.ifd0) {
+            read_exif_info(&tiff, &ifd0, info);
+        }
+    }
+}
+
+// --- ISO base media files (CR3, HEIF, AVIF) -----------------------------------
+
+/// A box of an ISO base media file: its type, and where its contents start and end.
+#[derive(Clone, Debug)]
+pub struct BmffBox {
+    pub kind: [u8; 4],
+    pub data: u64,
+    pub end: u64,
+}
+
+/// The boxes from `start` to `end` (one level: the caller goes into the ones it wants).
+pub fn bmff_boxes<S: Source + ?Sized>(src: &S, start: u64, end: u64) -> Vec<BmffBox> {
+    let mut out = Vec::new();
+    let mut at = start;
+    while at + 8 <= end && out.len() < 4096 {
+        let h = src.get(at, 16);
+        if h.len() < 8 {
+            break;
+        }
+        let size32 = u32::from_be_bytes([h[0], h[1], h[2], h[3]]) as u64;
+        let (size, header) = match size32 {
+            0 => (end - at, 8),
+            1 if h.len() >= 16 => (u64::from_be_bytes(h[8..16].try_into().unwrap()), 16),
+            1 => break,
+            n => (n, 8),
+        };
+        if size < header || at.checked_add(size).is_none_or(|e| e > end) {
+            break;
+        }
+        let mut kind = [0u8; 4];
+        kind.copy_from_slice(&h[4..8]);
+        out.push(BmffBox { kind, data: at + header, end: at + size });
+        at += size;
+    }
+    out
+}
+
+const CANON_META: [u8; 16] = [0x85, 0xc0, 0xb6, 0x87, 0x82, 0x0f, 0x11, 0xe0, 0x81, 0x11, 0xf4, 0xce, 0x46, 0x2b, 0x6a, 0x48];
+const CANON_PREVIEW: [u8; 16] = [0xea, 0xf4, 0x2b, 0x5e, 0x1c, 0x98, 0x4b, 0x88, 0xb9, 0xfb, 0xb7, 0xdc, 0x40, 0x6e, 0x4d, 0x16];
+
+/// Canon CR3: camera details from the CMT boxes, and its JPEGs: the full-size
+/// one (the first track's picture) and the 1620 px PRVW one.
+fn read_cr3<S: Source + ?Sized>(src: &S, info: &mut PhotoInfo, jpegs: &mut Vec<(u64, u64)>) {
+    let Some(size) = src.size() else { return };
+    let uuid_of = |b: &BmffBox| -> Option<[u8; 16]> { src.get(b.data, 16).try_into().ok() };
+    for top in bmff_boxes(src, 0, size) {
+        match &top.kind {
+            b"moov" => {
+                for b in bmff_boxes(src, top.data, top.end) {
+                    if &b.kind == b"uuid" && uuid_of(&b) == Some(CANON_META) {
+                        for c in bmff_boxes(src, b.data + 16, b.end) {
+                            match &c.kind {
+                                b"CMT1" => read_tiff_exif(src, c.data, info),
+                                b"CMT2" => {
+                                    // The Exif IFD itself, as its own TIFF.
+                                    if let Some(tiff) = Tiff::open(src, c.data) {
+                                        if let Some(e) = tiff.read_ifd(tiff.ifd0) {
+                                            read_exif_ifd(&tiff, &e, info);
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    } else if &b.kind == b"trak" {
+                        jpegs.extend(first_sample(src, &b));
+                    }
+                }
+            }
+            b"uuid" if uuid_of(&top) == Some(CANON_PREVIEW) => {
+                // 16 bytes of uuid, 8 more, then the PRVW box: a short header and the JPEG.
+                for c in bmff_boxes(src, top.data + 24, top.end) {
+                    if &c.kind == b"PRVW" {
+                        let head = src.get(c.data, 64);
+                        if let Some(i) = head.windows(3).position(|w| w == [0xff, 0xd8, 0xff]) {
+                            jpegs.push((c.data + i as u64, c.end - c.data - i as u64));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Where a track's first sample is (offset, length): stco/co64 and stsz, inside mdia/minf/stbl.
+fn first_sample<S: Source + ?Sized>(src: &S, trak: &BmffBox) -> Option<(u64, u64)> {
+    let mut b = trak.clone();
+    for k in [b"mdia", b"minf", b"stbl"] {
+        b = bmff_boxes(src, b.data, b.end).into_iter().find(|c| &c.kind == k)?;
+    }
+    let stbl = bmff_boxes(src, b.data, b.end);
+    let stsz = stbl.iter().find(|c| &c.kind == b"stsz")?;
+    let h = src.get(stsz.data, 16);
+    let fixed = u32::from_be_bytes(h.get(4..8)?.try_into().ok()?) as u64;
+    let len = if fixed > 0 { fixed } else { u32::from_be_bytes(h.get(12..16)?.try_into().ok()?) as u64 };
+    let offset = if let Some(co) = stbl.iter().find(|c| &c.kind == b"co64") {
+        u64::from_be_bytes(src.get(co.data + 8, 8).try_into().ok()?)
+    } else {
+        let co = stbl.iter().find(|c| &c.kind == b"stco")?;
+        u32::from_be_bytes(src.get(co.data + 8, 4).try_into().ok()?) as u64
+    };
+    Some((offset, len))
+}
+
+// --- pictures without a JPEG (formats.rs decodes them) -------------------------
+
+fn read_image_info<S: Source + ?Sized>(src: &S, ext: &str, head: &[u8], info: &mut PhotoInfo) {
+    let u16le = |o: usize| head.get(o..o + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as u32);
+    let u32be = |o: usize| head.get(o..o + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
+    let mut size = None;
+    let mut xmp: Option<Vec<u8>> = None;
+    match ext {
+        ".heic" | ".heif" | ".hif" | ".avif" => {
+            if let Some(m) = crate::formats::heif_meta(src) {
+                if let Some((o, _)) = m.exif.filter(|&(_, l)| l > 8 && l < 16 << 20) {
+                    // The block starts with how far its TIFF header is after those 4 bytes.
+                    let skip = u32::from_be_bytes(src.get(o, 4).try_into().unwrap_or([0; 4])) as u64;
+                    read_tiff_exif(src, o + 4 + skip, info);
+                }
+                xmp = m.xmp.filter(|&(_, l)| l < 4 << 20).map(|(o, l)| src.get(o, l as usize));
+                size = Some(m.shown());
+            }
+            // The decoder turns the picture as the file says: the Exif orientation is only a note of it.
+            info.orientation = 1;
+        }
+        ".png" => {
+            let mut at = 8;
+            while at + 12 <= head.len() {
+                let (Some(len), Some(kind)) = (u32be(at), head.get(at + 4..at + 8)) else { break };
+                let data = at + 8;
+                match kind {
+                    b"IHDR" => size = u32be(data).zip(u32be(data + 4)),
+                    b"eXIf" => read_tiff_exif(src, data as u64, info),
+                    b"iTXt" if head[data..].starts_with(b"XML:com.adobe.xmp\0") => {
+                        xmp = head.get(data..data + len as usize).map(|b| b.to_vec());
+                    }
+                    b"IDAT" | b"IEND" => break,
+                    _ => {}
+                }
+                at = data + len as usize + 4;
+            }
+        }
+        ".webp" => {
+            // Chunks: the picture first, then (often after megabytes of it) EXIF and XMP.
+            let end = src.size().unwrap_or(0);
+            let mut at = 12u64;
+            while at + 8 <= end {
+                let h = src.get(at, 8);
+                let len = u32::from_le_bytes(h[4..8].try_into().unwrap()) as u64;
+                let d = at + 8;
+                let small = |n: u64| src.get(d, n.min(len).min(4 << 20) as usize);
+                match &h[0..4] {
+                    b"VP8X" => {
+                        let c = small(10);
+                        let u24 = |o: usize| c.get(o..o + 3).map(|b| u32::from_le_bytes([b[0], b[1], b[2], 0]) + 1);
+                        size = u24(4).zip(u24(7));
+                    }
+                    b"VP8 " if size.is_none() => {
+                        let c = small(10);
+                        let u = |o: usize| c.get(o..o + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as u32 & 0x3fff);
+                        size = u(6).zip(u(8));
+                    }
+                    b"VP8L" if size.is_none() => {
+                        if let Some(b) = small(5).get(1..5) {
+                            let v = u32::from_le_bytes(b.try_into().unwrap());
+                            size = Some(((v & 0x3fff) + 1, ((v >> 14) & 0x3fff) + 1));
+                        }
+                    }
+                    b"EXIF" => {
+                        let skip = if small(6) == b"Exif\0\0" { 6 } else { 0 };
+                        read_tiff_exif(src, d + skip, info);
+                    }
+                    b"XMP " => xmp = Some(small(len)),
+                    _ => {}
+                }
+                at = d + len + (len & 1);
+            }
+        }
+        ".tif" | ".tiff" => {
+            if let Some(tiff) = Tiff::open(src, 0) {
+                if let Some(ifd0) = tiff.read_ifd(tiff.ifd0) {
+                    read_exif_info(&tiff, &ifd0, info);
+                    size = tiff.num(&ifd0, 0x100).zip(tiff.num(&ifd0, 0x101)).map(|(w, h)| (w as u32, h as u32));
+                }
+            }
+        }
+        ".bmp" => size = u32::try_from(i32::from_le_bytes(head.get(18..22).and_then(|b| b.try_into().ok()).unwrap_or([0; 4])))
+            .ok()
+            .zip(head.get(22..26).map(|b| i32::from_le_bytes(b.try_into().unwrap()).unsigned_abs())),
+        ".gif" => size = u16le(6).zip(u16le(8)),
+        _ => {}
+    }
+    if let Some(x) = xmp {
+        info.file_rating = info.file_rating.or(read_rating(&String::from_utf8_lossy(&x)));
+    }
+    // As stored, like a JPEG's (the viewer turns it by `orientation`); 0 x 0 when the header doesn't say.
+    info.decoded = Some(size.unwrap_or((0, 0)));
 }
 
 // --- focus points ------------------------------------------------------------
@@ -593,7 +814,14 @@ pub fn read_photo_info<S: Source + ?Sized>(src: &S, ext: &str) -> PhotoInfo {
         return info;
     }
 
-    if ext == ".raf" {
+    if IMAGE_EXTS.contains(&ext) {
+        read_image_info(src, ext, &head, &mut info);
+        return info;
+    }
+
+    if ext == ".cr3" {
+        read_cr3(src, &mut info, &mut jpegs);
+    } else if ext == ".raf" {
         // Fujifilm: big-endian offset/length of the embedded JPEG at bytes 84 and 88.
         if head.len() < 92 {
             return info;
@@ -869,6 +1097,8 @@ pub struct Group {
     pub sidecar: Option<String>,
     pub file: String,
     pub rating_in_file: bool,
+    /// The sidecar to use when it isn't `<base>.xmp`.
+    pub own_sidecar: Option<String>,
 }
 
 /// Natural sort like Explorer: "DSC_9" before "DSC_10", case-insensitive.
@@ -905,37 +1135,51 @@ pub fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     }
 }
 
-/// Groups a folder's file names into photos. A RAW and a JPEG with the same name
-/// (RAW+JPEG shooting) are one photo, rated through the RAW's .xmp sidecar the way
-/// Lightroom treats them. A JPEG on its own keeps its rating inside the file.
+/// Groups a folder's file names into photos. A RAW and a JPEG (or HEIF, PNG...)
+/// with the same name (RAW+JPEG shooting) are one photo, rated through the RAW's
+/// .xmp sidecar the way Lightroom treats them. A JPEG on its own keeps its rating
+/// inside the file; other pictures on their own use a sidecar.
 pub fn group_photos(names: &[String]) -> Vec<Group> {
+    // Of several pictures with one name, a JPEG goes with the RAW first.
+    let rank = |ext: &str| if JPEG_EXTS.contains(&ext) { 0 } else { 1 };
     let mut order: Vec<String> = Vec::new();
-    let mut by_base: HashMap<String, Group> = HashMap::new();
+    let mut by_base: HashMap<String, (Group, Vec<String>)> = HashMap::new();
     for name in names {
         let ext = ext_of(name);
         let key = base_of(name).to_lowercase();
-        let g = by_base.entry(key.clone()).or_insert_with(|| {
+        let (g, pictures) = by_base.entry(key.clone()).or_insert_with(|| {
             order.push(key.clone());
-            Group { base: base_of(name).to_string(), ..Default::default() }
+            (Group { base: base_of(name).to_string(), ..Default::default() }, Vec::new())
         });
         if RAW_EXTS.contains(&ext.as_str()) && g.raw.is_none() {
             g.raw = Some(name.clone());
-        } else if JPEG_EXTS.contains(&ext.as_str()) && g.jpeg.is_none() {
-            g.jpeg = Some(name.clone());
+        } else if JPEG_EXTS.contains(&ext.as_str()) || IMAGE_EXTS.contains(&ext.as_str()) {
+            pictures.push(name.clone());
         } else if ext == ".xmp" {
             g.sidecar = Some(name.clone());
         }
     }
-    let mut out: Vec<Group> = order
-        .into_iter()
-        .filter_map(|k| by_base.remove(&k))
-        .filter(|g| g.raw.is_some() || g.jpeg.is_some())
-        .map(|mut g| {
-            g.file = g.raw.clone().or(g.jpeg.clone()).unwrap();
-            g.rating_in_file = g.raw.is_none();
-            g
-        })
-        .collect();
+    let mut out: Vec<Group> = Vec::new();
+    for k in order {
+        let Some((mut g, mut pictures)) = by_base.remove(&k) else { continue };
+        pictures.sort_by(|a, b| rank(&ext_of(a)).cmp(&rank(&ext_of(b))).then_with(|| natural_cmp(a, b)));
+        let mut rest = pictures.into_iter();
+        g.jpeg = rest.next();
+        // More pictures with the same name ("IMG_1.JPG" and "IMG_1.HEIC") are photos of their own,
+        // each with a sidecar named after the whole file, so they don't share stars.
+        for extra in rest {
+            let in_file = JPEG_EXTS.contains(&ext_of(&extra).as_str());
+            let own = format!("{extra}.xmp");
+            let sidecar = names.iter().find(|n| n.eq_ignore_ascii_case(&own)).cloned();
+            out.push(Group { base: g.base.clone(), sidecar, file: extra.clone(), rating_in_file: in_file, own_sidecar: Some(own), jpeg: Some(extra), raw: None });
+        }
+        if g.raw.is_none() && g.jpeg.is_none() {
+            continue;
+        }
+        g.file = g.raw.clone().or(g.jpeg.clone()).unwrap();
+        g.rating_in_file = g.raw.is_none() && JPEG_EXTS.contains(&ext_of(&g.file).as_str());
+        out.push(g);
+    }
     out.sort_by(|a, b| natural_cmp(&a.file, &b.file));
     out
 }
@@ -1213,5 +1457,129 @@ mod real_file {
         let info = super::read_photo_info(&f, &super::ext_of(&p));
         println!("{} preview {:?} thumb {:?}", serde_json::to_string(&info).unwrap(), info.preview, info.thumb);
         assert!(info.preview.is_some() && info.thumb.is_some());
+    }
+}
+
+#[cfg(test)]
+mod containers {
+    use super::*;
+
+    fn bmff(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut b = ((body.len() + 8) as u32).to_be_bytes().to_vec();
+        b.extend(kind);
+        b.extend(body);
+        b
+    }
+    fn tiny_jpeg(w: u16, h: u16) -> Vec<u8> {
+        let mut out = Vec::new();
+        jpeg_encoder::Encoder::new(&mut out, 80).encode(&vec![128u8; w as usize * h as usize * 3], w, h, jpeg_encoder::ColorType::Rgb).unwrap();
+        out
+    }
+    /// A TIFF with one IFD of (tag, type, values) entries; ASCII values go after it.
+    fn tiny_tiff(entries: &[(u16, u16, Vec<u8>)]) -> Vec<u8> {
+        let mut t = b"II*\0".to_vec();
+        t.extend(8u32.to_le_bytes());
+        t.extend((entries.len() as u16).to_le_bytes());
+        let mut data_at = 8 + 2 + entries.len() * 12 + 4;
+        let mut data: Vec<u8> = Vec::new();
+        for (tag, typ, v) in entries {
+            t.extend(tag.to_le_bytes());
+            t.extend(typ.to_le_bytes());
+            let n = if *typ == 2 { v.len() } else { v.len() / 2 };
+            t.extend((n as u32).to_le_bytes());
+            if v.len() <= 4 {
+                let mut x = v.clone();
+                x.resize(4, 0);
+                t.extend(x);
+            } else {
+                t.extend((data_at as u32).to_le_bytes());
+                data.extend(v);
+                data_at += v.len();
+            }
+        }
+        t.extend(0u32.to_le_bytes());
+        t.extend(data);
+        t
+    }
+
+    #[test]
+    fn reads_a_canon_cr3() {
+        let cmt1 = tiny_tiff(&[(0x10f, 2, b"Canon\0".to_vec()), (0x110, 2, b"Canon EOS R6\0".to_vec()), (0x112, 3, 6u16.to_le_bytes().to_vec())]);
+        let cmt2 = tiny_tiff(&[(0x8827, 3, 3200u16.to_le_bytes().to_vec())]);
+        let mut meta = CANON_META.to_vec();
+        meta.extend(bmff(b"CMT1", &cmt1));
+        meta.extend(bmff(b"CMT2", &cmt2));
+        let (full, small) = (tiny_jpeg(600, 400), tiny_jpeg(162, 108));
+        let mut prvw = vec![0u8; 16];
+        prvw.extend(&small);
+        let mut preview = CANON_PREVIEW.to_vec();
+        preview.extend([0u8; 8]);
+        preview.extend(bmff(b"PRVW", &prvw));
+        let ftyp = bmff(b"ftyp", b"crx \0\0\0\x01crx isom");
+        let preview = bmff(b"uuid", &preview);
+        // The track's sample lies in mdat, after everything before it.
+        let trak_for = |at: u64| {
+            let mut stsz = vec![0u8; 4];
+            stsz.extend((full.len() as u32).to_be_bytes());
+            stsz.extend(1u32.to_be_bytes());
+            let mut co64 = vec![0u8; 4];
+            co64.extend(1u32.to_be_bytes());
+            co64.extend(at.to_be_bytes());
+            let stbl = bmff(b"stbl", &[bmff(b"stsz", &stsz), bmff(b"co64", &co64)].concat());
+            bmff(b"trak", &bmff(b"mdia", &bmff(b"minf", &stbl)))
+        };
+        let moov_len = bmff(b"moov", &[bmff(b"uuid", &meta), trak_for(0)].concat()).len();
+        let at = (ftyp.len() + moov_len + preview.len() + 8) as u64;
+        let moov = bmff(b"moov", &[bmff(b"uuid", &meta), trak_for(at)].concat());
+        let file = [ftyp, moov, preview, bmff(b"mdat", &full)].concat();
+        let info = read_photo_info(&file[..], ".cr3");
+        assert_eq!(info.make.as_deref(), Some("Canon"));
+        assert_eq!(info.model.as_deref(), Some("Canon EOS R6"));
+        assert_eq!(info.orientation, 6);
+        assert_eq!(info.iso, Some(3200.0));
+        let (p, t) = (info.preview.unwrap(), info.thumb);
+        assert_eq!((p.offset, p.width, p.height), (at, 600, 400));
+        assert_eq!(t, None, "the 162 px preview is too small for a thumbnail");
+    }
+
+    #[test]
+    fn reads_png_and_webp_headers() {
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = 13u32.to_be_bytes().to_vec();
+        ihdr.extend(b"IHDR");
+        ihdr.extend(640u32.to_be_bytes());
+        ihdr.extend(480u32.to_be_bytes());
+        ihdr.extend([8, 2, 0, 0, 0, 0, 0, 0, 0]);
+        png.extend(ihdr);
+        let info = read_photo_info(&png[..], ".png");
+        assert_eq!(info.decoded, Some((640, 480)));
+        assert!(info.preview.is_none());
+
+        let mut webp = b"RIFF\0\0\0\0WEBPVP8X".to_vec();
+        webp.extend(10u32.to_le_bytes());
+        webp.extend([0u8; 4]);
+        webp.extend(&(1999u32).to_le_bytes()[..3]);
+        webp.extend(&(999u32).to_le_bytes()[..3]);
+        let info = read_photo_info(&webp[..], ".webp");
+        assert_eq!(info.decoded, Some((2000, 1000)));
+    }
+
+    #[test]
+    fn groups_heif_and_other_pictures() {
+        let names: Vec<String> = ["IMG_1.CR3", "IMG_1.HIF", "IMG_2.HEIC", "IMG_3.JPG", "IMG_3.heic", "IMG_3.heic.xmp", "scan.tif", "IMG_4.HIF", "IMG_4.JPG", "IMG_4.CR3"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let g = group_photos(&names);
+        let files: Vec<&str> = g.iter().map(|g| g.file.as_str()).collect();
+        assert_eq!(files, ["IMG_1.CR3", "IMG_2.HEIC", "IMG_3.heic", "IMG_3.JPG", "IMG_4.CR3", "IMG_4.HIF", "scan.tif"]);
+        assert_eq!(g[0].jpeg.as_deref(), Some("IMG_1.HIF"));
+        assert!(!g[1].rating_in_file && g[1].own_sidecar.is_none());
+        // IMG_3: the JPEG keeps its stars inside; the HEIC beside it gets a sidecar of its own.
+        assert_eq!((g[2].sidecar.as_deref(), g[2].own_sidecar.as_deref()), (Some("IMG_3.heic.xmp"), Some("IMG_3.heic.xmp")));
+        assert!(g[3].rating_in_file);
+        // A RAW takes the JPEG as its other half before a HIF.
+        assert_eq!(g[4].jpeg.as_deref(), Some("IMG_4.JPG"));
+        assert_eq!(g[5].sidecar, None);
     }
 }

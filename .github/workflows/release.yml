@@ -38,6 +38,8 @@ jobs:
           node-version: 22
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+      # The AV1 decoder (rav1d, for AVIF photos) builds its assembly with NASM.
+      - uses: ilammy/setup-nasm@v1
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri

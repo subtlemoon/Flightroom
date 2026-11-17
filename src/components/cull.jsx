@@ -2,7 +2,7 @@ import { bridge as app, FILES } from '../bridge.js';
 import { Suspense, lazy, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Dropdown, Icon, Modal, PanelHandle } from './ui.jsx';
 import { toggle, useLayout } from '../layout.js';
-import { clearPreviews, decodeThumb, drawPhoto, fallbackShown, fitEdge, fitKept, fitKey, fullKey, geometry, imgUrl, loadFit, loadFull, loadThumb, prune, releaseFull, ROTATION, thumbFallbackUrl, thumbKey } from '../cull/previews.js';
+import { clearPreviews, decodeThumb, drawPhoto, fallbackShown, fileKind, fitEdge, fitKept, fitKey, fullKey, geometry, imgUrl, loadFit, loadFull, loadThumb, prune, releaseFull, ROTATION, thumbFallbackUrl, thumbKey } from '../cull/previews.js';
 import { loadAnalysis, measure, saveAnalysis, suggest, upright } from '../cull/analyze.js';
 import { Cancelled, measurePool } from '../cull/measure-pool.js';
 import { inFilter, STAR_FILTERS } from '../cull/filter.js';
@@ -497,7 +497,7 @@ export function CullView({ store, onDevelop }) {
           <Stage photo={photo} meta={curMeta} photos={photos} index={index} metaById={meta} zoom={zoom} setZoom={setZoom} scale={zoomPct / 100} onMenu={(e) => photoMenu(e, photo, index)}
             subject={showSubject ? auto.measured[photo.id]?.subject?.box : null} focus={showFocus ? curMeta?.focus : null}>
             <div className="stage-top">
-              <span className="stage-name">{photoLabel(photo)}{photo.raw && photo.jpeg && <span className="pill-mini">RAW+JPEG</span>}<ExportedTag id={photo.id} /></span>
+              <span className="stage-name">{photoLabel(photo)}{photo.raw && photo.jpeg && <span className="pill-mini">RAW+{fileKind(photo.jpeg)}</span>}<ExportedTag id={photo.id} /></span>
               <ShotInfo meta={curMeta} />
               {subjectView !== 'all' && <span className="pill-mini">{subjectName(subjectGroup(auto.measured[photo.id]))}</span>}
               {zoom && <span className="pill-mini zoom">{zoomPct}%</span>}
@@ -571,7 +571,7 @@ function FolderHome({ state, actions, bridge, onPick, error }) {
         <div className="hero-empty">
           <div className="hero-icon"><Icon name="photo" size={40} /></div>
           <h2>Cull a shoot</h2>
-          <p className="muted">Open a folder of NEF or JPEG files. It will be listed here next time, together with the folders next to it.</p>
+          <p className="muted">Open a folder of RAW files (NEF, CR3, ARW...), JPEGs or phone photos (HEIC). It will be listed here next time, together with the folders next to it.</p>
         </div>
       ) : parents.map((parent) => (
         <FolderTree key={parent} parent={parent} opened={opened.filter((f) => splitPath(f).parent === parent)}

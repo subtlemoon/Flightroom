@@ -1,10 +1,10 @@
 [package]
 name = "flightroom"
-version = "3.7.1"
+version = "3.8.0"
 description = "Flightroom: photo culling, RAW developing and camera gear planner"
 authors = ["Jaewon"]
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.98"
 
 [lib]
 name = "flightroom_lib"
@@ -38,6 +38,10 @@ ureq = { version = "3", features = ["json"] }
 rusty-leveldb = "4"
 jpeg-encoder = "0.6"
 zune-jpeg = "0.5"
+zune-heic = "0.5"
+heifer = { version = "0.5", default-features = false }
+avif-decode = { version = "3", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png", "tiff", "webp", "bmp", "gif", "rayon"] }
 url = "2"
 percent-encoding = "2"
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "directml", "half"] }
